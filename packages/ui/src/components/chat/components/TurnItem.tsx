@@ -7,6 +7,7 @@ import TurnActivityRail from './TurnActivityRail';
 import TurnAssistantBlock from './TurnAssistantBlock';
 import TurnWorkingHeader from './TurnWorkingHeader';
 import { resolveTurnActivityDisclosure } from './turnActivityDisclosure';
+import { useToolCallsExpanded } from '../message/toolCallsExpansion';
 
 interface TurnItemProps {
     turn: TurnRecord;
@@ -67,8 +68,9 @@ const TurnItem: React.FC<TurnItemProps> = ({
         [turn.activityParts],
     );
     const hasFinalText = React.useMemo(() => hasFinalAnswerText(turn), [turn]);
+    const keepActivityOpen = useToolCallsExpanded();
     const [isActivityExpanded, setIsActivityExpanded] = React.useState(
-        () => showWorkingStatus && hasActivity && !hasFinalText,
+        () => hasActivity && (keepActivityOpen || (showWorkingStatus && !hasFinalText)),
     );
     const userToggledActivityRef = React.useRef(false);
     const autoCollapsedActivityRef = React.useRef(false);
@@ -95,6 +97,7 @@ const TurnItem: React.FC<TurnItemProps> = ({
             hasFinalText,
             previousHadFinalText,
             hasNewActivity,
+            keepOpen: keepActivityOpen,
         });
 
         autoCollapsedActivityRef.current = next.wasAutoCollapsed;
@@ -104,7 +107,7 @@ const TurnItem: React.FC<TurnItemProps> = ({
         if (next.isExpanded !== isActivityExpanded) {
             setIsActivityExpanded(next.isExpanded);
         }
-    }, [hasActivity, hasFinalText, isActivityExpanded, showWorkingStatus, turn.activityParts.length]);
+    }, [hasActivity, hasFinalText, isActivityExpanded, keepActivityOpen, showWorkingStatus, turn.activityParts.length]);
 
     const handleToggleActivity = React.useCallback(() => {
         userToggledActivityRef.current = true;

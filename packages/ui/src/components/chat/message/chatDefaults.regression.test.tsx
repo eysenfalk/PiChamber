@@ -86,6 +86,8 @@ const LONG_REASONING =
   'This second line goes into much deeper detail about the internal reasoning ' +
   'process that should remain hidden in the collapsed header view.';
 
+// `showExpandedBashTools`/`showExpandedEditTools` stay retired: they opened by
+// tool kind. `expandToolCallsByDefault` is the replacement and covers all tools.
 const RETIRED_UI_KEYS = [
   'showReasoningTraces',
   'collapsibleThinkingBlocks',

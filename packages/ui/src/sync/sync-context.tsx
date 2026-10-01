@@ -386,14 +386,17 @@ export function useSessionReducerPart(
   partId: string | null | undefined,
   enabled: boolean,
 ): Part | null {
-  const part = usePiSessionSnapshot(
-    (state) => {
-      if (!enabled || !sessionId || !partId) return null;
-      return state.reducer.bySession.get(sessionId)?.parts.get(partId) ?? null;
-    },
+  // The snapshot cache keys on store identity, not on selector inputs, so the
+  // selection must not depend on `enabled` or `partId`: flipping `enabled`
+  // alone publishes no new snapshot and would keep serving the disabled null.
+  // Select the parts map and resolve the entity outside the hook. The topic
+  // keeps collapsed rows unsubscribed from session events.
+  const parts = usePiSessionSnapshot(
+    (state) => (sessionId ? state.reducer.bySession.get(sessionId)?.parts ?? null : null),
     undefined,
     enabled && sessionId ? sessionTopic(sessionId) : TOPIC_CHROME,
   );
+  const part = enabled && partId ? parts?.get(partId) ?? null : null;
   return useMemo(() => {
     if (!enabled || !part) return null;
     return mapPart({

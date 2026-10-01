@@ -425,6 +425,20 @@ describe("applyPiEvent", () => {
     expect(state.bySession.get("sess-1")?.streamingMessages.size).toBe(0)
   })
 
+  test("session.interrupted ends tools that were still running, even when not streaming", () => {
+    let state = applyPiEvent(createReducerState(), assistantStart()).state
+    state = applyPiEvent(state, baseEvent("session.tool.start", 2, {
+      toolCallId: "t1", partId: "m1:tool:t1", messageId: "m1", name: "fabric_exec", state: "running", startedAt: 1_000,
+    })).state
+    state = applyPiEvent(state, baseEvent("session.interrupted", 3, {
+      reason: "user-abort", streaming: false,
+    })).state
+    const part = state.bySession.get("sess-1")?.parts.get("m1:tool:t1")
+    expect(part?.tool?.state).toBe("error")
+    expect(part?.tool?.isError).toBe(true)
+    expect(part?.tool?.endedAt).toBeGreaterThan(1_000)
+  })
+
   test("queue, model, and thinking events update session state", () => {
     let state = createReducerState()
     state = applyPiEvent(state, baseEvent("session.queue", 1, { steering: 2, followUp: 3 })).state

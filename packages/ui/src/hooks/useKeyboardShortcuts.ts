@@ -28,6 +28,7 @@ import { hasOpenDropdown } from './keyboard-shortcut-dom';
 import { getPiSessionStore } from '@/apps/pi-session-store';
 import { triggerPromptText } from '@/lib/pi/command-triggers';
 import { focusChatInput } from '@/components/chat/composer/editor/dom';
+import { toggleToolCallsExpanded } from '@/components/chat/message/toolCallsExpansion';
 import type { CommandTrigger } from '@/lib/pi/command-triggers';
 import type { ShortcutCombo } from '@/lib/shortcuts';
 
@@ -301,6 +302,12 @@ export const useKeyboardShortcuts = () => {
         } else {
           toggleSidebar();
         }
+        return;
+      }
+
+      if (eventMatchesShortcut(e, combo('toggle_tool_calls'))) {
+        e.preventDefault();
+        toggleToolCallsExpanded();
         return;
       }
 

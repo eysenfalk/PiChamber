@@ -39,13 +39,17 @@ import {
     getToolDescriptionPath,
     normalizeToolName,
     parseDiffStats,
+    formatToolDuration as formatDuration,
     parseWriteLineCount,
+    readFabricExecDisplay,
     type ToolStateWithMetadata,
 } from './toolRenderUtils';
 import { ApplyPatchFileButtons } from './ApplyPatchFileButtons';
 import { openApplyPatchFileInEditor } from './applyPatchEditorAction';
 import { TaskToolSummary } from './TaskToolSummary';
 import { ToolExpandedContent } from './ToolExpandedContent';
+import { NestedToolCalls } from './NestedToolCalls';
+import { readNestedToolCalls, readRunProgress } from '@/lib/chat/nestedToolCalls';
 import { useDeferredExpandedContent } from './useDeferredExpandedContent';
 import { AnimatedToolPath } from './ToolPartChrome';
 import {
@@ -77,14 +81,6 @@ const GIT_REFRESH_MUTATING_TOOLS = new Set([
     'apply_patch',
     'patch',
 ]);
-
-const formatDuration = (start: number, end?: number, now: number = Date.now()) => {
-    const duration = Math.max(0, (end ?? now) - start);
-    const seconds = duration / 1000;
-
-    const displaySeconds = seconds < 0.05 && end !== undefined ? 0.1 : seconds;
-    return `${displaySeconds.toFixed(1)}s`;
-};
 
 const LiveDuration: React.FC<{ start: number; end?: number; active: boolean }> = ({ start, end, active }) => {
     const now = useDurationTickerNow(active, 250);
@@ -174,7 +170,10 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
         });
     }, [currentDirectory, input, isFinalized, isSuccessfullyFinalized, metadata, normalizedPartTool]);
 
+    const nestedCalls = React.useMemo(() => readNestedToolCalls(metadata), [metadata]);
+
     const shouldNotifyStructuralChange = isFinalized || isTaskTool;
+    const fabricRunCardKey = `${nestedCalls.length}:${isExpanded}`;
 
     const onContentChangeRef = React.useRef(onContentChange);
     onContentChangeRef.current = onContentChange;
@@ -329,6 +328,17 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
 
     const effectiveTimeEnd = isFinalized ? (pinnedTime.end ?? time?.end ?? localFinalizedAt) : undefined;
     const isActive = !isFinalized && activeLatched;
+    // A fabric run shows its nested calls as a compact card that is visible
+    // without opening the row; expanding only adds rows, code, and the result.
+    const isFabricRun = normalizedPartTool === 'fabric_exec' && (nestedCalls.length > 0 || isActive);
+    const runProgress = React.useMemo(() => readRunProgress(metadata), [metadata]);
+
+    React.useLayoutEffect(() => {
+        if (!isFabricRun || !shouldNotifyStructuralChange) {
+            return;
+        }
+        onContentChangeRef.current?.('structural');
+    }, [fabricRunCardKey, isFabricRun, shouldNotifyStructuralChange]);
     const shouldTreatAsFinalized = isFinalized;
     const childSessionLookupId = shouldHydrateTaskChildSession({
         isTaskTool,
@@ -481,6 +491,15 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
     const titleStyle = !isTaskTool && isError ? TOOL_ERROR_TITLE_STYLE : TOOL_NORMAL_TITLE_STYLE;
     const shouldRenderTaskSummary = useDeferredExpandedContent(isTaskTool && (taskSummaryEntries.length > 0 || isActive || shouldTreatAsFinalized || !!taskSessionId));
     const shouldRenderExpandedContent = useDeferredExpandedContent(!isTaskTool && isExpanded);
+    const expandedContent = state ? (
+        <ToolExpandedContent
+            part={resolvedPart}
+            state={state}
+            currentDirectory={currentDirectory}
+            isExpanded={isExpanded}
+            onShowPopup={onShowPopup}
+        />
+    ) : null;
 
     if (!shouldTreatAsFinalized && !isActive && !isTaskTool) {
         return null;
@@ -676,7 +695,32 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                 />
             ) : null}
 
-            {!isTaskTool ? (
+            {isFabricRun ? (
+                <NestedToolCalls
+                    parentId={part.id}
+                    calls={nestedCalls}
+                    parentSettled={isFinalized}
+                    isActive={isActive}
+                    isExpanded={isExpanded}
+                    onToggleCard={() => onToggle(part.id)}
+                    description={readFabricExecDisplay(input).description}
+                    progress={runProgress.progress}
+                    phases={runProgress.phases}
+                    rawDetails={state ? expandedContent : null}
+                    renderRow={(nestedPart, nestedExpanded, onNestedToggle) => (
+                        <ToolPart
+                            part={nestedPart}
+                            isExpanded={nestedExpanded}
+                            onToggle={onNestedToggle}
+                            isMobile={isMobile}
+                            alwaysShowActions={isMobile}
+                            onContentChange={onContentChange}
+                            onShowPopup={onShowPopup}
+                            animateTailText={false}
+                        />
+                    )}
+                />
+            ) : !isTaskTool ? (
                 <div
                     ref={expandedContentRef}
                     aria-hidden={!isExpanded}
@@ -696,15 +740,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
                                 className="pointer-events-none absolute left-0 top-px bottom-0 w-px"
                                 style={{ backgroundColor: 'var(--tools-border)' }}
                             />
-                            {state ? (
-                                <ToolExpandedContent
-                                    part={resolvedPart}
-                                    state={state}
-                                    currentDirectory={currentDirectory}
-                                    isExpanded={isExpanded}
-                                    onShowPopup={onShowPopup}
-                                />
-                            ) : null}
+                            {state ? expandedContent : null}
                         </div>
                     ) : null}
                 </div>

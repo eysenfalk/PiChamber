@@ -7,10 +7,11 @@ import {
   readExpandedToolsCache,
   writeExpandedToolsCache,
 } from './chatToolExpansion';
+import { resolveOpenToolIds, useToolCallsExpanded } from './toolCallsExpansion';
 
 type ToolActivity = TurnActivityRecord & { kind: 'tool'; part: Part & { type: 'tool' } };
 
-const readTurnToolCache = (activities: ToolActivity[]): Set<string> => {
+const readTurnToolCache = (activities: ToolActivity[], expandAll: boolean): Set<string> => {
   const expanded = new Set<string>();
   const toolIdsByMessage = new Map<string, Set<string>>();
 
@@ -21,7 +22,7 @@ const readTurnToolCache = (activities: ToolActivity[]): Set<string> => {
   }
 
   for (const [messageId, toolIds] of toolIdsByMessage) {
-    const cachedExpanded = readExpandedToolsCache(messageId);
+    const cachedExpanded = readExpandedToolsCache(messageId, expandAll);
     for (const toolId of toolIds) {
       if (cachedExpanded.has(toolId)) expanded.add(toolId);
     }
@@ -34,19 +35,17 @@ const updateOwnerCache = ({
   messageId,
   ownerToolIds,
   nextValue,
-  read,
-  write,
+  expandAll,
 }: {
   messageId: string;
   ownerToolIds: Set<string>;
   nextValue: Set<string>;
-  read: (messageId: string) => Set<string>;
-  write: (messageId: string, value: Set<string>) => void;
+  expandAll: boolean;
 }): void => {
   // Preserve cached state for tools outside this turn. A message can be
   // revisited from more than one projection, so replacing its whole cache with
   // the turn-local set would silently forget an unrelated tool.
-  const cached = read(messageId);
+  const cached = readExpandedToolsCache(messageId, expandAll);
   for (const toolId of ownerToolIds) {
     if (nextValue.has(toolId)) {
       cached.add(toolId);
@@ -54,13 +53,15 @@ const updateOwnerCache = ({
       cached.delete(toolId);
     }
   }
-  write(messageId, cached);
+  writeExpandedToolsCache(messageId, cached, expandAll);
 };
 
 /**
- * Tool disclosure is manual-only: bash/edit tools never auto-open.
- * Manual expansion, execution, and results are preserved through the
- * per-message expanded cache.
+ * Tool disclosure follows the user, never the tool kind: bash/edit tools do
+ * not auto-open. The stored set holds the tools the user flipped away from the
+ * current default (closed by default, or open while "expand all" is on), and
+ * is preserved per message so remounting keeps it. Changing the default
+ * starts every turn from a clean slate.
  */
 export function useTurnToolsState({
   activities,
@@ -92,26 +93,38 @@ export function useTurnToolsState({
     return owners;
   }, [toolActivities]);
 
-  const [expandedTools, setExpandedTools] = React.useState<Set<string>>(() =>
-    readTurnToolCache(toolActivities),
-  );
+  const expandAll = useToolCallsExpanded();
+  const [flippedState, setFlippedState] = React.useState(() => ({
+    expandAll,
+    ids: readTurnToolCache(toolActivities, expandAll),
+  }));
+  // Derive-state-from-props: when the default flips, re-read the flipped set
+  // for the new default in this same render instead of showing one stale frame.
+  let flipped = flippedState.ids;
+  if (flippedState.expandAll !== expandAll) {
+    flipped = readTurnToolCache(toolActivities, expandAll);
+    setFlippedState({ expandAll, ids: flipped });
+  }
   const [popupContent, setPopupContent] = React.useState<ToolPopupContent>({
     open: false,
     title: '',
     content: '',
   });
 
-  const effectiveExpandedTools = expandedTools;
+  const effectiveExpandedTools = React.useMemo(
+    () => resolveOpenToolIds(ownerByToolId.keys(), flipped, expandAll),
+    [expandAll, flipped, ownerByToolId],
+  );
 
   const toggleStateRef = React.useRef({
     ownerByToolId,
     toolIdsByOwner,
-    effectiveExpandedTools,
+    expandAll,
   });
   toggleStateRef.current = {
     ownerByToolId,
     toolIdsByOwner,
-    effectiveExpandedTools,
+    expandAll,
   };
 
   const handleToggleTool = React.useCallback(
@@ -122,8 +135,10 @@ export function useTurnToolsState({
 
       const ownerToolIds = current.toolIdsByOwner.get(ownerId) ?? new Set<string>();
 
-      setExpandedTools((previous) => {
-        const next = new Set(previous);
+      setFlippedState((previous) => {
+        // A toggle racing a default change would write into the wrong mode.
+        if (previous.expandAll !== current.expandAll) return previous;
+        const next = new Set(previous.ids);
         if (next.has(toolId)) {
           next.delete(toolId);
         } else {
@@ -133,10 +148,9 @@ export function useTurnToolsState({
           messageId: ownerId,
           ownerToolIds,
           nextValue: next,
-          read: readExpandedToolsCache,
-          write: writeExpandedToolsCache,
+          expandAll: current.expandAll,
         });
-        return next;
+        return { expandAll: previous.expandAll, ids: next };
       });
     }, [],
   );

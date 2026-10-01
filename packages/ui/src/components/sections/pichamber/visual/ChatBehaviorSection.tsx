@@ -27,6 +27,8 @@ export interface ChatBehaviorSectionProps {
   setFollowUpBehavior: (behavior: FollowUpBehavior) => void;
   draftStartersVisible: boolean;
   onDraftStartersVisibleChange: (visible: boolean) => void;
+  expandToolCallsByDefault: boolean;
+  onExpandToolCallsByDefaultChange: (expanded: boolean) => void;
 }
 
 export const ChatBehaviorSection: React.FC<ChatBehaviorSectionProps> = ({
@@ -40,6 +42,8 @@ export const ChatBehaviorSection: React.FC<ChatBehaviorSectionProps> = ({
   setFollowUpBehavior,
   draftStartersVisible,
   onDraftStartersVisibleChange,
+  expandToolCallsByDefault,
+  onExpandToolCallsByDefaultChange,
 }) => {
   if (!hasBehaviorSettings) return null;
 
@@ -98,6 +102,14 @@ export const ChatBehaviorSection: React.FC<ChatBehaviorSectionProps> = ({
           label={'Show Starters on New Session Screen'}
           ariaLabel={'Show starters on the new session screen'}
           settingsItem="chat.draft-starters-visible"
+        />
+        <SettingsCheckboxRow
+          checked={expandToolCallsByDefault}
+          onChange={onExpandToolCallsByDefaultChange}
+          label={'Expand Tool Calls by Default'}
+          ariaLabel={'Expand tool calls by default'}
+          info={'Opens every tool call, including the calls inside Fabric runs, and keeps the activity list open after the answer. You can still toggle all tool calls for the current window with the Toggle tool calls shortcut or the session menu.'}
+          settingsItem="chat.expand-tool-calls"
         />
       </SettingsSection>
     </>

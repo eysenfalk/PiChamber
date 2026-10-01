@@ -4,6 +4,7 @@ import type { Message } from '@/lib/chat/types';
 import { ChatInput } from './ChatInput';
 import { ExtensionDialogOverlay } from './ExtensionDialogOverlay';
 import { ExtensionStatusStrip, ExtensionNoticeToasts, ExtensionWidgetStrip } from './ExtensionStatusWidgets';
+import { FabricRunStrip } from './FabricRunStrip';
 import { ExtensionPanelDock } from './extension/ExtensionPanelDock';
 import { ExtensionAppSurfaces } from './extension/ExtensionAppSurfaces';
 import { ComposerCommandTriggers } from './composer/ui/ComposerCommandTriggers';
@@ -613,6 +614,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
                 <ComposerCommandTriggers sessionId={currentSessionId} />
                 <ExtensionAppSurfaces sessionId={currentSessionId} />
                 <ExtensionPanelDock sessionId={currentSessionId} />
+                <FabricRunStrip sessionId={currentSessionId} />
                 <ExtensionWidgetStrip sessionId={currentSessionId} placement="aboveEditor" />
                 <ExtensionStatusStrip sessionId={currentSessionId} />
                 <ChatInput scrollToBottom={scrollToBottomOnSend} />

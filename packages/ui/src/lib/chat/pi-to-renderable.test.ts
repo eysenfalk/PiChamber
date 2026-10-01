@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { PiProjectedMessage, PiProjectedSession } from '@/lib/pi/event-reducer';
+import type { PiProjectedMessage, PiProjectedMessagePart, PiProjectedSession } from '@/lib/pi/event-reducer';
 import {
   mapPart,
   piMessageToRecord,
@@ -260,6 +260,41 @@ describe('pi-to-renderable', () => {
     expect(hydrated.state?.output).toBe(oversized);
     expect(hydrated.state?.deferredBody).toBe(undefined);
     expect(hydrated.state?.metadata?.patch).toBe(oversized);
+  });
+
+  test('counts nested calls toward the settled budget and hydrates them on demand', () => {
+    const nestedCalls = [{ name: 'edit', success: true, metadata: { diff: `+1 ${'x'.repeat(SETTLED_TOOL_RECORD_BUDGET_CHARS + 1)}`, additions: 1 } }];
+    const part: PiProjectedMessagePart = {
+      id: 'tool_fabric',
+      type: 'tool',
+      text: '',
+      streaming: false,
+      tool: {
+        name: 'fabric_exec',
+        toolCallId: 'c-fabric',
+        state: 'completed',
+        input: { code: 'run()' },
+        metadata: { nestedCalls },
+        startedAt: 1,
+        endedAt: 2,
+      },
+    };
+    const settled = mapPart(part) as { state?: { deferredBody?: unknown; metadata?: Record<string, unknown> } };
+    // The compact card keeps a light row list; the heavy diff waits for hydration.
+    const light = settled.state?.metadata?.nestedCalls as Array<{ name: string; metadata?: { diff?: string; additions?: number } }>;
+    expect(light.map((call) => call.name)).toEqual(['edit']);
+    expect(light[0].metadata?.additions).toBe(1);
+    expect((light[0].metadata?.diff?.length ?? 0) <= 1200).toBe(true);
+    expect(settled.state?.deferredBody).toBe(true);
+
+    const hydrated = mapPart(part, { full: true }) as { state?: { metadata?: Record<string, unknown> } };
+    expect(hydrated.state?.metadata?.nestedCalls).toBe(nestedCalls);
+
+    const small = mapPart({ ...part, tool: { ...part.tool!, metadata: { nestedCalls: [{ name: 'read' }] } } }) as {
+      state?: { deferredBody?: unknown; metadata?: Record<string, unknown> };
+    };
+    expect(small.state?.metadata?.nestedCalls).toEqual([{ name: 'read' }]);
+    expect(small.state?.deferredBody).toBe(undefined);
   });
 
   test('reuses message records while the projected message identity is stable', () => {

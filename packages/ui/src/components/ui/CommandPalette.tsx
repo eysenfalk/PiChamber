@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { toggleToolCallsExpanded } from '@/components/chat/message/toolCallsExpansion';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useCatalogUiSessions } from '@/sync/sync-context';
@@ -175,6 +176,16 @@ export const CommandPalette: React.FC = () => {
         searchText: "Add Project",
         onSelect: run(() => {
           sessionEvents.requestDirectoryDialog();
+        }),
+      },
+      {
+        id: 'toggle-tool-calls',
+        title: "Expand or Collapse Tool Calls",
+        icon: <Icon name="expand-up-down" className="mr-2 h-4 w-4" />,
+        shortcutId: 'toggle_tool_calls',
+        searchText: "Expand or Collapse Tool Calls toggle tool calls details",
+        onSelect: run(() => {
+          toggleToolCallsExpanded();
         }),
       },
       {

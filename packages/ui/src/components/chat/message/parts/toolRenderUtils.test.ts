@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { isExpandableTool, isStaticTool } from './toolRenderUtils';
+import type { ToolPart } from '@/lib/chat/types';
+import { getToolDescription, isExpandableTool, isStaticTool } from './toolRenderUtils';
 
 describe('tool rendering classification', () => {
     test('keeps navigation tools compact', () => {
@@ -26,5 +27,22 @@ describe('tool rendering classification', () => {
     test('normalizes dotted and indexed tool names', () => {
         expect(isStaticTool('runtime.read:2')).toBe(true);
         expect(isExpandableTool('runtime.custom_tool:2')).toBe(true);
+    });
+});
+
+describe('fabric_exec description', () => {
+    const describeRun = (input: Record<string, unknown>) => {
+        const part: ToolPart = { id: 'p', type: 'tool', tool: 'fabric_exec' };
+        return getToolDescription(part, { status: 'completed', input } as never, '/repo');
+    };
+
+    test('uses the declared run name', () => {
+        expect(describeRun({ code: 'x()', display: { name: 'Inspect pi-fabric' } })).toBe('Inspect pi-fabric');
+        expect(describeRun({ code: 'x()', display: 'Short name' })).toBe('Short name');
+    });
+
+    test('shows nothing when no name was declared', () => {
+        expect(describeRun({ code: 'x()' })).toBe('');
+        expect(describeRun({ code: 'x()', display: '{"name":"unparsed"}' })).toBe('');
     });
 });

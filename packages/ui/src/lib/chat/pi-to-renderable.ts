@@ -1,6 +1,7 @@
 import type { Session, Message, Part, SessionMessageRecord } from '@/lib/chat/types';
 import type { PiProjectedMessage, PiProjectedMessagePart, PiProjectedSession } from '@/lib/pi/event-reducer';
 import type { PiSession } from '@/lib/pi/types';
+import { lightenNestedCalls, readNestedToolCalls } from '@/lib/chat/nestedToolCalls';
 import type { PiSessionListItem } from '@/lib/pi/protocol';
 
 export const SETTLED_TOOL_RECORD_BUDGET_CHARS = 2048;
@@ -28,10 +29,15 @@ const stubSettledToolMetadata = (
   if (!metadata) return metadata;
   const heavy = metadata.patch ?? metadata.diff ?? (metadata.filediff as { patch?: unknown; diff?: unknown } | undefined)?.patch
     ?? (metadata.filediff as { patch?: unknown; diff?: unknown } | undefined)?.diff;
-  if (measureUnknown(heavy) <= SETTLED_TOOL_RECORD_BUDGET_CHARS) return metadata;
+  // Nested calls carry their own diffs and outputs, so they count toward the budget.
+  if (measureUnknown(heavy) + measureUnknown(metadata.nestedCalls) <= SETTLED_TOOL_RECORD_BUDGET_CHARS) return metadata;
   const next = { ...metadata };
   delete next.patch;
   delete next.diff;
+  // The compact card still draws its rows, so keep a light list; expanding hydrates the full one.
+  const light = lightenNestedCalls(readNestedToolCalls(metadata));
+  if (light.length > 0) next.nestedCalls = light;
+  else delete next.nestedCalls;
   if (next.filediff && typeof next.filediff === 'object') {
     const rest = { ...(next.filediff as Record<string, unknown>) };
     delete rest.patch;

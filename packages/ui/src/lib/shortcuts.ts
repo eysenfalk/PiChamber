@@ -151,6 +151,13 @@ const SHORTCUT_ACTIONS: ReadonlyArray<ShortcutAction> = [
     customizable: true,
   },
   {
+    id: 'toggle_tool_calls',
+    defaultCombo: 'mod+o',
+    label: 'Toggle tool calls',
+    description: 'Expand or collapse every tool call, like Pi\'s tool expansion toggle',
+    customizable: true,
+  },
+  {
     id: 'toggle_sidebar',
     defaultCombo: 'mod+alt+l',
     label: 'Toggle sidebar',

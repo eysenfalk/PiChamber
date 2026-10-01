@@ -223,6 +223,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['starter', 'starters', 'new session', 'welcome', 'suggestions'],
   },
   {
+    id: 'chat.expand-tool-calls',
+    page: 'chat',
+    title: "Expand Tool Calls by Default",
+    description: "Open every tool call, including the calls inside Fabric runs, and keep the activity list open after the answer.",
+    keywords: ['tool', 'tools', 'tool calls', 'expand', 'collapse', 'open', 'diff', 'fabric', 'activity', 'details'],
+  },
+  {
     id: 'chat.follow-up-behavior',
     page: 'chat',
     title: "Follow-up behavior",

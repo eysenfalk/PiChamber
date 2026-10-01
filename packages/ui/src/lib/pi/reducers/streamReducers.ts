@@ -242,9 +242,42 @@ export const reduceTool = (
   return true;
 };
 
+/**
+ * An interrupted run will never report `tool.end`, so any tool still marked
+ * running would stay live forever. History projects the same case as an error.
+ */
+const settleInterruptedTools = (session: PiReducerSessionState): void => {
+  const messageIds = new Set(session.toolsByCallId.values());
+  const now = Date.now();
+  let forked = false;
+  for (const messageId of messageIds) {
+    for (const partId of session.partOrder.get(messageId) ?? []) {
+      const part = session.parts.get(partId);
+      const tool = part?.tool;
+      if (!part || !tool || (tool.state !== 'running' && tool.state !== 'pending')) continue;
+      if (!forked) {
+        session.parts = session.parts.fork();
+        forked = true;
+      }
+      session.parts.set(partId, {
+        ...part,
+        streaming: false,
+        tool: {
+          ...tool,
+          state: 'error',
+          isError: true,
+          error: tool.error ?? 'Tool was interrupted before completion.',
+          endedAt: tool.endedAt ?? now,
+        },
+      });
+    }
+  }
+};
+
 export const reduceInterrupted = (session: PiReducerSessionState, streaming: boolean): void => {
   session.lifecycle = 'interrupted';
   session.retry = undefined;
+  settleInterruptedTools(session);
   if (!streaming) return;
   for (const messageId of session.streamingMessages) {
     const message = session.messages.get(messageId);

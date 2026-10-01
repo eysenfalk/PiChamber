@@ -79,6 +79,7 @@ import { DesktopGitHubControl } from './header/DesktopGitHubControl';
 import { DesktopServicesMenu } from './header/DesktopServicesMenu';
 import { BackgroundTasksMenu } from '@/components/worktree/BackgroundTasksMenu';
 import { HeaderRetentionDialog } from './header/HeaderRetentionDialog';
+import { toggleToolCallsExpanded, useToolCallsExpanded } from '@/components/chat/message/toolCallsExpansion';
 import { formatCompactHeaderLabel, formatTime, normalize } from './header/headerHelpers';
 
 interface TabConfig {
@@ -562,6 +563,7 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleDocumentMouseDown);
   }, [isRenamingHeaderSession, saveHeaderSessionRename]);
 
+  const toolCallsExpanded = useToolCallsExpanded();
   const copyCurrentSessionId = React.useCallback(() => {
     if (!currentSessionId) return;
     void copyTextToClipboard(currentSessionId).then((result) => {
@@ -1243,6 +1245,7 @@ export const Header: React.FC<HeaderProps> = ({
                     <DropdownMenuItem onClick={copyCurrentSessionId}><Icon name="file-copy" className="mr-2 size-4" />{"Copy session ID"}</DropdownMenuItem>
                     <DropdownMenuItem onClick={copyCurrentWorkingDirectory} disabled={!actionDirectory}><Icon name="folder" className="mr-2 size-4" />{"Copy working directory"}</DropdownMenuItem>
                     <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={toggleToolCallsExpanded}><Icon name={toolCallsExpanded ? 'collapse-vertical' : 'expand-up-down'} className="mr-2 size-4" />{toolCallsExpanded ? "Collapse tool calls" : "Expand tool calls"}</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => void exportCurrentSession()}><Icon name="download" className="mr-2 size-4" />{"Export Markdown"}</DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => setPendingHeaderRetentionAction('archive')}><Icon name="inbox-archive" className="mr-2 size-4" />{"Archive"}</DropdownMenuItem>

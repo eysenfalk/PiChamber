@@ -1,14 +1,22 @@
 export const EXPANDED_TOOLS_CACHE_MAX = 4000;
-export const expandedToolsStateCache = new Map<string, Set<string>>();
 
-export const readExpandedToolsCache = (messageId: string): Set<string> => {
+/**
+ * Per message: the tool ids the user flipped away from the default, tagged with
+ * the default they were flipped from. Flips made while tools opened closed mean
+ * the opposite of flips made while "expand all" was on, so a record from the
+ * other default is ignored instead of misread.
+ */
+export const expandedToolsStateCache = new Map<string, { expandAll: boolean; ids: Set<string> }>();
+
+export const readExpandedToolsCache = (messageId: string, expandAll = false): Set<string> => {
   const cached = expandedToolsStateCache.get(messageId);
-  return cached ? new Set(cached) : new Set();
+  return cached && cached.expandAll === expandAll ? new Set(cached.ids) : new Set();
 };
 
 export const writeExpandedToolsCache = (
   messageId: string,
-  value: Set<string>
+  value: Set<string>,
+  expandAll = false,
 ): void => {
   if (
     expandedToolsStateCache.size >= EXPANDED_TOOLS_CACHE_MAX &&
@@ -19,5 +27,5 @@ export const writeExpandedToolsCache = (
       expandedToolsStateCache.delete(oldest);
     }
   }
-  expandedToolsStateCache.set(messageId, new Set(value));
+  expandedToolsStateCache.set(messageId, { expandAll, ids: new Set(value) });
 };

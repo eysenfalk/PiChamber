@@ -428,6 +428,7 @@ describe('updateDesktopSettings', () => {
         draftStarters: [{ type: 'command', name: 'runtime-a' }] as unknown as SettingsPayload['draftStarters'],
         draftStartersVisible: false,
         draftStartersScheduleTaskAdded: true,
+        expandToolCallsByDefault: true,
       },
       source: 'web',
     }));
@@ -440,6 +441,7 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().favoriteModels).toHaveLength(1);
     expect(useUIStore.getState().globalDraftStarters).toEqual([]);
     expect(useUIStore.getState().draftStartersVisible).toBe(false);
+    expect(useUIStore.getState().expandToolCallsByDefault).toBe(true);
     expect(useUIStore.getState().diffLayoutPreference).toBe('side-by-side');
     expect(useMessageQueueStore.getState().followUpBehavior).toBe('steer');
 
@@ -457,6 +459,7 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().favoriteModels).toEqual([]);
     expect(useUIStore.getState().globalDraftStarters).toBeNull();
     expect(useUIStore.getState().draftStartersVisible).toBe(true);
+    expect(useUIStore.getState().expandToolCallsByDefault).toBe(false);
     expect(useUIStore.getState().diffLayoutPreference).toBe('inline');
     expect(useMessageQueueStore.getState().followUpBehavior).toBe('queue');
   });

@@ -336,6 +336,33 @@ const getLspToolDescription = (input: Record<string, unknown> | undefined, curre
     return displayPath ? `${operation} ${displayPath}${position}` : operation;
 };
 
+export const formatToolDuration = (start: number, end?: number, now: number = Date.now()): string => {
+    const duration = Math.max(0, (end ?? now) - start);
+    const seconds = duration / 1000;
+
+    const displaySeconds = seconds < 0.05 && end !== undefined ? 0.1 : seconds;
+    return `${displaySeconds.toFixed(1)}s`;
+};
+
+/**
+ * pi-fabric lets the model label a run through `display`: `{ name, description }`,
+ * or a bare string for the name. Both are shown instead of the run's code.
+ */
+export const readFabricExecDisplay = (
+    input: Record<string, unknown> | undefined,
+): { name: string; description: string } => {
+    const display = input?.display;
+    const record = typeof display === 'object' && display !== null && !Array.isArray(display)
+        ? display as { name?: unknown; description?: unknown }
+        : null;
+    const name = record ? record.name : display;
+    const description = record?.description;
+    return {
+        name: typeof name === 'string' && !name.trim().startsWith('{') ? name.trim().substring(0, 80) : '',
+        description: typeof description === 'string' ? description.trim().substring(0, 300) : '',
+    };
+};
+
 export const getToolDescription = (part: ToolPartType, state: ToolStateUnion, currentDirectory: string): string => {
     const stateWithData = state as ToolStateWithMetadata;
     const metadata = stateWithData.metadata;
@@ -371,6 +398,13 @@ export const getToolDescription = (part: ToolPartType, state: ToolStateUnion, cu
 
     if (part.tool === 'lsp') {
         return getLspToolDescription(input, currentDirectory);
+    }
+
+    if (part.tool === 'fabric_exec') {
+        const runName = readFabricExecDisplay(input).name;
+        if (runName) {
+            return runName;
+        }
     }
 
     const desc = input?.description || metadata?.description || ('title' in state && state.title) || '';

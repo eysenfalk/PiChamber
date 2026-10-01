@@ -204,6 +204,12 @@ export const applyDesktopUiPreferences = (settings: DesktopSettings): void => {
     store.setDraftStartersVisible(settings.draftStartersVisible);
   }
   if (
+    typeof settings.expandToolCallsByDefault === 'boolean' &&
+    settings.expandToolCallsByDefault !== store.expandToolCallsByDefault
+  ) {
+    store.setExpandToolCallsByDefault(settings.expandToolCallsByDefault);
+  }
+  if (
     typeof settings.terminalFontSize === 'number' &&
     Number.isFinite(settings.terminalFontSize) &&
     settings.terminalFontSize !== store.terminalFontSize

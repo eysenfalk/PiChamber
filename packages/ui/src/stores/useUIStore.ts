@@ -131,6 +131,11 @@ interface UIStore {
   // Global draft welcome starters; null = unset (use the default built-in set).
   globalDraftStarters: DraftStarterRef[] | null;
   draftStartersVisible: boolean;
+  // Saved preference: open every tool call by default. Pi's tool-expansion
+  // toggle overrides it for this window only (see toolCallsExpansion.ts).
+  expandToolCallsByDefault: boolean;
+  // Transient toggle state (not persisted); null follows the saved preference.
+  toolCallsExpandedOverride: boolean | null;
   terminalFontSize: number;
   terminalShell: TerminalShell;
   terminalLoginShells: TerminalShell[];
@@ -246,6 +251,8 @@ interface UIStore {
   setFontSize: (size: number) => void;
   setGlobalDraftStarters: (refs: DraftStarterRef[]) => void;
   setDraftStartersVisible: (value: boolean) => void;
+  setExpandToolCallsByDefault: (value: boolean) => void;
+  setToolCallsExpandedOverride: (value: boolean | null) => void;
   setTerminalFontSize: (size: number) => void;
   setTerminalShell: (shell: TerminalShell) => void;
   setTerminalLoginShells: (shells: TerminalShell[]) => void;
@@ -399,6 +406,8 @@ export const useUIStore = create<UIStore>()(
         weekStartPreference: 'auto',
         expandedEditorToolbar: false,
         draftStartersVisible: true,
+        expandToolCallsByDefault: false,
+        toolCallsExpandedOverride: null,
         isExpandedInput: false,
         shortcutOverrides: {},
         commandTriggers: [],
@@ -1025,6 +1034,16 @@ export const useUIStore = create<UIStore>()(
 
         setDraftStartersVisible: (value) => {
           set({ draftStartersVisible: value });
+        },
+
+        // Changing the saved preference drops the transient override so the
+        // new default is what the user sees next.
+        setExpandToolCallsByDefault: (value) => {
+          set({ expandToolCallsByDefault: value, toolCallsExpandedOverride: null });
+        },
+
+        setToolCallsExpandedOverride: (value) => {
+          set({ toolCallsExpandedOverride: value });
         },
 
         setTerminalFontSize: (size) => {
@@ -1743,6 +1762,7 @@ export const useUIStore = create<UIStore>()(
           weekStartPreference: state.weekStartPreference,
           expandedEditorToolbar: state.expandedEditorToolbar,
           draftStartersVisible: state.draftStartersVisible,
+          expandToolCallsByDefault: state.expandToolCallsByDefault,
           shortcutOverrides: state.shortcutOverrides,
           fileEditorKeymap: state.fileEditorKeymap,
         })

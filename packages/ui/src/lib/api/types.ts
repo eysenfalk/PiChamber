@@ -631,6 +631,7 @@ export interface SettingsPayload {
   mobileKeyboardMode?: 'native' | 'resize-content';
   draftStarters?: DraftStarterRef[];
   draftStartersVisible?: boolean;
+  expandToolCallsByDefault?: boolean;
 
   [key: string]: unknown;
 }

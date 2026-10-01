@@ -85,6 +85,8 @@ export const PiChamberVisualSettings: React.FC<PiChamberVisualSettingsProps> = (
     const setWeekStartPreference = useUIStore(state => state.setWeekStartPreference);
     const draftStartersVisible = useUIStore(state => state.draftStartersVisible);
     const setDraftStartersVisible = useUIStore(state => state.setDraftStartersVisible);
+    const expandToolCallsByDefault = useUIStore(state => state.expandToolCallsByDefault);
+    const setExpandToolCallsByDefault = useUIStore(state => state.setExpandToolCallsByDefault);
     const {
         themeMode,
         setThemeMode,
@@ -121,6 +123,11 @@ export const PiChamberVisualSettings: React.FC<PiChamberVisualSettingsProps> = (
         setDraftStartersVisible(enabled);
         void updateDesktopSettings({ draftStartersVisible: enabled });
     }, [setDraftStartersVisible]);
+
+    const handleExpandToolCallsByDefaultChange = React.useCallback((enabled: boolean) => {
+        setExpandToolCallsByDefault(enabled);
+        void updateDesktopSettings({ expandToolCallsByDefault: enabled });
+    }, [setExpandToolCallsByDefault]);
 
     const handleExpandedEditorToolbarChange = React.useCallback((enabled: boolean) => {
         setExpandedEditorToolbar(enabled);
@@ -544,6 +551,8 @@ export const PiChamberVisualSettings: React.FC<PiChamberVisualSettingsProps> = (
                     setFollowUpBehavior={setFollowUpBehavior}
                     draftStartersVisible={draftStartersVisible}
                     onDraftStartersVisibleChange={handleDraftStartersVisibleChange}
+                    expandToolCallsByDefault={expandToolCallsByDefault}
+                    onExpandToolCallsByDefaultChange={handleExpandToolCallsByDefaultChange}
                 />
 
                 {shouldShow('perfHud') && (

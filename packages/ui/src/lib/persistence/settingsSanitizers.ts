@@ -146,6 +146,9 @@ export const sanitizeWebSettings = (payload: unknown): DesktopSettings | null =>
   if (typeof candidate.draftStartersVisible === 'boolean') {
     result.draftStartersVisible = candidate.draftStartersVisible;
   }
+  if (typeof candidate.expandToolCallsByDefault === 'boolean') {
+    result.expandToolCallsByDefault = candidate.expandToolCallsByDefault;
+  }
   if (typeof candidate.draftStartersScheduleTaskAdded === 'boolean') {
     result.draftStartersScheduleTaskAdded =
       candidate.draftStartersScheduleTaskAdded;

@@ -139,6 +139,7 @@ export type DesktopSettings = {
   responseStyleCustomInstructions?: string;
   draftStarters?: DraftStarterRef[];
   draftStartersVisible?: boolean;
+  expandToolCallsByDefault?: boolean;
   draftStartersScheduleTaskAdded?: boolean;
 };
 

@@ -62,6 +62,12 @@ export const HelpDialog: React.FC = () => {
           keys: '',
         },
         {
+          id: 'toggle_tool_calls',
+          descriptionKey: "Expand or Collapse Tool Calls",
+          icon: "expand-up-down",
+          keys: '',
+        },
+        {
           id: 'add_selection_to_chat',
           descriptionKey: "Add Selection to Chat",
           icon: "add",

@@ -7,6 +7,8 @@ interface TurnActivityDisclosureInput {
     hasFinalText: boolean;
     previousHadFinalText: boolean;
     hasNewActivity: boolean;
+    /** "Expand tool calls" is on: the list stays open instead of closing after the answer. */
+    keepOpen?: boolean;
 }
 
 interface TurnActivityDisclosureResult {
@@ -24,9 +26,17 @@ export const resolveTurnActivityDisclosure = ({
     hasFinalText,
     previousHadFinalText,
     hasNewActivity,
+    keepOpen = false,
 }: TurnActivityDisclosureInput): TurnActivityDisclosureResult => {
     if (!hasActivity) {
         return { isExpanded, wasAutoCollapsed, resetUserToggle: false };
+    }
+
+    if (keepOpen) {
+        // A manual choice still wins; otherwise nothing closes the list.
+        return userToggled
+            ? { isExpanded, wasAutoCollapsed, resetUserToggle: false }
+            : { isExpanded: true, wasAutoCollapsed: false, resetUserToggle: false };
     }
 
     const finalOutputStarted = showWorkingStatus && hasFinalText && !previousHadFinalText;

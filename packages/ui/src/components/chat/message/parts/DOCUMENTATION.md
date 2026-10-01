@@ -34,6 +34,14 @@ Use this doc when you ask an agent to change tool/header/description behavior.
 - `useDeferredExpandedContent.ts`
   - Owns staggered post-click body mounting while preserving synchronous first-mount measurement for default-open/virtualized rows.
 
+- `NestedToolCalls.tsx` / `nestedToolCallsModel.ts` / `@/lib/chat/nestedToolCalls`
+  - Own the UI side of `state.metadata.nestedCalls` (plus `progress` and `phases`), the neutral data the daemon projects for tools that run other tools (pi-fabric's `fabric_exec`). `lib/chat/nestedToolCalls.ts` parses it and holds the pure rules; `nestedToolCallsModel.ts` builds synthetic tool parts (`<parent id>:nested:<index>`); `NestedToolCalls.tsx` renders each through `ToolPart` (supplied as `renderRow`, so there is no import cycle).
+  - The card follows pi-fabric's Pi TUI behavior. It is compact and visible without a click: the run's description, a summary line (`Tools running · n/m calls · <progress>` with a spinner while live, `Tools · N calls` once settled, failures counted), one row per call, and the last 10 diff lines under the latest successful edit or write. Compact shows 8 calls, running ones first; past that a hidden count opens the card. Expanding (the row or the global toggle) shows up to 30 calls, per row bodies, and the raw code and result. Per row clicks open the card while it is compact.
+  - A nested call with no reported outcome counts as running only while the parent runs. Calls arrive only from the daemon; the UI never reads pi-fabric's `audits` or `trace`.
+  - `getToolDescription` shows the run's `display.name` for `fabric_exec` in place of its code. `pi-to-renderable.ts` counts `nestedCalls` toward the settled-record budget; over budget, the settled record keeps a light list (`lightenNestedCalls`: name, short input, outcome, timing, change counts, and only the latest edit's diff head) so the compact card still draws, and expanding hydrates the full list like any large diff.
+- `../FabricRunStrip.tsx` / `../fabricRunSelectors.ts`
+  - The live strip above the composer, standing in for pi-fabric's Pi widget, whose lines are pi-tui components that never cross the RPC bridge. It derives running `fabric_exec` tool parts (live state only, at most three) from the reducer and shows name, `done/total calls`, progress, and a running duration. Shell tasks and agents, which Pi's widget also lists, have no data source here and are not shown.
+
 - `taskToolModel.ts`
   - Owns Task metadata parsing and child-session summary projection.
   - `part.state.metadata.sessionId` is the only live identity contract between a Task and its child session.

@@ -98,6 +98,7 @@ const SHORTCUT_ACTION_LABELS: Record<string, string> = {
   "switch_context_surface": "Switch context panel surface",
   "toggle_services_menu": "Toggle services menu",
   "toggle_sidebar": "Toggle sidebar",
+  "toggle_tool_calls": "Toggle tool calls",
   "toggle_terminal": "Toggle terminal dock",
 };
 export const KeyboardShortcutsSettings: React.FC = () => {
