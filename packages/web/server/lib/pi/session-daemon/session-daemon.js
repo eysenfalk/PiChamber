@@ -34,6 +34,7 @@ import {
   SESSION_DAEMON_PROTOCOL_VERSION as PROTOCOL_VERSION,
 } from './ipc-protocol.js';
 import { createMessageEntryAliases } from './message-entry-aliases.js';
+import { projectNestedToolCalls } from './nested-tool-calls.js';
 import { createSessionReplayLog } from './session-replay.js';
 import {
   createSendOperationRegistry,
@@ -447,7 +448,8 @@ export function createSessionDaemon({
     if (inputs.size === 0) toolInputBySession.delete(sessionId);
   };
 
-  const mergeToolPresentationMetadata = (metadata, activeRuntime, directory, toolName, args) => {
+  const mergeToolPresentationMetadata = (rawMetadata, activeRuntime, directory, toolName, args) => {
+    const metadata = projectNestedToolCalls(toolName, rawMetadata);
     const skill = skillReadClassifierFor(activeRuntime, directory)?.(toolName, args);
     if (!skill) return metadata;
     const currentPiChamberMetadata = metadata?.pichamber && typeof metadata.pichamber === 'object'
@@ -2056,7 +2058,7 @@ export function createSessionDaemon({
     if (typeof modelRuntime.getError?.() === 'string') {
       throw new SessionDaemonProtocolError('PI_MODEL_CONFIG_INVALID', 'Pi models configuration is invalid.');
     }
-    // Pi 0.85.1 composeModelProvider layers models.json over native/base
+    // Pi composeModelProvider layers models.json over native/base
     // providers, so manual additions remain effective there. Extension
     // registrations without an explicit `models` array do not hide the file
     // entry either. Reject only when an extension defines its own `models`
@@ -3169,16 +3171,17 @@ export function createSessionDaemon({
       : null;
     let promptPromise;
     // True SDK acceptance: await the prompt preflight signal, not the full
-    // agent turn. preflightResult(true) means accepted, queued, or handled;
-    // preflightResult(false) is followed by a prompt rejection that must
-    // propagate to the caller so dedup does not cache it as accepted.
+    // agent turn. Pi calls preflightResult(disposition) only for an accepted
+    // prompt ('started', 'queued', or 'handled'); a rejected prompt never calls
+    // it and instead rejects, which must propagate to the caller so dedup does
+    // not cache it as accepted.
     let preflightOutcome = null;
     let notifyPreflight;
     const preflightGate = new Promise((resolve) => { notifyPreflight = resolve; });
-    const onPreflightResult = (accepted) => {
+    const onPreflightResult = () => {
       if (preflightOutcome !== null) return;
-      preflightOutcome = accepted === true;
-      notifyPreflight(preflightOutcome);
+      preflightOutcome = true;
+      notifyPreflight(true);
     };
     try {
       promptPromise = isSlashPrompt
@@ -3202,7 +3205,7 @@ export function createSessionDaemon({
     // A settlement without a preflight signal resolves the gate so a missing
     // callback cannot hang acceptance. Resolve implies acceptance; reject
     // implies preflight failure whose real error is propagated below. The
-    // installed SDK always signals, so this only covers test doubles.
+    // installed SDK signals on every accepted prompt, so this only covers test doubles.
     Promise.resolve(promptPromise).then(
       () => { if (preflightOutcome === null) { preflightOutcome = true; notifyPreflight(true); } },
       () => { if (preflightOutcome === null) { preflightOutcome = false; notifyPreflight(false); } },

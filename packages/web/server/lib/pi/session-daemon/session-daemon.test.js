@@ -1625,6 +1625,69 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('projects pi-fabric nested calls as neutral metadata for live events and persisted history', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-fabric-'));
+    const endpoint = testDaemonEndpoint(root);
+    const session = new FakeSession();
+    daemon = createSessionDaemon({
+      endpoint, credential, cwd: root,
+      createRuntime: async () => ({ cwd: root, session, async dispose() {} }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+    await client.request('sessions.create', { cwd: root });
+
+    const editAudit = {
+      ref: 'pi.edit', tool: 'edit', provider: 'pi', success: true,
+      args: { path: '/repo/a.md', edits: [{ oldString: 'a', newString: 'b' }] },
+      result: { ok: true, output: 'Edited (+1/-1, 1 edits).', details: { diff: '- 1 a\n+ 1 b', firstChangedLine: 1 } },
+    };
+    const toolUpdate = client.next((frame) => frame.event === 'session.tool.update' && frame.payload?.toolCallId === 'fabric-1');
+    session.emit({
+      type: 'tool_execution_update', toolCallId: 'fabric-1', toolName: 'fabric_exec', args: { code: 'x()' },
+      partialResult: { content: [{ type: 'text', text: 'working' }], details: { progress: 'working', audits: [editAudit] } },
+    });
+    const update = await toolUpdate;
+    expect(update.payload.metadata.nestedCalls).toEqual([expect.objectContaining({
+      name: 'edit', success: true, output: 'Edited (+1/-1, 1 edits).',
+      metadata: { diff: '- 1 a\n+ 1 b', firstChangedLine: 1 },
+    })]);
+    expect(update.payload.metadata.audits).toBeUndefined();
+    expect(update.payload.metadata.progress).toBe('working');
+
+    const toolEnd = client.next((frame) => frame.event === 'session.tool.end' && frame.payload?.toolCallId === 'fabric-1');
+    session.emit({
+      type: 'tool_execution_end', toolCallId: 'fabric-1', toolName: 'fabric_exec',
+      result: { content: [{ type: 'text', text: 'done' }], details: { success: true, audits: [editAudit], trace: { operations: [] } } },
+      isError: false,
+    });
+    const end = await toolEnd;
+    expect(end.payload.metadata.nestedCalls).toHaveLength(1);
+    expect(end.payload.metadata.trace).toBeUndefined();
+
+    session.entries = [{
+      type: 'message', id: 'assistant-fabric', timestamp: '2026-01-01T00:00:02.000Z',
+      message: {
+        role: 'assistant', provider: 'test', model: 'model',
+        content: [{ type: 'toolCall', id: 'persisted-fabric', name: 'fabric_exec', arguments: { code: 'x()' } }],
+      },
+    }, {
+      type: 'message', id: 'fabric-result', timestamp: '2026-01-01T00:00:03.000Z',
+      message: {
+        role: 'toolResult', toolCallId: 'persisted-fabric', toolName: 'fabric_exec',
+        content: [{ type: 'text', text: 'done' }], isError: false,
+        details: { success: true, audits: [editAudit] },
+      },
+    }];
+    await expect(client.request('sessions.open', { sessionId: session.sessionId, directory: root })).resolves.toMatchObject({
+      result: { messages: [{ parts: [expect.objectContaining({
+        metadata: { success: true, nestedCalls: [expect.objectContaining({ name: 'edit' })] },
+      })] }] },
+    });
+    await client.close();
+  });
+
   it('updates Pi models.json through an idle daemon and projects only credential-blind configuration', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
     const endpoint = testDaemonEndpoint(root);

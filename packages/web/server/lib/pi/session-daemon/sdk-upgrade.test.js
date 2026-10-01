@@ -71,7 +71,7 @@ describe('pinned SDK upgrade compatibility', () => {
     remoteModels = [{ ...flash, id: 'upgrade-remote-model', name: 'Remote model' }];
     const refresh = () => models.refresh({ providers: ['opencode'], allowNetwork: true, force: true, signal: AbortSignal.timeout(5000) });
     expect((await refresh()).errors.size).toBe(0);
-    expect(requests).toEqual([{ url: '/api/models/providers/opencode', etag: '"old-catalog"' }]);
+    expect(requests).toEqual([{ url: '/api/models/providers/opencode?types=chat%2Cimage%2Cclassifier', etag: '"old-catalog"' }]);
     expect(models.getModel('opencode', cached.id)).toBeUndefined();
     expect(models.getModel('opencode', remoteModels[0].id)).toBeDefined();
 

@@ -45,6 +45,7 @@ const PORTABLE_FIELDS = new Set([
   'filesViewShowGitignored', 'messageLimit',
   'responseStyleEnabled', 'responseStylePreset', 'responseStyleCustomInstructions',
   'draftStarters', 'draftStartersVisible', 'draftStartersScheduleTaskAdded',
+  'expandToolCallsByDefault',
   'autoCreateWorktree', 'globalBehaviorPrompt', 'skillCatalogs', 'messageStreamTransport',
 ]);
 

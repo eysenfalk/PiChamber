@@ -188,6 +188,7 @@ describe('Pi UI settings store', () => {
       themeId: 'nord',
       diffLayoutPreference: 'side-by-side',
       draftStartersVisible: false,
+      expandToolCallsByDefault: true,
       gitChangesViewMode: 'tree',
       autoCreateWorktree: true,
       ...retiredPortable,
@@ -206,6 +207,7 @@ describe('Pi UI settings store', () => {
     expect(readBack.themeId).toBe('nord');
     expect(readBack.diffLayoutPreference).toBe('side-by-side');
     expect(readBack.draftStartersVisible).toBe(false);
+    expect(readBack.expandToolCallsByDefault).toBe(true);
     expect(readBack.gitChangesViewMode).toBe('tree');
     expect(readBack.autoCreateWorktree).toBe(true);
     // Retired keys never reach either backing file.
