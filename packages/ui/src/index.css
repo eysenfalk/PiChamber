@@ -1477,9 +1477,40 @@ html:not(.dark) .chat-scroll {
   height: min(24rem, 70vh);
   min-height: 12rem;
   overflow: hidden;
-  touch-action: none;
+  /* Inline diagrams leave touch to page scrolling; tap opens the fullscreen preview. */
+  touch-action: pan-x pan-y;
   border-radius: 0.5rem;
   background: var(--surface-elevated);
+}
+
+[data-markdown="mermaid-block"][data-mermaid-touch-gestures="true"] [data-markdown="mermaid-viewport"] {
+  touch-action: none;
+}
+
+[data-markdown="mermaid-block"] [data-markdown="mermaid-toolbar"] {
+  transition: opacity 0.15s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  [data-markdown="mermaid-block"] [data-markdown="mermaid-toolbar"] {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  [data-markdown="mermaid-block"]:hover [data-markdown="mermaid-toolbar"],
+  [data-markdown="mermaid-block"]:focus-within [data-markdown="mermaid-toolbar"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Touch: inline diagrams cannot be panned, so zooming them in place would strand the view. */
+@media not all and (hover: hover) and (pointer: fine) {
+  [data-markdown="mermaid-block"]:not([data-mermaid-touch-gestures="true"]) [data-md-action="mermaid-zoom-in"],
+  [data-markdown="mermaid-block"]:not([data-mermaid-touch-gestures="true"]) [data-md-action="mermaid-zoom-out"],
+  [data-markdown="mermaid-block"]:not([data-mermaid-touch-gestures="true"]) [data-md-action="mermaid-fit"] {
+    display: none;
+  }
 }
 
 [data-markdown="mermaid-block"] [data-markdown="mermaid"] {

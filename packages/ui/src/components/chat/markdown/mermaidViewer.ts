@@ -15,6 +15,17 @@ type MermaidPoint = {
   y: number;
 };
 
+type MermaidPointerPair = readonly [MermaidPoint, MermaidPoint];
+
+type MermaidViewerOptions = {
+  // Touch pointers pan and pinch the diagram only when the surface owns touch
+  // gestures (fullscreen preview). Inline diagrams leave touch to page scroll
+  // and tap-to-open, so a chat swipe over a diagram still scrolls the chat.
+  touchGestures: boolean;
+};
+
+const DEFAULT_MERMAID_VIEWER_OPTIONS: MermaidViewerOptions = { touchGestures: false };
+
 type MermaidViewerController = {
   zoomIn: () => void;
   zoomOut: () => void;
@@ -232,6 +243,56 @@ export const zoomMermaidViewBoxAtPoint = ({
   };
 };
 
+const distanceBetween = (a: MermaidPoint, b: MermaidPoint): number => Math.hypot(b.x - a.x, b.y - a.y);
+
+const midpointOf = (a: MermaidPoint, b: MermaidPoint): MermaidPoint => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+// One incremental pinch step: zoom by the change in finger distance around the
+// previous midpoint, then follow the midpoint so a two-finger drag also pans.
+export const pinchMermaidViewBox = ({
+  currentBox,
+  contentBox,
+  viewport,
+  previous,
+  next,
+  minScale,
+  maxScale,
+}: {
+  currentBox: MermaidViewBox;
+  contentBox: MermaidViewBox;
+  viewport: MermaidViewport;
+  previous: MermaidPointerPair;
+  next: MermaidPointerPair;
+  minScale: number;
+  maxScale: number;
+}): MermaidViewBox => {
+  const previousDistance = distanceBetween(previous[0], previous[1]);
+  const nextDistance = distanceBetween(next[0], next[1]);
+  if (!isPositiveFinite(previousDistance) || !isPositiveFinite(nextDistance)) {
+    return currentBox;
+  }
+
+  const previousMidpoint = midpointOf(previous[0], previous[1]);
+  const nextMidpoint = midpointOf(next[0], next[1]);
+  const zoomed = zoomMermaidViewBoxAtPoint({
+    currentBox,
+    contentBox,
+    viewport,
+    pointer: previousMidpoint,
+    zoomFactor: nextDistance / previousDistance,
+    minScale,
+    maxScale,
+  });
+  return panMermaidViewBox({
+    currentBox: zoomed,
+    viewport,
+    delta: {
+      x: nextMidpoint.x - previousMidpoint.x,
+      y: nextMidpoint.y - previousMidpoint.y,
+    },
+  });
+};
+
 const controllerByBlock = new WeakMap<HTMLElement, MermaidViewerController>();
 
 export const getMermaidViewerController = (block: Element | null): MermaidViewerController | null => (
@@ -272,7 +333,10 @@ const isPanExcludedTarget = (target: EventTarget | null): boolean => (
   target instanceof Element && Boolean(target.closest('button, a, [role="button"]'))
 );
 
-const createMermaidViewerController = (block: HTMLElement): MermaidViewerController | null => {
+const createMermaidViewerController = (
+  block: HTMLElement,
+  options: MermaidViewerOptions,
+): MermaidViewerController | null => {
   const viewport = getSvgViewport(block);
   const svg = block.querySelector<SVGSVGElement>('[data-markdown="mermaid"] svg');
   if (!viewport || !svg) {
@@ -289,10 +353,13 @@ const createMermaidViewerController = (block: HTMLElement): MermaidViewerControl
   }
 
   let currentBox = contentBox;
-  let activePointerId: number | null = null;
+  // Last client position per tracked pointer: one pointer pans, two pinch.
+  const activePointers = new Map<number, MermaidPoint>();
   let dragStartPointer: MermaidPoint | null = null;
-  let lastPointer: MermaidPoint | null = null;
   let clearClickSuppressionTimer: number | null = null;
+  if (options.touchGestures) {
+    block.setAttribute('data-mermaid-touch-gestures', 'true');
+  }
 
   const applyViewBox = (box: MermaidViewBox): void => {
     currentBox = box;
@@ -337,50 +404,80 @@ const createMermaidViewerController = (block: HTMLElement): MermaidViewerControl
   };
 
   const onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || isPanExcludedTarget(event.target)) {
+    if (isPanExcludedTarget(event.target)) {
       return;
     }
-    activePointerId = event.pointerId;
-    dragStartPointer = { x: event.clientX, y: event.clientY };
-    lastPointer = dragStartPointer;
-    if (clearClickSuppressionTimer !== null) {
-      window.clearTimeout(clearClickSuppressionTimer);
-      clearClickSuppressionTimer = null;
+    if (event.pointerType === 'touch' ? !options.touchGestures : event.button !== 0) {
+      return;
     }
-    block.removeAttribute('data-mermaid-suppress-click');
+    if (activePointers.size >= 2) {
+      return;
+    }
+    const pointer = { x: event.clientX, y: event.clientY };
+    activePointers.set(event.pointerId, pointer);
     viewport.setPointerCapture?.(event.pointerId);
-    block.setAttribute('data-mermaid-panning', 'true');
-    event.preventDefault();
-  };
-
-  const onPointerMove = (event: PointerEvent): void => {
-    if (activePointerId !== event.pointerId || !lastPointer) {
-      return;
-    }
-    const nextPointer = { x: event.clientX, y: event.clientY };
-    applyViewBox(panMermaidViewBox({
-      currentBox,
-      viewport: getViewportSize(viewport),
-      delta: {
-        x: nextPointer.x - lastPointer.x,
-        y: nextPointer.y - lastPointer.y,
-      },
-    }));
-    lastPointer = nextPointer;
-    if (dragStartPointer && hasMermaidPointerDragMoved(dragStartPointer, nextPointer)) {
+    if (activePointers.size === 1) {
+      dragStartPointer = pointer;
+      if (clearClickSuppressionTimer !== null) {
+        window.clearTimeout(clearClickSuppressionTimer);
+        clearClickSuppressionTimer = null;
+      }
+      block.removeAttribute('data-mermaid-suppress-click');
+      block.setAttribute('data-mermaid-panning', 'true');
+    } else {
+      // A second finger turns the gesture into a pinch, which is never a click.
       block.setAttribute('data-mermaid-suppress-click', 'true');
     }
     event.preventDefault();
   };
 
+  const onPointerMove = (event: PointerEvent): void => {
+    const previousPointer = activePointers.get(event.pointerId);
+    if (!previousPointer) {
+      return;
+    }
+    const nextPointer = { x: event.clientX, y: event.clientY };
+    const otherPointer = Array.from(activePointers.entries()).find(([pointerId]) => pointerId !== event.pointerId)?.[1];
+    if (otherPointer) {
+      const rect = viewport.getBoundingClientRect();
+      const toViewport = (point: MermaidPoint): MermaidPoint => ({ x: point.x - rect.left, y: point.y - rect.top });
+      applyViewBox(pinchMermaidViewBox({
+        currentBox,
+        contentBox,
+        viewport: { width: rect.width, height: rect.height },
+        previous: [toViewport(previousPointer), toViewport(otherPointer)],
+        next: [toViewport(nextPointer), toViewport(otherPointer)],
+        minScale: MIN_SCALE,
+        maxScale: MAX_SCALE,
+      }));
+    } else {
+      applyViewBox(panMermaidViewBox({
+        currentBox,
+        viewport: getViewportSize(viewport),
+        delta: {
+          x: nextPointer.x - previousPointer.x,
+          y: nextPointer.y - previousPointer.y,
+        },
+      }));
+      if (dragStartPointer && hasMermaidPointerDragMoved(dragStartPointer, nextPointer)) {
+        block.setAttribute('data-mermaid-suppress-click', 'true');
+      }
+    }
+    activePointers.set(event.pointerId, nextPointer);
+    event.preventDefault();
+  };
+
   const stopPan = (event: PointerEvent): void => {
-    if (activePointerId !== event.pointerId) {
+    if (!activePointers.has(event.pointerId)) {
       return;
     }
     viewport.releasePointerCapture?.(event.pointerId);
-    activePointerId = null;
+    activePointers.delete(event.pointerId);
+    if (activePointers.size > 0) {
+      // The remaining finger keeps panning from its own last position.
+      return;
+    }
     dragStartPointer = null;
-    lastPointer = null;
     block.removeAttribute('data-mermaid-panning');
     if (block.hasAttribute('data-mermaid-suppress-click')) {
       clearClickSuppressionTimer = window.setTimeout(() => {
@@ -419,14 +516,19 @@ const createMermaidViewerController = (block: HTMLElement): MermaidViewerControl
       if (clearClickSuppressionTimer !== null) {
         window.clearTimeout(clearClickSuppressionTimer);
       }
+      activePointers.clear();
       block.removeAttribute('data-mermaid-panning');
+      block.removeAttribute('data-mermaid-touch-gestures');
       block.removeAttribute('data-mermaid-suppress-click');
       controllerByBlock.delete(block);
     },
   };
 };
 
-export const createMermaidViewerRegistry = (container: HTMLElement): { refresh: () => void; cleanup: () => void } => {
+export const createMermaidViewerRegistry = (
+  container: HTMLElement,
+  options: MermaidViewerOptions = DEFAULT_MERMAID_VIEWER_OPTIONS,
+): { refresh: () => void; cleanup: () => void } => {
   const controllers = new Map<HTMLElement, MermaidViewerController>();
   const signatures = new Map<HTMLElement, string>();
 
@@ -444,7 +546,7 @@ export const createMermaidViewerRegistry = (container: HTMLElement): { refresh: 
       if (controllers.has(block) || block.querySelector('[data-markdown="mermaid"] svg') === null) {
         continue;
       }
-      const controller = createMermaidViewerController(block);
+      const controller = createMermaidViewerController(block, options);
       if (!controller) {
         continue;
       }

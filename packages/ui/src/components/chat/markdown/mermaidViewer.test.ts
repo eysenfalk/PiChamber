@@ -8,6 +8,7 @@ import {
   hasMermaidPointerDragMoved,
   MERMAID_BLOCK_SELECTOR,
   panMermaidViewBox,
+  pinchMermaidViewBox,
   shouldRefreshMermaidViewers,
   zoomMermaidViewBoxAtPoint,
 } from './mermaidViewer';
@@ -153,6 +154,47 @@ describe('mermaidViewer', () => {
       width: 400,
       height: 200,
     });
+  });
+
+  test('pinch zooms around a fixed finger midpoint', () => {
+    const box = { x: 0, y: 0, width: 300, height: 300 };
+    expect(pinchMermaidViewBox({
+      currentBox: box,
+      contentBox: box,
+      viewport: { width: 300, height: 300 },
+      previous: [{ x: 100, y: 150 }, { x: 200, y: 150 }],
+      next: [{ x: 50, y: 150 }, { x: 250, y: 150 }],
+      minScale: 0.5,
+      maxScale: 12,
+    })).toEqual({ x: 75, y: 75, width: 150, height: 150 });
+  });
+
+  test('a parallel two-finger drag pans without zooming', () => {
+    const box = { x: 0, y: 0, width: 300, height: 300 };
+    expect(pinchMermaidViewBox({
+      currentBox: box,
+      contentBox: box,
+      viewport: { width: 300, height: 300 },
+      previous: [{ x: 100, y: 100 }, { x: 200, y: 100 }],
+      next: [{ x: 110, y: 120 }, { x: 210, y: 120 }],
+      minScale: 0.5,
+      maxScale: 12,
+    })).toEqual({ x: -10, y: -20, width: 300, height: 300 });
+  });
+
+  test('pinch respects the scale limits and ignores coincident fingers', () => {
+    const box = { x: 0, y: 0, width: 300, height: 300 };
+    const base = { currentBox: box, contentBox: box, viewport: { width: 300, height: 300 }, minScale: 0.5, maxScale: 12 };
+    expect(pinchMermaidViewBox({
+      ...base,
+      previous: [{ x: 149, y: 150 }, { x: 151, y: 150 }],
+      next: [{ x: 0, y: 150 }, { x: 300, y: 150 }],
+    }).width).toBe(25);
+    expect(pinchMermaidViewBox({
+      ...base,
+      previous: [{ x: 150, y: 150 }, { x: 150, y: 150 }],
+      next: [{ x: 100, y: 150 }, { x: 200, y: 150 }],
+    })).toBe(box);
   });
 
   test('distinguishes real pointer drag from click jitter', () => {

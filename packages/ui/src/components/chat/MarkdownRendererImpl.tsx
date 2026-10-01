@@ -172,6 +172,7 @@ const useMorphdomMarkdown = ({
   cacheKey,
   syntaxVars,
   ctx,
+  mermaidTouchGestures = false,
 }: {
   containerRef: React.RefObject<HTMLDivElement | null>;
   text: string;
@@ -179,6 +180,7 @@ const useMorphdomMarkdown = ({
   cacheKey: string;
   syntaxVars: Record<string, string>;
   ctx: DecorateContext;
+  mermaidTouchGestures?: boolean;
 }) => {
   React.useEffect(() => {
     ensureMarkdownShikiTheme();
@@ -200,11 +202,11 @@ const useMorphdomMarkdown = ({
       if (!shouldRefreshMermaidViewers(container)) {
         return;
       }
-      mermaidViewerRef.current = createMermaidViewerRegistry(container);
+      mermaidViewerRef.current = createMermaidViewerRegistry(container, { touchGestures: mermaidTouchGestures });
       return;
     }
     mermaidViewerRef.current.refresh();
-  }, [containerRef]);
+  }, [containerRef, mermaidTouchGestures]);
 
   // Synchronous first paint: while the async parse is in-flight, show escaped
   // plain text immediately so there is no blank frame on initial mount. Only
@@ -507,6 +509,8 @@ const SimpleMarkdownRendererImpl: React.FC<{
     cacheKey: `simple:${variant}`,
     syntaxVars,
     ctx,
+    // A surface that owns wheel events (fullscreen preview) also owns touch pan/pinch.
+    mermaidTouchGestures: allowMermaidWheelEvents,
   });
 
   return (

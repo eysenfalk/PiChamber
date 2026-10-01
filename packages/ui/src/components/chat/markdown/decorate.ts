@@ -372,7 +372,8 @@ const decorateMermaid = (root: HTMLElement, ctx: DecorateContext): void => {
 
     const toolbar = document.createElement('div');
     toolbar.setAttribute('data-markdown', 'mermaid-toolbar');
-    toolbar.className = 'absolute top-1 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity';
+    // Visibility (hover-reveal on fine pointers, always on touch) lives in index.css.
+    toolbar.className = 'absolute top-1 right-2 flex items-center gap-1';
 
     if (rendered.svg) {
       block.setAttribute('data-mermaid-render', 'svg');
