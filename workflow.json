@@ -1,0 +1,7 @@
+{
+  "tracker": {
+    "type": "github",
+    "repo": "eysenfalk/PiChamber"
+  },
+  "plans": "pull-request"
+}

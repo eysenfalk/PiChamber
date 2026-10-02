@@ -39,13 +39,27 @@ Shared contracts must define intentional behavior for every applicable runtime: 
 ## Always-On Constraints
 
 - Do not modify `../opencode`; it is a separate repository.
-- Do not run git or GitHub commands unless the user explicitly asks.
+- Git and GitHub follow the workflow below; do not run commands outside it unless the user asks.
 - Do not add dependencies unless explicitly requested.
 - Never add or log secrets, bearer tokens, pairing credentials, or sensitive user data.
 - Keep changes minimal and preserve unrelated worktree changes.
 - Enforce security and correctness in core/runtime logic, not only UI visibility or prompts.
 - Keep entrypoints and bridges thin; place domain logic in focused owning modules.
 - Update owning documentation when module ownership, contracts, or invariants change.
+
+## Workflow
+
+Work follows [docs/workflow.md](docs/workflow.md) ([ADR 0002](docs/adr/0002-workflow-from-jira-connector.md)); `workflow.json` names the tracker.
+
+1. A GitHub issue in `eysenfalk/PiChamber` says what is missing and how we know it is done.
+2. Branch `<issue>-short-name` from `origin/main`, push it, and open a **draft** pull request from `.github/PULL_REQUEST_TEMPLATE.md`. The description is the plan.
+3. Wait for the user to approve the plan. Do not implement before.
+4. Implement and prove: tests, and for anything a user sees, a recording or screenshots of the real program that you have looked at completely, with how to reproduce them. Check off each acceptance criterion in the description as soon as it is done and proven.
+5. Decisions go into `docs/adr/`, findings from outside the code into `CONTEXT.md`, settled entries leave `CONTEXT.md`, the finished roadmap line leaves `ROADMAP.md`, all in the same pull request.
+6. Before the hand-over, check the whole description against the current code, CI result and proof, then mark the pull request ready. The user merges (squash only).
+
+Without asking, agents may: create and push branches other than `main`, open and update draft pull requests in `eysenfalk/PiChamber`, draft issues, and add `Proposed` decision records.
+Only with approval: implement a plan, mark a pull request ready or merge it, push to `main`, rewrite pushed history, tags and releases, repository settings, close issues, and anything in an upstream repository.
 
 ## Correctness Invariants
 
@@ -109,8 +123,10 @@ Pure code-reading or explanation does not require implementation skills unless n
 
 ## Pull Request Handoff
 
-Before creating or updating a pull request, read `CONTRIBUTING.md` and
-`.github/PULL_REQUEST_TEMPLATE.md`. Complete the template with concrete,
-current evidence for the final PR HEAD; do not make the reviewer reconstruct
-intent, affected surfaces, applicable guidance, validation, visual behavior,
-or failure and rollback considerations from the diff alone.
+Before creating or updating a pull request, read `docs/workflow.md`,
+`CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`. Complete the template
+with concrete, current evidence for the final PR HEAD; do not make the reviewer
+reconstruct intent, affected surfaces, applicable guidance, validation, visual
+behavior, or failure and rollback considerations from the diff alone. The
+`pull-request` check enforces the sections, the issue reference and the
+checklist.
