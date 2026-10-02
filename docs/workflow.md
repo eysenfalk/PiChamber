@@ -105,7 +105,7 @@ The reviewer reads the description first, then watches the proof, then reads the
 
 ### 8. Merge
 
-The repository allows only squash merges, and the squash commit is the pull request title and description, so `git log` on `main` holds every plan. A ruleset keeps the history on `main` linear.
+The repository allows only squash merges, and the squash commit is the pull request title and description, so `git log` on `main` holds every plan. A ruleset keeps the history on `main` linear and blocks the merge until `checks` and `pull-request` are green on a branch that is up to date with `main`.
 
 ### 9. Gardening
 
@@ -129,4 +129,4 @@ Agents copy what they find. Whatever is in the code becomes the pattern. So:
 
 ## Repository settings
 
-Set on `eysenfalk/PiChamber` on 2026-10-02: only squash merges, squash commit title and message from the pull request, and the ruleset `main: linear history`. Required status checks follow once CI has run on the fork ([CONTEXT.md](../CONTEXT.md)).
+Set on `eysenfalk/PiChamber` on 2026-10-02: only squash merges, squash commit title and message from the pull request, and the ruleset `main: linear history`. The ruleset keeps `main` linear and requires the `checks` and `pull-request` jobs on a branch that is up to date with `main`, the GitHub equivalent of a fast-forward merge.

@@ -12,14 +12,6 @@ Live context: what we know but have not settled yet. Every entry names its sourc
 
 The GitHub web editor uploads images and videos into a description, the CLI cannot. Proposal: an orphan branch `proofs` with `pr-<n>/<name>/`, linked from the description. Not tried yet: whether images and videos from that branch render inline in a pull request of a public repository.
 
-## GitHub
-
-### Actions on the fork
-
-- Source: `gh run list -R eysenfalk/PiChamber` (no runs), `gh api repos/eysenfalk/PiChamber/actions/permissions` (enabled, all actions allowed)
-- Date: 2026-10-02
-- Settled by: the first workflow runs on pull request #10; then the ruleset requires the `pull-request` and `checks` jobs and an up-to-date branch
-
 ## Upstream
 
 ### The fork's workflow files differ from upstream
