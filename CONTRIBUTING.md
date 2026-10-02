@@ -180,30 +180,31 @@ module documentation, and every matching skill under `.agents/skills/`.
 
 ## Pull requests
 
-A pull request should be easy to review without reconstructing the intent from
-the diff.
+Changes follow [the workflow](docs/workflow.md): an issue, a draft pull request
+whose description is the plan, approval of the plan, then implementation with
+proof, review and a squash merge. A pull request should be easy to review
+without reconstructing the intent from the diff.
 
 Before opening one:
 
 1. Keep the change focused. Separate unrelated cleanup.
 2. Read the repository guidance that applies to the changed packages and
    runtimes.
-3. Run the focused validation plus any broader check required by the affected
-   contract.
-4. Complete [the pull request template](.github/PULL_REQUEST_TEMPLATE.md) with
-   current evidence.
+3. Open it as a draft and complete
+   [the pull request template](.github/PULL_REQUEST_TEMPLATE.md). The
+   `pull-request` check requires every section, an issue reference and the
+   acceptance criteria as a checklist.
+4. Before leaving draft, run the focused validation plus any broader check
+   required by the affected contract, check off every acceptance criterion and
+   bring the description up to date with current evidence.
 
-Describe all of the following:
-
-- **Intent:** the problem and the resulting behavior
-- **Non-goals:** nearby behavior intentionally left unchanged
-- **Affected surfaces:** packages, runtimes, persisted data, routes, CLI output,
-  or other external contracts
-- **Repository guidance:** which skills and owning docs applied, and how the
-  change follows them
-- **Validation:** exact commands, results, and anything not verified
-- **Risk and failure behavior:** compatibility, security, cleanup, rollback,
-  performance, and partial-failure behavior where relevant
+The description covers the issue, the goal, the acceptance criteria with their
+proof, the approach, the affected surfaces (packages, runtimes, persisted data,
+routes, CLI output or other external contracts), the repository guidance
+applied, the verification (exact commands, results and anything not verified),
+new decision records, findings for `CONTEXT.md`, what is out of scope, and
+risks and failure behavior (compatibility, security, cleanup, rollback,
+performance and partial failure where relevant).
 
 User-visible changes need current visual evidence. Use screenshots for static
 states and a short recording for motion, focus, gestures, drag-and-drop, or
