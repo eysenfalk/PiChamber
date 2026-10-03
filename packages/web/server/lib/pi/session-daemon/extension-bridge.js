@@ -2,9 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import {
   MAX_EXTENSION_APP_HTML_CHARS,
+  SUBAGENT_ASYNC_WIDGET_KEY,
+  clampExtensionWidgetLine,
   sanitizeExtensionFormFields,
   validateExtensionFormValues,
 } from '../extension-protocol.js';
+import { hasLiveSubagentRuns } from './subagent-async-activity.js';
 
 const MAX_EXTENSION_PANELS_PER_SESSION = 24;
 const MAX_EXTENSION_APPS_PER_SESSION = 8;
@@ -31,6 +34,7 @@ export const createExtensionBridge = ({
   getSequence,
   protocolError,
   requestSessionShutdown,
+  onSubagentAsyncWidgetChange,
 }) => {
   const extensionStatusesBySession = new Map();
   const extensionWidgetsBySession = new Map();
@@ -217,8 +221,11 @@ export const createExtensionBridge = ({
         // Only string-array widgets are representable over the wire.
         if (content !== undefined && !Array.isArray(content)) return;
         const widgets = extensionWidgetsBySession.get(sessionId) ?? new Map();
-        if (Array.isArray(content) && content.length > 0) {
-          const lines = content.map((line) => String(line).slice(0, 2000)).slice(0, 100);
+        // One clamped value feeds both the reconnect mirror and the live event.
+        const lines = Array.isArray(content) && content.length > 0
+          ? content.slice(0, 100).map((line, index) => clampExtensionWidgetLine(key, index, line))
+          : undefined;
+        if (lines) {
           const placement = options?.placement === 'belowEditor' ? 'belowEditor' : 'aboveEditor';
           widgets.set(key, { lines, placement });
         } else {
@@ -228,9 +235,13 @@ export const createExtensionBridge = ({
         else extensionWidgetsBySession.set(sessionId, widgets);
         publish('extension.widget', {
           key,
-          ...(Array.isArray(content) && content.length > 0 ? { lines: content.map((line) => String(line).slice(0, 2000)).slice(0, 100) } : {}),
-          ...(options?.placement === 'belowEditor' ? { placement: 'belowEditor' } : Array.isArray(content) && content.length > 0 ? { placement: 'aboveEditor' } : {}),
+          ...(lines ? { lines } : {}),
+          ...(options?.placement === 'belowEditor' ? { placement: 'belowEditor' } : lines ? { placement: 'aboveEditor' } : {}),
         }, sessionId);
+        if (key === SUBAGENT_ASYNC_WIDGET_KEY) {
+          // After the mirror and the event, so a listener reads what clients see.
+          try { onSubagentAsyncWidgetChange?.(sessionId); } catch {}
+        }
       },
       // Terminal-only surfaces have no PiChamber equivalent yet.
       onTerminalInput: () => () => {},
@@ -458,6 +469,11 @@ export const createExtensionBridge = ({
     }, sessionId, directory);
   };
 
+  /** True when the mirrored `subagent-async` widget of this session shows a queued or running run. */
+  const hasLiveSubagentRunsForSession = (sessionId) => (
+    hasLiveSubagentRuns(extensionWidgetsBySession.get(sessionId)?.get(SUBAGENT_ASYNC_WIDGET_KEY)?.lines)
+  );
+
   const getSnapshotState = (sessionId) => {
     if (!sessionId) return {};
     const statuses = extensionStatusesBySession.get(sessionId);
@@ -482,6 +498,7 @@ export const createExtensionBridge = ({
     buildExtensionBindings,
     clearExtensionState,
     getSnapshotState,
+    hasLiveSubagentRunsForSession,
     mirrorExtensionApp,
     mirrorExtensionPanel,
     publishExtensionCustomMessage,

@@ -19,6 +19,8 @@ import { isPiThinkingLevel } from './thinking-levels.js';
 import { createPiSessionFoldersStore } from './session-folders-store.js';
 import {
   MAX_EXTENSION_APP_HTML_CHARS,
+  clampExtensionWidgetLine,
+  extensionWidgetLineLimit,
   sanitizeExtensionFormFields,
 } from './extension-protocol.js';
 import { createPiUiSettingsStore } from './ui-settings-store.js';
@@ -536,7 +538,10 @@ function projectExtensionSnapshotState(snapshot) {
   const extensionWidgets = Array.isArray(snapshot.extensionWidgets)
     ? snapshot.extensionWidgets.filter((entry) => entry && typeof entry.key === 'string' && Array.isArray(entry.lines) && entry.key.length > 0 && entry.key.length <= 128 && entry.lines.length <= 100).slice(0, 50).map((entry) => ({
         key: entry.key.slice(0, 128),
-        lines: entry.lines.filter((line) => typeof line === 'string').map((line) => line.slice(0, 2000)).slice(0, 100),
+        lines: entry.lines
+          .map((line, index) => (typeof line === 'string' ? clampExtensionWidgetLine(entry.key, index, line) : null))
+          .filter((line) => line !== null)
+          .slice(0, 100),
         ...(entry.placement === 'belowEditor' ? { placement: 'belowEditor' } : { placement: 'aboveEditor' }),
       }))
     : undefined;
@@ -731,14 +736,16 @@ export const projectEventFrame = (frame) => {
       if (frame.payload.lines !== undefined) {
         if (!Array.isArray(frame.payload.lines)) return null;
         if (frame.payload.lines.length > 100) return null;
-        for (const line of frame.payload.lines) if (typeof line !== 'string' || line.length > 2000) return null;
+        for (const [index, line] of frame.payload.lines.entries()) {
+          if (typeof line !== 'string' || line.length > extensionWidgetLineLimit(frame.payload.key, index, line)) return null;
+        }
       }
       if (frame.payload.placement !== undefined && frame.payload.placement !== 'aboveEditor' && frame.payload.placement !== 'belowEditor') return null;
       return {
         ...common,
         payload: {
           key: frame.payload.key.slice(0, 128),
-          ...(Array.isArray(frame.payload.lines) ? { lines: frame.payload.lines.map((line) => String(line).slice(0, 2000)).slice(0, 100) } : {}),
+          ...(Array.isArray(frame.payload.lines) ? { lines: frame.payload.lines.map((line, index) => clampExtensionWidgetLine(frame.payload.key, index, line)).slice(0, 100) } : {}),
           ...(frame.payload.placement === 'belowEditor' ? { placement: 'belowEditor' } : frame.payload.placement === 'aboveEditor' ? { placement: 'aboveEditor' } : {}),
         },
       };
