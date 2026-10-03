@@ -21,6 +21,8 @@ The approved plan rejected environment variables as isolation because they are c
 
 ## Consequences
 
+The proof storage decision above replaces the consequence in [0002](0002-workflow-from-jira-connector.md) that proof remains outside the repository. Published proof now lives on the orphan `proofs` branch; source branches carry no proof files. The rest of 0002 remains in force.
+
 The lab avoids accidental access to the developer's home and credentials, reproducibly demonstrates the actual web runtime, and keeps normal development on the host. Containers still share the host kernel; this is not hostile code isolation. The image build needs internet and disk space, while the running lab does not. Other local users can reach the loopback UI.
 
 Chrome for Testing runs with `--no-sandbox` only through the lab recorder launcher. The rootless container drops capabilities and forbids privilege escalation, so Chrome cannot use its setuid sandbox; its namespace sandbox is also unavailable in this environment. The container, read-only mounts and internal network are the accidental-access boundary, not Chrome. Host recording keeps Chrome sandbox defaults. The server (1.9 CPUs, 3968 MiB), infra (0.1 CPU, 128 MiB) and recorder (2 CPUs, 4096 MiB) share the fixed 4 CPU / 8 GiB ceiling; their swap ceilings equal memory.
