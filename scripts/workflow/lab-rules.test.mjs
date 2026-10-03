@@ -79,6 +79,7 @@ describe('proof lab repository rules', () => {
     expect(run).toContain('podman network rm');
     expect(run).toContain('podman volume rm');
     expect(run).toContain('--read-only --tmpfs=/tmp:rw,size=512m');
+    expect(run).toContain('--pids-limit=512');
     expect(run).toContain('--volume="$root:/repo:ro" --volume="$root/.proof:/repo/.proof:rw"');
     expect(run).toContain('--url "http://$name:3000/" --chrome /repo/lab/chromium');
     expect(read('lab/chromium')).toContain('exec /usr/local/bin/chromium --no-sandbox "$@"');

@@ -16,7 +16,8 @@ export function validateTour(tour) {
         !Object.hasOwn(VIEWPORTS, step.viewport) || !['light', 'dark'].includes(step.theme) ||
         !Array.isArray(step.actions) || !Array.isArray(step.evidence) || !step.evidence.length) fail();
     for (const item of step.evidence) {
-      if (!item || !keys(item, ['selector', 'text', 'index']) || !target(item) ||
+      if (!item || !keys(item, ['selector', 'text', 'index']) || (!nonempty(item.selector) && !nonempty(item.text)) ||
+          (item.selector !== undefined && !nonempty(item.selector)) || (item.text !== undefined && !nonempty(item.text)) ||
           (item.index !== undefined && (!item.selector || !Number.isInteger(item.index) || item.index < 0))) fail();
     }
     for (const action of step.actions) {
@@ -65,16 +66,17 @@ export function labTour(manifest) {
       !short || !nonempty(short.title) || !long || !nonempty(long.title) || !projects.some(project => project.name === long.project)) throw new Error('Invalid lab seed manifest');
   const label = name => name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
   const sidebar = [...projects.map(project => ({ text: label(project.name) })), { text: long.title }];
-  const tool = { selector: '[data-chat-activity-row]', index: 0 };
+  const tool = { selector: '[data-chat-activity-row]', index: 0, text: 'Edit File' };
+  const file = { ...tool, text: 'README.md' };
   return validateTour({ name: 'lab', steps: [
     { caption: 'Prepared projects and sessions in the lab sidebar.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(projects[0].name) }, { type: 'click', text: long.title }], evidence: sidebar },
-    { caption: 'The long session includes a tool call.', viewport: 'desktop', theme: 'light',
+    { caption: 'The long session includes an Edit File tool call for README.md.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', text: long.title }, { type: 'wait', selector: 'button[aria-label="Expand activity"]' },
         { type: 'scroll', selector: 'button[aria-label="Expand activity"]' }, { type: 'click', selector: 'button[aria-label="Expand activity"]' },
-        { type: 'wait', selector: tool.selector }, { type: 'scroll', selector: tool.selector }], evidence: [tool] },
+        { type: 'wait', selector: tool.selector }, { type: 'scroll', selector: tool.selector }], evidence: [tool, file] },
     { caption: 'The same tool call in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
-      evidence: [{ ...tool, selector: 'html.dark [data-chat-activity-row]' }] },
+      evidence: [tool, file].map(item => ({ ...item, selector: 'html.dark [data-chat-activity-row]' })) },
     { caption: 'Projects and sessions in the hosted mobile sidebar.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }],

@@ -72,3 +72,9 @@ test('diagnostics.mjs preserves failure and available events if evaluation fails
     expect(JSON.stringify(report)).not.toContain('private');
   } finally { await rm(out, { recursive: true, force: true }); }
 });
+
+test('diagnostics.mjs redacts Basic auth, complete cookie headers and UUID URL path carriers', () => {
+  const text = diagnosticText('Authorization: Basic dXNlcjpwYXNzd29yZA==\nCookie: sid=abc123; other=def456\nSet-Cookie: foo=ghi789; Path=/\nBasic dXNlcjpwYXNzd29yZA==\nGET http://lab/api/x/123e4567-e89b-12d3-a456-426614174000/y?code=z');
+  for (const secret of ['dXNlcjpwYXNzd29yZA==', 'abc123', 'def456', 'ghi789', '123e4567-e89b-12d3-a456-426614174000']) expect(text).not.toContain(secret);
+  expect(text).toContain('http://lab/api/x/[redacted]/y');
+});

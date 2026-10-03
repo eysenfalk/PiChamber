@@ -22,7 +22,7 @@ describe('tours.mjs format', () => {
   test('bad names, empty steps, captions, viewports, themes and evidence are rejected', () => {
     for (const mutate of [tour => tour.name = '../escape', tour => tour.steps = [], tour => tour.steps[0].caption = '',
       tour => tour.steps[0].theme = 'system', tour => tour.steps[0].viewport = 'tablet', tour => tour.steps[0].evidence = [],
-      tour => tour.steps[0].evidence = [{ selector: '#x', text: 'x' }], tour => tour.steps[0].evidence = [{ text: 'x', index: 0 }],
+      tour => tour.steps[0].evidence = [{ selector: '#x', text: '' }], tour => tour.steps[0].evidence = [{ text: 'x', index: 0 }],
       tour => tour.steps[0].evidence = [{ selector: '#x', index: -1 }], tour => tour.steps[0].evidence = [{ selector: '#x', typo: true }]]) {
       const tour = copy(); mutate(tour); expect(() => validateTour(tour)).toThrow('Invalid tour');
     }
@@ -43,6 +43,9 @@ describe('tours.mjs format', () => {
   test('lab title and project evidence are taken from the seed manifest, never row position', () => {
     const tour = labTour({ projects: [{ name: 'lab-one', path: '/one' }, { name: 'lab_two', path: '/two' }], sessions: [{ project: 'lab-one', title: 'Long named session', role: 'long' }, { project: 'lab_two', title: 'Short session', role: 'short' }] });
     expect(tour.steps[0].evidence).toEqual([{ text: 'Lab One' }, { text: 'Lab Two' }, { text: 'Long named session' }]);
+    expect(tour.steps[1].evidence).toContainEqual({ selector: '[data-chat-activity-row]', index: 0, text: 'Edit File' });
+    expect(tour.steps[1].evidence).toContainEqual({ selector: '[data-chat-activity-row]', index: 0, text: 'README.md' });
+    expect(tour.steps[2].evidence[0].selector).toBe('html.dark [data-chat-activity-row]');
     expect(tour.steps[1].actions[0]).toEqual({ type: 'click', text: 'Long named session' });
     expect(tour.steps.at(-1).viewport).toBe('mobile');
     expect(tour.steps.at(-1).evidence).toContainEqual({ text: 'Short session' });

@@ -70,6 +70,7 @@ for (const exitCode of [0, 42]) {
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
 if [[ "$1" == info ]]; then echo true; exit; fi
+if [[ "$1" == pod && "$2" == inspect ]]; then echo "$FAKE_CHECKOUT"; exit; fi
 if [[ "$1" == inspect ]]; then
   if [[ "$*" == *State.Running* ]]; then echo true; else echo sha256:running-image; fi
   exit
@@ -78,13 +79,15 @@ if [[ "$1" == run ]]; then exit "$FAKE_EXIT"; fi
 `, { mode: 0o700 });
       const result = spawnSync('bash', [fileURLToPath(new URL('../../lab/run', import.meta.url)), 'record', 'lab'], {
         env: { ...process.env, PATH: `${root}:${process.env.PATH}`, XDG_RUNTIME_DIR: root,
-          FAKE_LAB: root, FAKE_EXIT: String(exitCode), PROOF_URL: 'https://must-not-be-used.invalid' }, encoding: 'utf8', timeout: 5000,
+          FAKE_LAB: root, FAKE_CHECKOUT: checkout, FAKE_EXIT: String(exitCode), PROOF_URL: 'https://must-not-be-used.invalid' }, encoding: 'utf8', timeout: 5000,
       });
       expect(result.status).toBe(exitCode);
       const calls = await readFile(join(root, 'calls'), 'utf8');
       expect(calls).toContain('--network=pichamber-lab --userns=keep-id');
       expect(calls).toContain('--read-only --tmpfs=/tmp:rw,size=512m');
       expect(calls).toContain('--cpus=2 --memory=4096m --memory-swap=4096m');
+      expect(calls).toContain('--pids-limit=512');
+      expect(calls).toMatch(/--env=PROOF_COMMIT=[a-f0-9]{40} --env=PROOF_DIRTY=(true|false)/);
       expect(calls).toContain(':/repo:ro');
       expect(calls).toContain('/.proof:/repo/.proof:rw');
       expect(calls).toContain('sha256:running-image node scripts/proof/record.mjs lab --url http://pichamber-lab:3000/ --chrome /repo/lab/chromium');
@@ -123,7 +126,7 @@ printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const command of ['status', 'down']) {
+for (const command of ['status', 'down', 'record']) {
   test(`${command} refuses a lab owned by another checkout without touching resources`, async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-owner-'));
     try {
@@ -131,7 +134,7 @@ for (const command of ['status', 'down']) {
 printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
 if [[ "$1" == info ]]; then echo true; elif [[ "$2" == inspect ]]; then echo /other/checkout; fi
 `, { mode: 0o700 });
-      const result = spawnSync('bash', [labRun, command], {
+      const result = spawnSync('bash', [labRun, command, ...(command === 'record' ? ['lab'] : [])], {
         env: { ...process.env, PATH: `${root}:${process.env.PATH}`, XDG_RUNTIME_DIR: root, FAKE_LAB: root }, encoding: 'utf8', timeout: 5000,
       });
       expect(result.status).toBe(1);
@@ -207,3 +210,21 @@ if [[ "$1" == logs ]]; then echo 'Lab ready:'; fi
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 }
+
+test('record refuses a missing lab before mounting or starting a recorder', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pichamber-missing-'));
+  try {
+    await writeFile(join(root, 'podman'), `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
+if [[ "$1" == info ]]; then echo true; exit; fi
+if [[ "$1" == pod && "$2" == inspect ]]; then echo 'No such pod' >&2; exit 125; fi
+exit 99
+`, { mode: 0o700 });
+    const result = spawnSync('bash', [labRun, 'record', 'lab'], {
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}`, XDG_RUNTIME_DIR: root, FAKE_LAB: root }, encoding: 'utf8', timeout: 5000,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('No such pod');
+    expect(await readFile(join(root, 'calls'), 'utf8')).not.toMatch(/\nrun |\ninspect | rm /);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

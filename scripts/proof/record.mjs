@@ -11,6 +11,16 @@ import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
 import { fixture, brokenFixture, labTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
+import { checkoutRevision, validateCheckout } from './checkout.mjs';
+
+const runtimeDefaults = { reservePort, resolveChrome, launchChrome, createPageTarget, createClient: url => new CdpClient(url), execFileSync, wait, now: Date.now };
+
+export function recordingUrl(value) {
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
+      !['127.0.0.1', '[::1]', 'localhost', 'pichamber-lab'].includes(url.hostname)) throw new Error('Recording requires a loopback or pichamber-lab HTTP URL without credentials');
+  return url;
+}
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
@@ -63,10 +73,10 @@ function targetPoint(target) {
   throw new Error('Action target is missing, offscreen or covered');
 }
 
-export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputRoot = join(root, '.proof'), holdMs = 1200, signal } = {}) {
+export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputRoot = join(root, '.proof'), holdMs = 1200, signal, checkout, runtime = runtimeDefaults } = {}) {
   validateTour(tour);
-  const targetUrl = new URL(url);
-  if (!['http:', 'https:'].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password) throw new Error('Target must be an HTTP URL without credentials');
+  const targetUrl = recordingUrl(url);
+  checkout = validateCheckout(checkout ?? checkoutRevision(root));
   const out = join(outputRoot, tour.name);
   const files = planFiles(tour);
   // Remove the previous run, including success markers: a failed retry is never publishable.
@@ -74,9 +84,10 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   await mkdir(join(out, 'raw/frames'), { recursive: true });
   const profileDir = await mkdtemp(join(tmpdir(), 'pichamber-proof-chrome-'));
   let browser, client, frameError, current = 0;
+  let phase = 'startup';
   const frames = [];
   let droppedScreencastFrames = 0;
-  const network = createPageNetworkGate();
+  const network = createPageNetworkGate(runtime.now);
   const diagnostics = createPageDiagnostics();
   let capturing = false;
   const send = async (method, params = {}) => {
@@ -91,11 +102,11 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     return result.result?.value;
   };
   const until = async (predicate, label) => {
-    const deadline = Date.now() + 15000;
-    while (Date.now() < deadline) {
+    const deadline = runtime.now() + 15000;
+    while (runtime.now() < deadline) {
       signal?.throwIfAborted();
       if (await predicate()) return;
-      await wait(100);
+      await runtime.wait(100);
     }
     throw new Error('Timed out: ' + label);
   };
@@ -111,7 +122,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   };
   const theme = async mode => {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: mode }] });
-    await evaluate('(() => { localStorage.setItem("themeMode", ' + JSON.stringify(mode) + '); window.dispatchEvent(new StorageEvent("storage", {key:"themeMode", storageArea:localStorage})); document.documentElement.classList.toggle("dark", ' + JSON.stringify(mode === 'dark') + '); })()');
+    await evaluate('(() => { localStorage.setItem("themeMode", ' + JSON.stringify(mode) + '); window.dispatchEvent(new StorageEvent("storage", {key:"themeMode", storageArea:localStorage})); })()');
   };
   const screenshot = async file => {
     const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
@@ -121,12 +132,13 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await writeFile(join(out, file.text), caption);
     for (const [index, line] of caption.split('\n').entries()) await writeFile(join(out, file.text.replace('.txt', '-' + (index + 1) + '.txt')), line);
   };
-  const runFfmpeg = args => execFileSync(ffmpeg, args, { cwd: out, stdio: ['ignore', 'ignore', 'pipe'], timeout: 120000 });
+  const runFfmpeg = args => runtime.execFileSync(ffmpeg, args, { cwd: out, stdio: ['ignore', 'ignore', 'pipe'], timeout: 120000 });
   try {
-    const port = await reservePort();
-    browser = launchChrome({ chrome: resolveChrome(chrome), profileDir, port, headless: true });
-    const target = await createPageTarget(port);
-    client = new CdpClient(target.webSocketDebuggerUrl);
+    signal?.throwIfAborted();
+    const port = await runtime.reservePort();
+    browser = runtime.launchChrome({ chrome: runtime.resolveChrome(chrome), profileDir, port, headless: true });
+    const target = await runtime.createPageTarget(port);
+    client = runtime.createClient(target.webSocketDebuggerUrl);
     await client.connect();
     // Register before enabling domains so initial errors and buffered Log entries survive.
     for (const [name, handler] of Object.entries(diagnostics.handlers)) client.on(name, handler);
@@ -151,6 +163,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await send('Page.startScreencast', { format: 'jpeg', quality: 85, everyNthFrame: 1 });
     for (const [index, step] of tour.steps.entries()) {
       current = index;
+      phase = 'step';
       await viewport(step.viewport); await theme(step.theme);
       for (const action of step.actions) {
         if (action.type === 'navigate') {
@@ -162,7 +175,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
         } else if (action.type === 'set-theme') await theme(action.theme);
         else if (action.type === 'set-viewport') await viewport(action.viewport);
         else if (action.type === 'wait') {
-          if (action.ms !== undefined) await wait(action.ms);
+          if (action.ms !== undefined) await runtime.wait(action.ms);
           else await until(async () => action.selector ? await evaluate('!!document.querySelector(' + JSON.stringify(action.selector) + ')') :
             (await evaluate(evidenceExpression([{ text: action.text }]))).ok, 'wait target');
         } else if (action.type === 'click' || action.type === 'type') {
@@ -180,27 +193,33 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
       await idle();
       const evidence = await evaluate(evidenceExpression(step.evidence));
       if (!evidence.ok) throw new Error('NOT PROVEN: ' + JSON.stringify(evidence.results));
-      await wait(holdMs); await idle();
+      await runtime.wait(holdMs); await idle();
       const finalEvidence = await evaluate(evidenceExpression(step.evidence));
       if (!finalEvidence.ok) throw new Error('NOT PROVEN: ' + JSON.stringify(finalEvidence.results));
       await screenshot(files[index].raw);
       await writeCaption(files[index], files[index].caption);
       runFfmpeg(captionArgs(files[index]));
     }
+    phase = 'screencast';
     await send('Page.stopScreencast'); capturing = false;
     if (frameError) throw frameError;
-    const endedAt = Date.now() / 1000;
+    phase = 'video';
+    const endedAt = runtime.now() / 1000;
     const timeline = frameTimeline(frames, endedAt);
     droppedScreencastFrames = timeline.droppedFrames;
     await writeFile(join(out, 'raw/frames.ffconcat'), timeline.content);
-    runFfmpeg(videoArgs()); runFfmpeg(contactSheetArgs(files));
-    await writeFile(join(out, 'index.md'), proofIndex(tour, files));
-    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'proven', tour: tour.name, droppedScreencastFrames, steps: tour.steps.map((step, index) => ({ caption: step.caption, image: files[index].image, viewport: step.viewport, theme: step.theme, evidence: step.evidence })), selectorsVerified: true }, null, 2) + '\n');
+    runFfmpeg(videoArgs());
+    phase = 'contact-sheet';
+    runFfmpeg(contactSheetArgs(files));
+    phase = 'index';
+    await writeFile(join(out, 'index.md'), proofIndex(tour, files, checkout));
+    phase = 'report';
+    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'proven', tour: tour.name, checkout, droppedScreencastFrames, steps: tour.steps.map((step, index) => ({ caption: step.caption, image: files[index].image, viewport: step.viewport, theme: step.theme, evidence: step.evidence })), selectorsVerified: true }, null, 2) + '\n');
     await rm(join(out, 'raw'), { recursive: true, force: true });
     return out;
   } catch (error) {
     const failureDiagnostics = await captureFailureDiagnostics(diagnostics, evaluate, targetUrl.href);
-    if (client && !signal?.aborted) {
+    if (phase === 'step' && client && !signal?.aborted) {
       try {
         const file = files[current];
         await screenshot(file.raw);
@@ -211,17 +230,17 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
         try { await writeFile(join(out, files[current].failure), await readFile(join(out, files[current].raw))); } catch { /* No page was available. */ }
       }
     }
-    await writeFailureReport(out, { status: 'not-proven', tour: tour.name, droppedScreencastFrames, step: current + 1, error: error.message }, failureDiagnostics);
+    await writeFailureReport(out, { status: 'not-proven', tour: tour.name, checkout, droppedScreencastFrames, phase, ...(phase === 'step' ? { step: current + 1 } : {}), error: error.message }, failureDiagnostics);
     throw error;
   } finally {
     capturing = false;
     if (client) {
-      try { await Promise.race([client.send('Browser.close'), wait(2000)]); } catch { /* Browser may already be closed. */ }
+      try { await Promise.race([client.send('Browser.close'), runtime.wait(2000)]); } catch { /* Browser may already be closed. */ }
       client.close();
     }
     if (browser) {
       browser.kill('SIGTERM');
-      await Promise.race([new Promise(done => { if (browser.exitCode !== null || browser.signalCode !== null) done(); else browser.once('exit', done); }), wait(2000)]);
+      await Promise.race([new Promise(done => { if (browser.exitCode !== null || browser.signalCode !== null) done(); else browser.once('exit', done); }), runtime.wait(2000)]);
       if (browser.exitCode === null && browser.signalCode === null) browser.kill('SIGKILL');
     }
     await rm(profileDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

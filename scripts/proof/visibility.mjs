@@ -40,28 +40,31 @@ export function checkEvidence(evidence, reasonFor, root = document, viewport = {
     }
     return reasonFor({ rects, viewport, ancestors, hidden, cutOff });
   };
+  const textReason = (scope, text) => {
+    const walker = root.createTreeWalker(scope, 4);
+    const candidates = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!normalize(node.textContent).includes(normalize(text))) continue;
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
+      const range = root.createRange();
+      range.selectNodeContents(node);
+      candidates.push(snapshot(node.parentElement, [...range.getClientRects()]));
+    }
+    return { reason: candidates.some(reason => !reason) ? '' : candidates[0] || 'missing visible text', matches: candidates.length };
+  };
   const results = evidence.map(item => {
     try {
       if (item.selector) {
         const matches = [...root.querySelectorAll(item.selector)];
         const elements = item.index === undefined ? matches : matches.slice(item.index, item.index + 1);
         if (!elements.length) return { evidence: item, ok: false, reason: 'missing element' };
-        const reasons = elements.map(element => snapshot(element, [element.getBoundingClientRect()]));
+        const reasons = elements.map(element => snapshot(element, [element.getBoundingClientRect()]) ||
+          (item.text ? textReason(element, item.text).reason : ''));
         const reason = reasons.find(Boolean) || '';
         return { evidence: item, ok: !reason, reason, matches: elements.length };
       }
-      // Text evidence is a literal within a rendered text node, not hidden textContent.
-      const walker = root.createTreeWalker(root.body, 4);
-      const candidates = [];
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        if (!normalize(node.textContent).includes(normalize(item.text))) continue;
-        if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
-        const range = root.createRange();
-        range.selectNodeContents(node);
-        candidates.push(snapshot(node.parentElement, [...range.getClientRects()]));
-      }
-      const ok = candidates.some(reason => !reason);
-      return { evidence: item, ok, reason: ok ? '' : candidates[0] || 'missing visible text', matches: candidates.length };
+      const { reason, matches } = textReason(root.body, item.text);
+      return { evidence: item, ok: !reason, reason, matches };
     } catch (error) {
       return { evidence: item, ok: false, reason: error.message };
     }

@@ -72,3 +72,17 @@ describe('visibility.mjs serialised page function on DOM fixtures', () => {
     expect(evidenceExpression([{ text: 'a "quote"' }])).toContain(JSON.stringify([{ text: 'a "quote"' }]));
   });
 });
+
+test('visibility.mjs scoped text must occur visibly inside the selected tool row, not elsewhere', () => {
+  const tool = element();
+  const reasoning = element();
+  const text = { textContent: 'Edit File', parentElement: tool };
+  const root = documentFixture({ '.rows': [reasoning, tool] });
+  root.createTreeWalker = scope => { let done = false; return { nextNode: () => {
+    if (done || scope !== tool) return null; done = true; return text;
+  } }; };
+  expect(check([{ selector: '.rows', index: 0, text: 'Edit File' }], root).ok).toBe(false);
+  expect(check([{ selector: '.rows', index: 1, text: 'Edit File' }], root).ok).toBe(true);
+  text.rects = [{ ...rect, bottom: 901 }];
+  expect(check([{ selector: '.rows', index: 1, text: 'Edit File' }], root).ok).toBe(false);
+});

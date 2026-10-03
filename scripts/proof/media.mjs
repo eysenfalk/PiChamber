@@ -75,7 +75,7 @@ export function frameTimeline(frames, endedAt) {
 }
 
 export const markdownEscape = text => text.replace(/[\[\]\\]/g, '\\$&').replace(/\s+/g, ' ');
-export function proofIndex(tour, files) {
-  return '# Proof: ' + tour.name + '\n\n[Video](video.mp4)\n\n![Contact sheet](contact-sheet.png)\n\n' +
+export function proofIndex(tour, files, checkout) {
+  return '# Proof: ' + tour.name + '\n\n' + (checkout ? 'Checkout: `' + checkout.commit + '`; dirty: ' + checkout.dirty + '\n\n' : '') + '[Video](video.mp4)\n\n![Contact sheet](contact-sheet.png)\n\n' +
     tour.steps.map((step, index) => (index + 1) + '. ' + step.caption + '\n\n   ![' + markdownEscape(step.caption) + '](' + files[index].image + ')\n').join('\n');
 }

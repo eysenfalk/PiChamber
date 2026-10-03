@@ -5,15 +5,16 @@ export function diagnosticUrl(value) {
   try {
     const url = new URL(value);
     return ['http:', 'https:'].includes(url.protocol) ?
-      (url.origin + url.pathname).replace(/[A-Za-z0-9_+=-]{40,}/g, '[redacted]').slice(0, 2048) : url.protocol;
+      (url.origin + url.pathname).replace(/(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[A-Za-z0-9_+=-]{40,})/gi, '[redacted]').slice(0, 2048) : url.protocol;
   } catch { return '[unavailable]'; }
 }
 
 // Record only synthetic lab/fixture pages. Strip credential carriers before truncation.
 export function diagnosticText(value, limit = 4096) {
   return String(value ?? '')
-    .replace(/https?:\/\/[^\s<>"']+/g, url => diagnosticUrl(url))
-    .replace(/\bBearer\s+[^\s,;"']+/gi, 'Bearer [redacted]')
+    .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+/gi, url => diagnosticUrl(url))
+    .replace(/\b(?:authorization|proxy-authorization|set-cookie|cookie)\s*[:=][^\r\n]*/gi, '[redacted header]')
+    .replace(/\b(?:Bearer|Basic)\s+[^\s,;"']+/gi, '[redacted authorization]')
     .replace(/(["']?(?:[\w-]*(?:token|secret|password|credential|authorization|cookie|api[_-]?key)[\w-]*)["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,;}]+)/gi, '$1[redacted]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?\b/g, '[redacted]')
     .replace(/\b[A-Za-z0-9_+=-]{40,}\b/g, '[redacted]')
@@ -63,7 +64,7 @@ export async function captureFailureDiagnostics(collector, evaluate, fallbackUrl
 }
 
 export async function writeFailureReport(out, report, diagnostics) {
-  const diagnosticFile = String(report.step).padStart(2, '0') + '-not-proven.json';
+  const diagnosticFile = (report.step === undefined ? report.phase : String(report.step).padStart(2, '0')) + '-not-proven.json';
   await writeFile(join(out, diagnosticFile), JSON.stringify(diagnostics, null, 2) + '\n');
   await writeFile(join(out, 'report.json'), JSON.stringify({ ...report, error: diagnosticText(report.error), diagnosticFile, diagnostics }, null, 2) + '\n');
 }

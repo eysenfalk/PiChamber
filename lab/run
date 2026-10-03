@@ -129,11 +129,15 @@ case "$1" in
     echo "$url"
     ;;
   record)
+    check_checkout || exit 1
     [[ "$(podman inspect "$name-server" --format '{{.State.Running}}')" == true ]] || {
       echo 'Start the lab with lab/run up first.' >&2; exit 1;
     }
     [[ ! -L "$root/.proof" ]] || { echo '.proof must not be a symlink.' >&2; exit 1; }
     mkdir -p "$root/.proof"
+    commit="$(git -C "$root" rev-parse HEAD)"
+    dirty=false
+    [[ -z "$(git -C "$root" status --porcelain)" ]] || dirty=true
     # Use exactly the running server image, not an unbuilt or newer tag.
     tag="$(podman inspect "$name-server" --format '{{.Image}}')"
     trap 'podman rm --force "$name-recorder" >/dev/null 2>&1 || true' EXIT
@@ -141,11 +145,11 @@ case "$1" in
     trap 'exit 143' TERM
     podman run --rm --name "$name-recorder" --network="$name" --userns=keep-id \
       --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges \
-      --read-only --tmpfs=/tmp:rw,size=512m --shm-size=256m \
+      --read-only --tmpfs=/tmp:rw,size=512m --shm-size=256m --pids-limit=512 \
       --cpus="$recorder_cpus" --memory="$recorder_memory" --memory-swap="$recorder_memory" \
       --volume="$root:/repo:ro" --volume="$root/.proof:/repo/.proof:rw" \
       --workdir=/repo --env=HOME=/tmp --env=XDG_CONFIG_HOME=/tmp/config \
-      --env=XDG_CACHE_HOME=/tmp/cache "$tag" \
+      --env=XDG_CACHE_HOME=/tmp/cache --env=PROOF_COMMIT="$commit" --env=PROOF_DIRTY="$dirty" "$tag" \
       node scripts/proof/record.mjs "$2" --url "http://$name:3000/" --chrome /repo/lab/chromium
     ;;
   down) cleanup ;;
