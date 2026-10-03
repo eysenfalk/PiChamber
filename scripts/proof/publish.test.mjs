@@ -3,145 +3,153 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { publishProof, publishMarkdown, validatePublish, resolveRemoteUrl } from './publish.mjs';
+import { publishProof, proofBlock, publishedBlock, validatePublish, withProof } from './publish.mjs';
 
 const temps = [];
 const identity = { GIT_AUTHOR_NAME: 'Proof test', GIT_AUTHOR_EMAIL: 'proof@example.invalid', GIT_COMMITTER_NAME: 'Proof test', GIT_COMMITTER_EMAIL: 'proof@example.invalid' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, ...identity }, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 afterEach(async () => { for (const path of temps.splice(0)) await rm(path, { recursive: true, force: true }); });
+
+const description = '## Plan\n\nDo it.\n\n## Verification\n\nManual steps.\n\n## Review\n\nLater.';
+
 async function setup() {
   const temp = await mkdtemp(join(tmpdir(), 'proof-publish-test-')); temps.push(temp);
-  const cwd = join(temp, 'host'), remote = join(temp, 'remote.git');
-  await mkdir(cwd); git(cwd, ['init', '--quiet']); git(temp, ['init', '--quiet', '--bare', remote]);
+  const cwd = join(temp, 'host');
+  await mkdir(cwd); git(cwd, ['init', '--quiet']);
   await writeFile(join(cwd, 'workflow.json'), JSON.stringify({ tracker: { repo: 'eysenfalk/PiChamber' } }));
   await writeFile(join(cwd, '.gitignore'), '.proof/\n');
-  git(cwd, ['add', '.']); git(cwd, ['commit', '--quiet', '-m', 'Host source']);
+  git(cwd, ['add', '.']); git(cwd, ['-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'Host source']);
   const proof = join(cwd, '.proof/fixture'); await mkdir(proof, { recursive: true });
   const steps = [{ caption: 'A complete screenshot', image: '01.png' }];
   await writeFile(join(proof, 'report.json'), JSON.stringify({ status: 'proven', tour: 'fixture', steps, checkout: { commit: git(cwd, ['rev-parse', 'HEAD']), dirty: false } }));
   for (const file of ['01.png', 'contact-sheet.png', 'video.mp4', 'index.md']) await writeFile(join(proof, file), file + ' fixture bytes');
-  return { cwd, remote, proof, steps };
-}
-async function publish(options) {
-  const previous = Object.fromEntries(Object.keys(identity).map(key => [key, process.env[key]]));
-  Object.assign(process.env, identity);
-  try { return await publishProof(options); }
-  finally { for (const key of Object.keys(identity)) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } }
+  return { cwd, proof, steps };
 }
 
-describe('publish.mjs local bare remote only', () => {
-  test('relative file remotes resolve against host; HTTPS and SCP SSH remotes retain their meaning', () => {
-    expect(resolveRemoteUrl('../bare.git', '/tmp/host')).toBe('/tmp/bare.git');
-    expect(resolveRemoteUrl('git@github.com:owner/repo.git', '/tmp/host')).toBe('git@github.com:owner/repo.git');
-    expect(resolveRemoteUrl('https://github.com/owner/repo.git', '/tmp/host')).toBe('https://github.com/owner/repo.git');
+/** A synchronous fake gh, like execFileSync: `pr edit --attach` rewrites ./name references and records calls. */
+function syncGh(options) {
+  const calls = [];
+  let body = options?.body ?? description;
+  const gh = (args, { cwd }) => {
+    calls.push({ args, cwd });
+    if (args.includes('--help')) return options?.noAttach ? 'no such flag' : '      --attach file   Attach an image or video file';
+    if (args[1] === 'view') return body + '\n';
+    if (args[1] === 'edit') {
+      if (options?.fail) throw new Error(options.fail);
+      const edited = execFileSync('cat', [args[args.indexOf('--body-file') + 1]], { encoding: 'utf8' });
+      const attached = args.flatMap((arg, index) => arg === '--attach' ? [args[index + 1]] : []);
+      body = attached.reduce((text, name) => name.endsWith('.mp4')
+        ? text.replace('![](' + name + ')', 'https://github.com/user-attachments/assets/video-id')
+        : text.replaceAll('](' + name + ')', '](https://github.com/user-attachments/assets/' + name.slice(2) + ')'), edited);
+      return '';
+    }
+    throw new Error('unexpected gh call');
+  };
+  return { gh, calls, body: () => body };
+}
+
+describe('publish.mjs attaches proof through gh', () => {
+  test('uploads every artifact from the tour directory and returns the hosted block', async () => {
+    const { cwd, proof } = await setup();
+    const fake = syncGh();
+    const before = { status: git(cwd, ['status', '--porcelain']), head: git(cwd, ['rev-parse', 'HEAD']) };
+    const result = await publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh });
+    const edit = fake.calls.find(call => call.args[1] === 'edit' && !call.args.includes('--help'));
+    expect(edit.cwd).toBe(proof);
+    expect(edit.args.slice(0, 4)).toEqual(['pr', 'edit', '27', '--repo']);
+    expect(edit.args.filter((arg, index) => edit.args[index - 1] === '--attach')).toEqual(['./video.mp4', './contact-sheet.png', './01.png']);
+    expect(result.markdown).toContain('\n\nhttps://github.com/user-attachments/assets/video-id\n\n');
+    expect(result.markdown).toContain('![A complete screenshot](https://github.com/user-attachments/assets/01.png)');
+    expect(result.markdown).not.toContain('](./');
+    expect(fake.body()).toContain('## Plan\n\nDo it.\n\n## Verification\n\nManual steps.\n\n<!-- proof:fixture -->');
+    expect(fake.body()).toContain('<!-- /proof:fixture -->\n\n## Review\n\nLater.');
+    expect({ status: git(cwd, ['status', '--porcelain']), head: git(cwd, ['rev-parse', 'HEAD']) }).toEqual(before);
   });
-  test('first publish is orphaned, preserves clean host/index/HEAD/worktrees and prints raw Markdown', async () => {
-    const { cwd, remote } = await setup();
-    const before = { status: git(cwd, ['status', '--porcelain']), head: git(cwd, ['rev-parse', 'HEAD']), trees: git(cwd, ['worktree', 'list', '--porcelain']) };
-    expect(before.status).toBe('');
-    const result = await publish({ cwd, remote, pr: 27, tour: 'fixture' });
-    const files = git(remote, ['ls-tree', '-r', '--name-only', 'proofs']).split('\n');
-    expect(files).toEqual(['01.png', 'contact-sheet.png', 'index.md', 'report.json', 'video.mp4'].map(file => 'pr-27/fixture/' + file));
-    expect(git(remote, ['rev-list', '--parents', '-n', '1', 'proofs']).split(' ')).toHaveLength(1);
-    expect(git(remote, ['rev-parse', 'proofs'])).toBe(result.commit);
-    expect(result.markdown).toContain('![A complete screenshot](https://raw.githubusercontent.com/eysenfalk/PiChamber/' + result.commit + '/pr-27/fixture/01.png)');
-    expect(result.markdown).toContain('[Video](https://raw.githubusercontent.com/eysenfalk/PiChamber/' + result.commit + '/pr-27/fixture/video.mp4)');
-    expect({ status: git(cwd, ['status', '--porcelain']), head: git(cwd, ['rev-parse', 'HEAD']), trees: git(cwd, ['worktree', 'list', '--porcelain']) }).toEqual(before);
+
+  test('republishing replaces only its own tour block and keeps other text and tours', async () => {
+    const { cwd } = await setup();
+    const other = '<!-- proof:other -->\n\nold other\n\n<!-- /proof:other -->';
+    const fake = syncGh({ body: description.replace('Manual steps.', 'Manual steps.\n\n' + other) });
+    await publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh });
+    const first = fake.body();
+    await publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh });
+    expect(fake.body()).toBe(first);
+    expect(fake.body().split('<!-- proof:fixture -->')).toHaveLength(2);
+    expect(fake.body()).toContain(other);
   });
-  test('later publish appends, preserves unrelated proofs, replaces one tour, and identical retry adds no commit', async () => {
-    const { cwd, remote, proof } = await setup();
-    const first = await publish({ cwd, remote, pr: 27, tour: 'fixture' });
-    await publish({ cwd, remote, pr: 28, tour: 'fixture' });
-    await writeFile(join(proof, '01.png'), 'updated fixture');
-    const changed = await publish({ cwd, remote, pr: 27, tour: 'fixture' });
-    expect(git(remote, ['show', 'proofs:pr-27/fixture/01.png'])).toBe('updated fixture');
-    expect(git(remote, ['show', 'proofs:pr-28/fixture/01.png'])).toBe('01.png fixture bytes');
-    expect(git(remote, ['rev-list', '--max-parents=0', 'proofs'])).toBe(first.commit);
-    expect((await publish({ cwd, remote, pr: 27, tour: 'fixture' })).commit).toBe(changed.commit);
-    expect(git(cwd, ['status', '--porcelain'])).toBe('');
-  });
-  test('dry run never pushes, whether proofs exists or not, and labels Markdown as unpublished', async () => {
-    const { cwd, remote } = await setup();
-    const result = await publish({ cwd, remote, pr: 27, tour: 'fixture', dryRun: true });
-    expect(git(remote, ['for-each-ref', '--format=%(refname)', 'refs/heads'])).toBe('');
+
+  test('dry run reads the description but never edits it', async () => {
+    const { cwd } = await setup();
+    const fake = syncGh();
+    const result = await publishProof({ cwd, pr: 27, tour: 'fixture', dryRun: true, gh: fake.gh });
+    expect(fake.calls.map(call => call.args.slice(0, 2).join(' '))).toEqual(['pr edit', 'pr view']);
+    expect(fake.calls.some(call => call.args[1] === 'edit' && call.args[2] !== '--help')).toBe(false);
     expect(result.markdown).toContain('Dry run: not published');
-    await publish({ cwd, remote, pr: 27, tour: 'fixture' });
-    const before = git(remote, ['rev-parse', 'proofs']);
-    await publish({ cwd, remote, pr: 29, tour: 'fixture', dryRun: true });
-    expect(git(remote, ['rev-parse', 'proofs'])).toBe(before);
-    expect(git(cwd, ['status', '--porcelain'])).toBe('');
+    expect(fake.body()).toBe(description);
   });
-  test('not-proven, missing, unexpected and symlink artifacts cannot be published', async () => {
-    const { cwd, remote, proof } = await setup();
+
+  test('not-proven, missing, unexpected and symlink artifacts are refused before gh is called', async () => {
+    const { cwd, proof } = await setup();
+    const fake = syncGh();
     await writeFile(join(proof, 'report.json'), JSON.stringify({ status: 'not-proven', tour: 'fixture', steps: [] }));
-    await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow('complete proven');
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh })).rejects.toThrow('complete proven');
     await writeFile(join(proof, 'report.json'), JSON.stringify({ status: 'proven', tour: 'fixture', steps: [{ caption: 'x', image: '01.png' }] }));
     await writeFile(join(proof, '01-not-proven.png'), 'failed');
-    await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow('Unexpected proof files');
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh })).rejects.toThrow('Unexpected proof files');
     await rm(join(proof, '01-not-proven.png')); await rm(join(proof, 'video.mp4'));
-    await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow();
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh })).rejects.toThrow();
     await symlink(join(proof, '01.png'), join(proof, 'video.mp4'));
-    await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow('unsafe artifact');
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh })).rejects.toThrow('unsafe artifact');
+    expect(fake.calls).toEqual([]);
   });
-  test('a rejected push leaves remote and host untouched', async () => {
-    const { cwd, remote } = await setup();
-    await writeFile(join(remote, 'hooks/pre-receive'), '#!/bin/sh\necho "failed https://user:SECRETTOKEN@localhost/x" >&2\nexit 1\n', { mode: 0o755 });
-    try { await publish({ cwd, remote, pr: 27, tour: 'fixture' }); throw new Error('Expected rejected push'); }
-    catch (error) { expect(error.message).toContain('git push failed'); expect(error.message).not.toContain('SECRETTOKEN'); }
-    expect(git(remote, ['for-each-ref', '--format=%(refname)', 'refs/heads'])).toBe('');
-    expect(git(cwd, ['status', '--porcelain'])).toBe('');
+
+  test('a proof from another source commit is refused before gh is called', async () => {
+    const { cwd, proof } = await setup();
+    const fake = syncGh();
+    const report = JSON.parse(await readFile(join(proof, 'report.json'), 'utf8'));
+    report.checkout.commit = 'a'.repeat(40);
+    await writeFile(join(proof, 'report.json'), JSON.stringify(report));
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: fake.gh })).rejects.toThrow('differs from HEAD');
+    expect(fake.calls).toEqual([]);
   });
-  test('invalid identifiers and remote options fail before git; configurable repo controls URLs', () => {
-    for (const bad of [{ pr: '-1' }, { tour: '../bad' }, { repo: 'bad' }, { remote: '--upload-pack=bad' }]) {
-      expect(() => validatePublish({ pr: 27, tour: 'fixture', repo: 'eysenfalk/PiChamber', remote: 'origin', ...bad })).toThrow();
-    }
-    expect(publishMarkdown({ pr: 1, tour: 'fixture', repo: 'other/fork', dryRun: true, steps: [{ caption: '[safe]', image: '01.png' }] })).toContain('https://raw.githubusercontent.com/other/fork/proofs/pr-1/fixture/01.png');
+
+  test('a gh without --attach, a description without Verification and a failed upload all fail visibly', async () => {
+    const { cwd } = await setup();
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: syncGh({ noAttach: true }).gh })).rejects.toThrow('cannot upload attachments');
+    await expect(publishProof({ cwd, pr: 27, tour: 'fixture', gh: syncGh({ body: '## Plan\n\nx' }).gh })).rejects.toThrow('no "## Verification" section');
+    const failed = syncGh({ fail: 'gh pr edit failed: upload https://user:SECRETTOKEN@example.invalid rejected' });
+    try { await publishProof({ cwd, pr: 27, tour: 'fixture', gh: failed.gh }); throw new Error('Expected failure'); }
+    catch (error) { expect(error.message).toContain('gh pr edit failed'); expect(error.message).not.toContain('SECRETTOKEN'); }
   });
 });
 
-test('publish.mjs reviewer credentialed ls-remote probe throws no credentials, and CLI argument errors redact too', async () => {
-  const { cwd } = await setup();
-  try { await publish({ cwd, remote: 'https://user:SECRETTOKEN@127.0.0.1:9/x.git', pr: 27, tour: 'fixture' }); throw new Error('Expected git failure'); }
-  catch (error) {
-    expect(error.message).toContain('git ls-remote failed');
-    expect(error.message).not.toContain('SECRETTOKEN');
-    expect(error.message).not.toContain('user:');
-    expect(error.message).not.toContain('Command failed:');
+describe('publish.mjs description editing', () => {
+  const block = proofBlock({ tour: 'fixture', steps: [{ caption: 'See [x] https://user:SECRETTOKEN@localhost/x', image: '01.png' }], commit: 'b'.repeat(40) });
+  test('the block references local files, stands the video alone and redacts captions', () => {
+    expect(block).toContain('\n\n![](./video.mp4)\n\n');
+    expect(block).toContain('](./01.png)');
+    expect(block).toContain('`bbbbbbbbbbbb`');
+    expect(block).not.toContain('SECRETTOKEN');
+    expect(block).toContain('See \\[x\\]');
+  });
+  test('appends at the end of Verification, also when it is the last section', () => {
+    expect(withProof('## Verification\n\nx\n', 'fixture', block)).toBe('## Verification\n\nx\n\n' + block + '\n');
+    expect(() => withProof('## Plan', 'fixture', block)).toThrow('Verification');
+    expect(() => withProof('## Verification\n\n<!-- proof:fixture -->', 'fixture', block)).toThrow('unterminated');
+  });
+  test('a block with local references left is not reported as published', () => {
+    expect(() => publishedBlock('## Verification\n\n' + block, 'fixture')).toThrow('did not replace');
+    expect(() => publishedBlock('nothing', 'fixture')).toThrow('no proof block');
+  });
+});
+
+test('publish.mjs validates identifiers, and CLI argument errors redact credentials', () => {
+  for (const bad of [{ pr: '-1' }, { pr: '0' }, { tour: '../bad' }, { repo: 'bad' }, { repo: 'a/..' }]) {
+    expect(() => validatePublish({ pr: 27, tour: 'fixture', repo: 'eysenfalk/PiChamber', ...bad })).toThrow();
   }
   const result = spawnSync('node', [new URL('./publish.mjs', import.meta.url).pathname, '--https://user:SECRETTOKEN@127.0.0.1:9/x.git'], { encoding: 'utf8' });
   expect(result.status).toBe(1);
   expect(result.stdout).toBe('');
   expect(result.stderr).toContain('Usage:');
   expect(result.stderr).not.toContain('SECRETTOKEN');
-});
-
-test('publish.mjs refuses a proof from another source commit before contacting a remote', async () => {
-  const { cwd, proof, remote } = await setup();
-  const report = JSON.parse(await readFile(join(proof, 'report.json'), 'utf8'));
-  report.checkout.commit = 'a'.repeat(40);
-  await writeFile(join(proof, 'report.json'), JSON.stringify(report));
-  await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow('differs from HEAD');
-  expect(git(remote, ['for-each-ref', '--format=%(refname)', 'refs/heads'])).toBe('');
-});
-
-test('publish.mjs explicit author/committer and unsigned commits ignore global signing and identity', async () => {
-  const { cwd, remote } = await setup();
-  const config = join(cwd, 'host-global-config');
-  await writeFile(config, '[commit]\n  gpgsign = true\n[user]\n  name = Wrong global identity\n  email = wrong@example.invalid\n');
-  const previous = process.env.GIT_CONFIG_GLOBAL;
-  process.env.GIT_CONFIG_GLOBAL = config;
-  try {
-    const result = await publishProof({ cwd, remote, pr: 27, tour: 'fixture' });
-    expect(git(remote, ['show', '-s', '--format=%an <%ae> / %cn <%ce>', result.commit])).toBe('PiChamber proof recorder <proof@pichamber.invalid> / PiChamber proof recorder <proof@pichamber.invalid>');
-  } finally { if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous; }
-});
-
-test('publish.mjs successful Markdown is pinned, dry-run links remain explicitly mutable and captions redact credentials', () => {
-  const commit = 'b'.repeat(40), steps = [{ caption: 'See https://user:SECRETTOKEN@localhost/x', image: '01.png' }];
-  const options = { pr: 27, tour: 'fixture', repo: 'eysenfalk/PiChamber', steps, commit };
-  const markdown = publishMarkdown(options);
-  expect(markdown).toContain('/' + commit + '/pr-27/fixture/');
-  expect(markdown).not.toContain('SECRETTOKEN');
-  expect(publishMarkdown({ ...options, dryRun: true })).toContain('/proofs/pr-27/fixture/');
-  expect(() => publishMarkdown({ ...options, commit: undefined })).toThrow('commit SHA');
 });

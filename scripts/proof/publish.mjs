@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,29 +10,65 @@ import { diagnosticText } from './diagnostics.mjs';
 import { validateCheckout } from './checkout.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const usage = 'bun run proof:publish -- <pr> <tour> [--remote NAME|URL|PATH] [--repo OWNER/NAME] [--dry-run]';
-export const resolveRemoteUrl = (remote, cwd) => remote.includes(':') ? remote : resolve(cwd, remote);
+const usage = 'bun run proof:publish -- <pr> <tour> [--repo OWNER/NAME] [--dry-run]';
+
 const git = (cwd, args) => {
-  try {
-    return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000,
-      env: { ...process.env, GIT_AUTHOR_NAME: 'PiChamber proof recorder', GIT_AUTHOR_EMAIL: 'proof@pichamber.invalid',
-        GIT_COMMITTER_NAME: 'PiChamber proof recorder', GIT_COMMITTER_EMAIL: 'proof@pichamber.invalid' },
-    }).trim();
-  } catch (error) { throw new Error(diagnosticText('git ' + args[0] + ' failed: ' + (error.stderr?.toString() || 'command unsuccessful'))); }
+  try { return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 }).trim(); }
+  catch (error) { throw new Error(diagnosticText('git ' + args[0] + ' failed: ' + (error.stderr?.toString() || 'command unsuccessful'))); }
 };
-export function validatePublish({ pr, tour, repo, remote }) {
+
+/** Runs the GitHub CLI. Raw error messages repeat arguments, so only bounded, redacted stderr surfaces. */
+export const runGh = (args, { cwd }) => {
+  try { return execFileSync('gh', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000 }); }
+  catch (error) { throw new Error(diagnosticText('gh ' + args.slice(0, 2).join(' ') + ' failed: ' + (error.stderr?.toString() || 'command unsuccessful'))); }
+};
+
+export function validatePublish({ pr, tour, repo }) {
   if (!/^[1-9][0-9]*$/.test(String(pr)) || !Number.isSafeInteger(Number(pr))) throw new Error('PR must be a positive integer');
   if (!validName(tour)) throw new Error('Invalid tour name');
   if (typeof repo !== 'string' || (repo.split('/').length !== 2 || repo.split('/').some(part => !/^[a-zA-Z0-9_.-]+$/.test(part))) || repo.split('/').some(part => part === '.' || part === '..')) throw new Error('Repository must be owner/name');
-  if (typeof remote !== 'string' || !remote || remote.startsWith('-') || /[\r\n]/.test(remote)) throw new Error('Invalid remote');
 }
 
-export function publishMarkdown({ pr, tour, repo, steps, commit, dryRun = false }) {
-  if (!dryRun && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit)) throw new Error('Published links require a commit SHA');
-  const base = 'https://raw.githubusercontent.com/' + repo + '/' + (dryRun ? 'proofs' : commit) + '/pr-' + pr + '/' + tour + '/';
-  return (dryRun ? '**Dry run: not published.**\n\n' : '') + '[Video](' + base + 'video.mp4)\n\n' +
-    '![Contact sheet](' + base + 'contact-sheet.png)\n\n' + steps.map(step =>
-      '![' + markdownEscape(diagnosticText(step.caption, 500)) + '](' + base + step.image + ')').join('\n\n') + '\n';
+const markers = tour => ['<!-- proof:' + tour + ' -->', '<!-- /proof:' + tour + ' -->'];
+
+/**
+ * The proof block with references to the local files, relative to the tour directory. gh --attach uploads each
+ * file and rewrites these references in place; the video stands alone in its paragraph so GitHub renders a player.
+ */
+export function proofBlock({ tour, steps, commit }) {
+  const [open, close] = markers(tour);
+  return [open, 'Tour `' + tour + '`, recorded at `' + commit.slice(0, 12) + '`.', '![](./video.mp4)', '![Contact sheet](./contact-sheet.png)',
+    ...steps.map(step => '![' + markdownEscape(diagnosticText(step.caption, 500)) + '](./' + step.image + ')'), close].join('\n\n');
+}
+
+/** Replaces this tour's block, or appends it to the end of the Verification section. Other text stays byte for byte. */
+export function withProof(body, tour, block) {
+  const [open, close] = markers(tour);
+  const start = body.indexOf(open);
+  if (start !== -1) {
+    const end = body.indexOf(close, start);
+    if (end === -1) throw new Error('Description has an unterminated proof block for ' + tour);
+    return body.slice(0, start) + block + body.slice(end + close.length);
+  }
+  const heading = /^## Verification[ \t]*$/m.exec(body);
+  if (!heading) throw new Error('Description has no "## Verification" section');
+  const next = /^## /m.exec(body.slice(heading.index + heading[0].length));
+  const at = next ? heading.index + heading[0].length + next.index : body.length;
+  const before = body.slice(0, at).replace(/\s+$/, '');
+  return before + '\n\n' + block + (next ? '\n\n' + body.slice(at) : '\n');
+}
+
+/** The published block, or an error when GitHub left any reference local. */
+export function publishedBlock(body, tour) {
+  const [open, close] = markers(tour);
+  const start = body.indexOf(open), end = body.indexOf(close, start);
+  if (start === -1 || end === -1) throw new Error('The edited description has no proof block for ' + tour);
+  const block = body.slice(start, end + close.length);
+  const references = [...block.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map(match => match[1]);
+  const bare = block.split(/\n\s*\n/).map(part => part.trim()).filter(part => /^https:\/\/\S+$/.test(part));
+  if (references.some(reference => !/^https:\/\//.test(reference))) throw new Error('GitHub did not replace every attachment reference');
+  if (references.length + bare.length < 2) throw new Error('The edited description is missing attachments');
+  return block;
 }
 
 async function proofFiles(source, tour) {
@@ -46,76 +82,46 @@ async function proofFiles(source, tour) {
     const stat = await lstat(join(source, file));
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0) throw new Error('Missing, empty or unsafe artifact: ' + file);
   }
-  return { report, files };
+  return { report, attachments: ['video.mp4', 'contact-sheet.png', ...report.steps.map(step => step.image)] };
 }
 
-/** Isolated staging repository + linked worktree. Never changes the caller's index, refs or checkout. */
+/** Uploads a proven recording into the pull request description through gh --attach. */
 export async function publishProof(options) {
-  try { return await prepareProof(options); }
+  try { return await attachProof(options); }
   catch (error) { throw new Error(diagnosticText(error.message)); }
 }
 
-async function prepareProof({ pr, tour, cwd = root, remote = 'origin', repo, dryRun = false, proofRoot = join(cwd, '.proof') }) {
+async function attachProof({ pr, tour, cwd = root, repo, dryRun = false, proofRoot = join(cwd, '.proof'), gh = runGh }) {
   repo ??= JSON.parse(await readFile(join(cwd, 'workflow.json'), 'utf8')).tracker.repo;
-  validatePublish({ pr, tour, repo, remote });
+  validatePublish({ pr, tour, repo });
   const source = join(proofRoot, tour);
   if ((await lstat(source)).isSymbolicLink()) throw new Error('Proof directory must not be a symbolic link');
-  const { report, files } = await proofFiles(source, tour);
+  const { report, attachments } = await proofFiles(source, tour);
   validateCheckout(report.checkout);
   if (report.checkout.commit !== git(cwd, ['rev-parse', 'HEAD'])) throw new Error('Proof checkout differs from HEAD; record again before publishing');
-  // A configured remote name is resolved from the host; URLs and local paths are accepted too.
-  let remoteUrl = remote;
-  const remotes = git(cwd, ['remote']).split('\n');
-  if (remotes.includes(remote)) remoteUrl = git(cwd, ['remote', 'get-url', remote]);
-  remoteUrl = resolveRemoteUrl(remoteUrl, cwd);
+  if (!gh(['pr', 'edit', '--help'], { cwd: source }).includes('--attach')) throw new Error('This gh cannot upload attachments; install a release with "gh pr edit --attach"');
+  const view = ['pr', 'view', String(pr), '--repo', repo, '--json', 'body', '--jq', '.body'];
+  const block = proofBlock({ tour, steps: report.steps, commit: report.checkout.commit });
+  const body = withProof(gh(view, { cwd: source }).replace(/\n$/, ''), tour, block);
+  if (dryRun) return { dryRun, markdown: '**Dry run: not published.** References are local until gh uploads them.\n\n' + block + '\n' };
   const temp = await mkdtemp(join(tmpdir(), 'pichamber-proof-publish-'));
-  const staging = join(temp, 'repo'), tree = join(temp, 'worktree');
-  let worktreeAdded = false;
   try {
-    await mkdir(staging);
-    git(staging, ['init', '--quiet']);
-    const branch = git(staging, ['ls-remote', '--heads', '--', remoteUrl, 'refs/heads/proofs']);
-    if (branch) {
-      git(staging, ['fetch', '--quiet', '--', remoteUrl, 'refs/heads/proofs:refs/heads/proofs']);
-      git(staging, ['worktree', 'add', '--quiet', tree, 'proofs']);
-      worktreeAdded = true;
-    } else {
-      // Empty bootstrap commit is not an ancestor of proofs. --orphan creates its own root.
-      git(staging, ['commit', '--quiet', '--allow-empty', '-m', 'Initialize temporary proof staging']);
-      git(staging, ['worktree', 'add', '--quiet', '--detach', tree, 'HEAD']);
-      worktreeAdded = true;
-      git(tree, ['checkout', '--quiet', '--orphan', 'proofs']);
-    }
-    const parent = join(tree, 'pr-' + pr);
-    try {
-      const stat = await lstat(parent);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe proof destination');
-    } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    const destination = join(parent, tour);
-    await rm(destination, { recursive: true, force: true });
-    await mkdir(destination, { recursive: true });
-    for (const file of files) await copyFile(join(source, file), join(destination, file));
-    git(tree, ['add', '--', 'pr-' + pr + '/' + tour]);
-    const changed = git(tree, ['diff', '--cached', '--name-only']);
-    if (changed) git(tree, ['commit', '--quiet', '-m', 'Proof for PR #' + pr + ': ' + tour]);
-    const commit = git(tree, ['rev-parse', 'HEAD']);
-    if (!dryRun) git(tree, ['push', '--quiet', '--', remoteUrl, 'HEAD:refs/heads/proofs']);
-    return { commit, dryRun, markdown: publishMarkdown({ pr, tour, repo, steps: report.steps, commit, dryRun }) };
-  } finally {
-    try { if (worktreeAdded) git(staging, ['worktree', 'remove', '--force', tree]); }
-    finally { await rm(temp, { recursive: true, force: true }); }
-  }
+    const file = join(temp, 'body.md');
+    await writeFile(file, body);
+    gh(['pr', 'edit', String(pr), '--repo', repo, '--body-file', file, ...attachments.flatMap(name => ['--attach', './' + name])], { cwd: source });
+  } finally { await rm(temp, { recursive: true, force: true }); }
+  return { dryRun, markdown: publishedBlock(gh(view, { cwd: source }), tour) + '\n' };
 }
 
 async function main() {
   const args = process.argv.slice(2).filter((arg, index) => !(index === 0 && arg === '--'));
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    remote: { type: 'string' }, repo: { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
+    repo: { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
   } });
   if (values.help) { console.log(usage); return; }
   if (positionals.length !== 2) throw new Error('PR and tour required; see --help');
   const result = await publishProof({ pr: positionals[0], tour: positionals[1], cwd: root,
-    remote: values.remote || process.env.PROOF_REMOTE || 'origin', repo: values.repo || process.env.PROOF_REPO, dryRun: values['dry-run'] || false });
+    repo: values.repo || process.env.PROOF_REPO, dryRun: values['dry-run'] || false });
   process.stdout.write(result.markdown);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + diagnosticText(error.message).replace(/\s+/g, ' ') + ')' : diagnosticText(error.message)); process.exitCode = 1; });

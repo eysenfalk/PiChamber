@@ -2,7 +2,7 @@
 
 ## Ownership
 
-This module owns scripted browser tours, visible evidence checks, artifact planning and host publishing. It reuses `scripts/perf/cdp.mjs` unchanged. No npm dependency is needed. Recording needs Node with WebSocket support (22.19 or newer), Chromium, ffmpeg with libx264 and drawtext, and a sans serif font (DejaVu Sans is requested through fontconfig). Publishing needs git and remote write authority; author and committer identity are set explicitly, and commits are unsigned regardless of the global signing setting.
+This module owns scripted browser tours, visible evidence checks, artifact planning and attaching proof to a pull request. It reuses `scripts/perf/cdp.mjs` unchanged. No npm dependency is needed. Recording needs Node with WebSocket support (22.19 or newer), Chromium, ffmpeg with libx264 and drawtext, and a sans serif font (DejaVu Sans is requested through fontconfig). Publishing needs a gh release whose `gh pr edit` has `--attach` (2.102.0 has it) and write authority on the pull request.
 
 The lab owns isolation, the image, network, prepared data and resource limits. Narrow Chromium emulation covers hosted mobile, not Capacitor or Electron. Never record real projects or credentials. Use the isolated lab; the only intended host recording target is the static fixture served by the recorder itself.
 
@@ -14,7 +14,7 @@ The lab owns isolation, the image, network, prepared data and resource limits. N
 | `record.mjs` | Chromium lifecycle, CDP actions, idle/evidence gates, ffmpeg execution. |
 | `diagnostics.mjs` | Bounded, redacted page errors and failure report sidecars. |
 | `checkout.mjs` | Commit/dirty metadata from host git or the lab controller. |
-| `publish.mjs` | Artifact validation, temporary staging repository/worktree, commit/push, Markdown. |
+| `publish.mjs` | Artifact validation, Verification block in the description, `gh pr edit --attach`. |
 | `fixtures/index.html` | Static synthetic data, including deliberately clipped evidence. |
 
 ## Tour format
@@ -88,12 +88,16 @@ On failure the command exits nonzero and writes a not-proven report. A step fail
 ## Publishing
 
 ```sh
+bun run proof:publish -- 27 lab --dry-run
 bun run proof:publish -- 27 lab
-bun run proof:publish -- 27 fixture --remote /absolute/path/to/local-bare.git --dry-run
 ```
 
-Default repository: `workflow.json`'s `tracker.repo`; `--repo` or `PROOF_REPO` overrides it for URLs. `--remote` or `PROOF_REMOTE` overrides `origin`, accepting a configured name, URL or local repository path. Tests use temporary local bare repositories only, never GitHub.
+Default repository: `workflow.json`'s `tracker.repo`; `--repo` or `PROOF_REPO` overrides it. Publishing attaches proof to the pull request description; nothing is committed or pushed ([ADR 0005](../../docs/adr/0005-proof-attached-to-pull-requests.md)).
 
-Publishing rejects incomplete reports, unexpected files, symlinks, empty artifacts and source commit metadata differing from HEAD. Record again after committing source changes. The dirty flag is retained, not treated as proof of a clean source tree. It creates an isolated temporary git repository and linked worktree, fetches `proofs` if present, or creates it as an orphan branch. It replaces only `pr-<n>/<tour>/`, commits changes and pushes without force. An identical retry adds no commit. A concurrent remote change rejects the push; rerun to fetch and append safely. The host's checkout, index, refs and worktree registry remain untouched, even with unrelated edits. Temporary worktrees are removed in finally. Errors never print publication success. Git subprocess output is captured; every surfaced error and caption is bounded and credential-redacted, including credentialed remote URLs. Raw subprocess error messages (which repeat command arguments) are never printed.
+Publishing rejects incomplete reports, unexpected files, symlinks, empty artifacts and source commit metadata differing from HEAD, before calling gh. Record again after committing source changes. The dirty flag is retained, not treated as proof of a clean source tree. A gh without `gh pr edit --attach` fails with an explicit message.
 
-`--dry-run` validates, fetches and prepares a temporary commit, but never pushes and labels Markdown as unpublished. After a real push, successful stdout is Markdown with `raw.githubusercontent.com/<repo>/<proof-commit-sha>/pr-<n>/<tour>/...` images and a video link, pinned to the pushed commit rather than a mutable branch. Dry-run links use `proofs` and are explicitly unpublished. The commands are non-interactive and behave identically in TTYs and pipes. Unsupported flags fail with one usage line on stderr; publish Markdown goes only to stdout. Product CLI quiet/JSON modes do not apply to these repository automation scripts. Raw URLs require a public repository; actual GitHub rendering/playback remains an integration check. Review every artifact before publishing. Publication does not prove lab isolation or resource budgets.
+It reads the current description and writes one block per tour between `<!-- proof:<tour> -->` and `<!-- /proof:<tour> -->`: the tour name and recorded commit, the video alone in its paragraph so GitHub renders a player, the contact sheet, then every screenshot with its caption as alt text. A new block goes to the end of the `## Verification` section; an existing block for the same tour is replaced and everything else in the description stays byte for byte. A description without that section fails. The block references `./video.mp4`, `./contact-sheet.png` and `./NN.png`; `gh pr edit --body-file ... --attach ./<file>` runs inside `.proof/<tour>/`, uploads each file and rewrites those references to the hosted assets. `report.json` and `index.md` stay local.
+
+After the edit the description is read again. Success prints the hosted block on stdout. If any reference is still local, the command fails rather than claiming publication. If some uploads fail, gh keeps the successful ones in the description and exits nonzero, and so does this command; rerunning replaces the whole block. Replaced uploads stay in GitHub's attachment storage. `--dry-run` reads the description and prints the block with local references, labeled unpublished, without editing.
+
+The commands are non-interactive and behave identically in TTYs and pipes. Unsupported flags fail with one usage line on stderr; the block goes only to stdout. Product CLI quiet/JSON modes do not apply to these repository automation scripts. gh subprocess output is captured; surfaced errors are bounded and credential-redacted, and raw subprocess error messages (which repeat command arguments) are never printed. Tests use a fake gh, never GitHub; actual upload, rendering and playback remain an integration check. Review every artifact before publishing. Publication does not prove lab isolation or resource budgets.
