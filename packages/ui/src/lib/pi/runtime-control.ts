@@ -74,7 +74,7 @@ export const reloadPiRuntime = async (overrides: Partial<RuntimeControlDeps> = {
   }
 };
 
-export const describeRestartScope = (scope: PiRuntimeRestartResult['scope']): string => (
+const describeRestartScope = (scope: PiRuntimeRestartResult['scope']): string => (
   scope === 'process'
     ? 'PiChamber is restarting.'
     : 'Only the Pi session daemon restarted. This server cannot restart itself; restart it from its host to load a new server build.'

@@ -1,8 +1,8 @@
 export const RELOAD_PI_LABEL = 'Reload Pi';
 export const RESTART_PICHAMBER_LABEL = 'Restart PiChamber';
 
-export type RuntimeControlsState = { reloading: boolean; restarting: boolean; confirmOpen: boolean };
-export type RuntimeControlsAction =
+type RuntimeControlsState = { reloading: boolean; restarting: boolean; confirmOpen: boolean };
+type RuntimeControlsAction =
   | { type: 'reload-started' }
   | { type: 'reload-finished' }
   | { type: 'restart-requested' }
