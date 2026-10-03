@@ -17,12 +17,12 @@ How work moves from an idea to `main` in this repository, who does what, and wha
 | [AGENTS.md](../AGENTS.md) and `.agents/skills/` | Always-on rules and routing; detailed workflows per kind of change | by hand |
 | [docs/adr](adr/README.md) | One record per decision: context with evidence and sources, decision, consequences, when to revisit | by hand, in the pull request that makes the decision; superseded, not rewritten |
 | [CONTEXT.md](../CONTEXT.md) | **Live context:** open findings and questions, each with source, date and what settles it | by hand; entries are added in the pull request that learns them and removed in the one that settles them |
-| [ROADMAP.md](../ROADMAP.md) | The order of upcoming work, one line per item | by hand |
-| GitHub issues | Tickets for the **next** one to three roadmap items: problem, requirements, acceptance | people; agents draft them |
+| [Roadmap issue #24](https://github.com/eysenfalk/PiChamber/issues/24) | The order of upcoming work as its ordered sub-issues, a generated order list and graph, and ideas as one line each | sub-issues and ideas: people and agents; list and graph: `scripts/workflow/roadmap-sync.mjs` |
+| GitHub issues | Roadmap items (label `roadmap`) and bugs: problem, requirements, acceptance | people and agents |
 | Pull request | The plan (how), its proof, the review and the CI result | agent drafts, user approves |
 | Git history on `main` | One squash commit per pull request, containing its title and full description | automatic |
 
-There is no archive of plans and no hand-maintained catalogue. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests, arrives with the roadmap item "Proof recording and feature map".
+There is no archive of plans and no hand-maintained catalogue. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests, arrives with #11.
 
 ## Configuration: `workflow.json`
 
@@ -30,7 +30,7 @@ There is no archive of plans and no hand-maintained catalogue. A fact is written
 
 | `tracker.type` | Settings | Reference in the pull request |
 |---|---|---|
-| `github` | `repo` (`owner/name`) | `Closes #12` or `Relates to #12`; the branch starts with the number (`12-short-name`) |
+| `github` | `repo` (`owner/name`), `roadmap` (number of the roadmap issue) | `Closes #12` or `Relates to #12`; the branch starts with the number (`12-short-name`) |
 | `gitlab` | `url`, `project` | `Closes #12` |
 | `jira` | `url`, `project` (the key) | `Closes KEY-12`; the branch starts with the key |
 | `local` | `dir` | `Closes issues/012-short-name.md`; the file is deleted in the same change |
@@ -41,23 +41,34 @@ There is no archive of plans and no hand-maintained catalogue. A fact is written
 
 | # | Step | Who | How |
 |---|---|---|---|
-| 1 | Write the idea down | anyone | one line in `ROADMAP.md` under Next, Later or Ideas |
-| 2 | Make it ready | a person decides; an agent may draft the text | GitHub issue: problem, requirements, acceptance |
+| 1 | Write the idea down | anyone | one line under Ideas in the roadmap issue |
+| 2 | Make it a roadmap item | people and agents | an issue labeled `roadmap`, placed in the roadmap issue; before work starts it has problem, requirements, acceptance |
 | 3 | Branch and draft pull request | agent | branch named after the issue; draft pull request from the template; the description is the plan |
 | 4 | Approve the plan | a person | in the pull request or in chat; nothing is implemented before |
 | 5 | Implement and prove | agent | tests and code; checks green; proof recorded; decision records; `CONTEXT.md` updated |
 | 6 | Pipeline | CI | build, type check, lint, all tests, the pull request check |
 | 7 | Review | a person, supported by a review agent | the description, the proof, the diff, the CI result |
-| 8 | Merge | a person | squash merge; the roadmap line was removed in the same pull request |
+| 8 | Merge | a person | squash merge; it closes the issue, which leaves the roadmap |
 | 9 | Gardening | everyone | repeated corrections become tests or lint rules; outdated issues are closed |
 
 ### 1. Idea
 
-Ideas cost nothing to write down and nothing to throw away. `ROADMAP.md` has three parts: **Next** (in order, roughly pull request sized), **Later** (coarser) and **Ideas** (not promised). Order is decided there, not in the tracker.
+Ideas cost nothing to write down and nothing to throw away. They are one line each under **Ideas** in the roadmap issue, not issues, so the issue list holds only work that is planned. An idea becomes an issue when it is about to be worked on.
 
-### 2. Issue
+### 2. Roadmap item
 
-Issues are written just before the work starts, never for the whole roadmap. An issue says what is wrong or missing and how we will know it is done; it does not say how to build it.
+Planned work is an issue labeled `roadmap` and a sub-issue of the roadmap issue ([ADR 0003](adr/0003-roadmap-in-issues.md)). Its place among the sub-issues is its place in the order of work; the first three open ones are **Next**. A roadmap item may start as a title; before work on it starts, it says what is wrong or missing and how we will know it is done. It does not say how to build it.
+
+People reorder items by dragging them in the sub-issue list of the roadmap issue. People and agents can also use the command, which regenerates the order list and graph afterwards:
+
+```bash
+node scripts/workflow/roadmap-sync.mjs add 12                  # label #12 roadmap and append it
+node scripts/workflow/roadmap-sync.mjs add 13 --parent 12      # make #13 a sub-issue of item #12
+node scripts/workflow/roadmap-sync.mjs move 12 --before 7      # or --after 7, or --top
+node scripts/workflow/roadmap-sync.mjs sync                    # regenerate the order list and graph
+```
+
+Dependencies are "blocked by" relations set on the issue in GitHub; the graph draws them. The order list and graph between the markers in the roadmap issue are generated and overwritten; ideas and other text outside them are kept. Bugs that need doing now can be issues without the label.
 
 ### 3. Branch and draft pull request
 
@@ -69,7 +80,7 @@ git push -u origin 12-short-name
 gh pr create --draft --base main --title "<what changes>" --body-file <plan.md>
 ```
 
-Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions. It should describe one pull request that solves one problem, with roughly 100 to 600 lines to review (lock files and generated assets do not count). Larger work is split into several pull requests and roadmap lines.
+Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions. It should describe one pull request that solves one problem, with roughly 100 to 600 lines to review (lock files and generated assets do not count). Larger work is split into several pull requests and roadmap items.
 
 ### 4. Approval
 
@@ -93,6 +104,7 @@ The user approves the plan before code is written. Changing the plan later means
 | When | Workflow and job | What |
 |---|---|---|
 | every pull request | `Pull request checks`: `runtime-compatibility`, `checks` | runtime smoke on supported Node and Bun versions; build, type check, lint, `bun run test` (web, UI, Electron and the repository rules) |
+| issue changes, every six hours, on demand | `Roadmap`: `roadmap` | `scripts/workflow/roadmap-sync.mjs sync`: regenerates the order list and graph in the roadmap issue |
 | every change of a pull request, its title or its description | `Pull request description`: `pull-request` | `scripts/workflow/check-pr.mjs`: every template section present and filled, an issue referenced, acceptance criteria as a checklist, all checked once not a draft |
 
 The repository rules in `scripts/workflow/` check decision records and their index, `CONTEXT.md` entries and `workflow.json`. Run them with `bun run test:repo`.
@@ -114,18 +126,19 @@ Agents copy what they find. Whatever is in the code becomes the pattern. So:
 - when an agent or a person needs the same correction twice, write a test, a type or a lint rule that makes the mistake impossible;
 - no workaround comments: fix the cause or open an issue;
 - close issues that the roadmap no longer covers;
-- prune `CONTEXT.md`: remove entries that are settled, correct outdated ones, and turn entries that keep waiting into roadmap items or issues;
+- prune `CONTEXT.md`: remove entries that are settled, correct outdated ones, and turn entries that keep waiting into roadmap items or ideas;
 - check `Proposed` records: confirm them or supersede them.
 
 ## Manual and automatic
 
 | Manual | Automatic |
 |---|---|
-| ideas, roadmap order | all checks on every pull request |
-| issues for the next items | the pull request description check |
+| ideas | all checks on every pull request |
+| roadmap items, their order and their dependencies | the pull request description check |
 | approving plans | format of decision records and their index |
 | review and merge | fields of every `CONTEXT.md` entry |
 | decision records, `CONTEXT.md` entries and their removal | the `workflow.json` configuration |
+| | the order list and graph in the roadmap issue |
 
 ## Repository settings
 

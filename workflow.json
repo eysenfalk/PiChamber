@@ -1,7 +1,8 @@
 {
   "tracker": {
     "type": "github",
-    "repo": "eysenfalk/PiChamber"
+    "repo": "eysenfalk/PiChamber",
+    "roadmap": 24
   },
   "plans": "pull-request"
 }

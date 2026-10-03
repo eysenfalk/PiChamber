@@ -9,7 +9,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Settings each tracker type of workflow.json needs.
 const TRACKER_SETTINGS = {
-  github: ['repo'],
+  github: ['repo', 'roadmap'],
   gitlab: ['url', 'project'],
   jira: ['url', 'project'],
   local: ['dir'],

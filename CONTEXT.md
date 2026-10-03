@@ -8,7 +8,7 @@ Live context: what we know but have not settled yet. Every entry names its sourc
 
 - Source: `gh pr create --help` and `gh pr edit --help` (gh 2.x): no option to attach files to a pull request; checked 2026-10-02
 - Date: 2026-10-02
-- Settled by: the pull request for the roadmap item "Proof recording and feature map" and its decision record
+- Settled by: the pull request for #11 (proof lab) and its decision record
 
 The GitHub web editor uploads images and videos into a description, the CLI cannot. Proposal: an orphan branch `proofs` with `pr-<n>/<name>/`, linked from the description. Not tried yet: whether images and videos from that branch render inline in a pull request of a public repository.
 
