@@ -32,8 +32,10 @@ describe('proof lab repository rules', () => {
 
   test('all lab pods plus infra fit the 4 CPU and 8 GiB budget, and build is bounded separately', () => {
     const manifests = readdirSync(new URL('../../lab/', import.meta.url)).filter((f) => /\.ya?ml$/.test(f));
-    let cpu = cpus(value('infra_cpus'));
-    let memory = memoryMiB(value('infra_memory'));
+    let cpu = cpus(value('infra_cpus')) + cpus(value('recorder_cpus'));
+    expect(cpus(value('recorder_cpus'))).toBeGreaterThan(0);
+    expect(memoryMiB(value('recorder_memory'))).toBeGreaterThan(0);
+    let memory = memoryMiB(value('infra_memory')) + memoryMiB(value('recorder_memory'));
     for (const file of manifests) {
       const manifest = parse(read(`lab/${file}`));
       expect(manifest.kind).toBe('Pod');
@@ -45,14 +47,15 @@ describe('proof lab repository rules', () => {
       }
     }
     expect(cpu).toBeGreaterThan(0);
-    expect(cpu).toBeLessThanOrEqual(4);
+    expect(cpu).toBe(4);
     expect(memory).toBeGreaterThan(0);
-    expect(memory).toBeLessThanOrEqual(8192);
+    expect(memory).toBe(8192);
     expect(Number(value('build_cpus'))).toBeLessThanOrEqual(4);
     expect(memoryMiB(value('build_memory'))).toBeLessThanOrEqual(8192);
     expect(run).toContain('podman update --cpus="$infra_cpus" --memory="$infra_memory"');
     expect(run).toContain('--cpu-quota=$((build_cpus * 100000))');
     expect(run).toContain('--memory-swap="$build_memory"');
+    expect(run).toContain('--cpus="$recorder_cpus" --memory="$recorder_memory" --memory-swap="$recorder_memory"');
     expect(run).toContain('podman update --memory-swap="$server_memory"');
     expect(run).toContain('verify_limits "$name-server" "$server_quota" "$server_memory"');
     expect(run).toContain('verify_limits "$infra" "$infra_quota" "$infra_bytes"');
@@ -75,12 +78,18 @@ describe('proof lab repository rules', () => {
     expect(run).toContain('sha256sum "$root/lab/Containerfile"');
     expect(run).toContain('podman network rm');
     expect(run).toContain('podman volume rm');
+    expect(run).toContain('--read-only --tmpfs=/tmp:rw,size=512m');
+    expect(run).toContain('--pids-limit=512');
+    expect(run).toContain('--volume="$root:/repo:ro" --volume="$root/.proof:/repo/.proof:rw"');
+    expect(run).toContain('--url "http://$name:3000/" --chrome /repo/lab/chromium');
+    expect(read('lab/chromium')).toContain('exec /usr/local/bin/chromium --no-sandbox "$@"');
+    expect(read('scripts/proof/record.mjs')).not.toContain('--no-sandbox');
   });
 
   test('the recorder manifest matches the SDK seed constants and tools tests are in the CI test command', () => {
     expect(JSON.parse(read('lab/seed-manifest.json'))).toEqual(SEED_MANIFEST);
     const scripts = JSON.parse(read('package.json')).scripts;
-    expect(scripts['test:tools']).toBe('bun test scripts/lab');
+    expect(scripts['test:tools']).toBe('bun test scripts/lab scripts/proof');
     expect(scripts.test).toBe('node scripts/lab/test-env.mjs --run');
     expect(read('scripts/lab/test-env.mjs')).toContain("'test:tools'");
   });

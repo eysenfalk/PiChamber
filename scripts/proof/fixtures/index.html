@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proof recorder fixture</title>
+<style>
+  * { box-sizing: border-box; } html, body { margin: 0; font: 20px/1.5 system-ui; background: #f5f6fa; color: #202535; }
+  html.dark, .dark body { background: #171a24; color: #eef0ff; }
+  header { padding: 24px; border-bottom: 1px solid #8992aa; }
+  main { display: flex; gap: 36px; padding: 32px; }
+  aside, article { padding: 24px; border: 1px solid #8992aa; border-radius: 12px; }
+  aside { min-width: 300px; } h1, h2 { margin: 0 0 16px; } button, input { font: inherit; padding: 8px; }
+  #mobile-open { display: none; } #clip { position: absolute; left: 1000px; top: 500px; width: 150px; height: 40px; overflow: hidden; }
+  #clipped { width: 280px; height: 60px; }
+  @media (max-width: 600px) { header { padding: 16px; } main { padding: 16px; } aside { display: none; min-width: 0; width: 100%; }
+    #clip { display: none; } body.sidebar aside { display: block; } body.sidebar article { display: none; } #mobile-open { display: block; } }
+</style></head><body>
+<header><h1>Proof recorder fixture</h1><button id="mobile-open" onclick="document.body.classList.toggle('sidebar')">Open sidebar</button></header>
+<main><aside id="projects"><h2>Projects</h2><p>Fixture project</p><button id="open" onclick="document.querySelector('#session').hidden=false">A prepared session</button></aside>
+<article id="session" hidden><h2>Prepared conversation</h2><p id="tool">Tool completed</p><label>Note <input id="note"></label></article></main>
+<div id="clip"><div id="clipped">Deliberately clipped evidence</div></div>
+<script>
+  const applyTheme = () => document.documentElement.classList.toggle('dark',
+    localStorage.getItem('themeMode') === 'dark' ||
+    (localStorage.getItem('themeMode') !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches));
+  window.addEventListener('storage', event => { if (event.key === 'themeMode') applyTheme(); });
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+  applyTheme();
+</script>
+</body></html>

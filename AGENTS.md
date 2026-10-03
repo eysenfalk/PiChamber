@@ -96,6 +96,7 @@ process violation.
 | Trigger | Required skill |
 |---|---|
 | Any source, dependency, export, build-config, generated-asset, package-contract, or module-ownership change | `pichamber-change-discipline` |
+| Visual proof, lab tours, recordings or proof publishing | `pichamber-verify` |
 | CLI commands, prompts, terminal output, non-TTY, `--quiet`, or `--json` behavior | `clack-cli-patterns` |
 | Shared UI data access, Pi API, `RuntimeAPIs`, runtime fetch/auth/URLs, bridges/proxies, runtime switching, or server API routes | `ui-api-decoupling` |
 | Electron main/preload, IPC, native UI, updater, deep links, SSH/tunnels, packaging, or child processes | `desktop-shell` |
@@ -112,6 +113,7 @@ Pure code-reading or explanation does not require implementation skills unless n
 
 ## Validation
 
+- Tests needing a separate environment (lab, recordings and acceptance tests through the lab) run through `lab/run`. Install, builds, type checks, lint, unit tests and all other work stay on the host. Load `pichamber-verify` for visual proof.
 - Use `package.json` scripts as the command source of truth.
 - Prefer focused tests and package-scoped type-check/lint for executable source changes.
 - `bun run test` runs repository rules, tools, web, UI and Electron suites through `scripts/lab/test-env.mjs` and must pass before handoff. The host runner removes inherited `PICHAMBER_*` runtime selectors (keeps `PICHAMBER_TEST_*`), `PICHAMBER`, `PI_PACKAGE_DIR` and `ELECTRON_RUN_AS_NODE`; it retains the invoking Bun for nested commands. UI tests run under `bun test --isolate` (per-file isolation) because bun's `mock.module()` is process-global; keep new UI test files self-contained and avoid partial mocks of shared modules.

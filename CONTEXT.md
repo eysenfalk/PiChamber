@@ -2,16 +2,6 @@
 
 Live context: what we know but have not settled yet. Every entry names its source, its date and what will settle it. The pull request that settles an entry, by a decision record, a document or code, removes it here ([ADR 0001](docs/adr/0001-decisions-and-live-context-in-separate-places.md)). Removed entries remain in the Git history.
 
-## Proof
-
-### Where proof files live
-
-- Source: `gh pr create --help` and `gh pr edit --help` (gh 2.x): no option to attach files to a pull request; checked 2026-10-02
-- Date: 2026-10-02
-- Settled by: the pull request for #11 (proof lab) and its decision record
-
-The GitHub web editor uploads images and videos into a description, the CLI cannot. Proposal: an orphan branch `proofs` with `pr-<n>/<name>/`, linked from the description. Not tried yet: whether images and videos from that branch render inline in a pull request of a public repository.
-
 ## Integrations
 
 ### pi-subagents shows its async run status to RPC hosts as one versioned widget line
