@@ -12,6 +12,7 @@ The lab owns isolation, the image, network, prepared data and resource limits. N
 | `visibility.mjs` | Pure geometry and serialized page evidence check. |
 | `media.mjs` | Pure file planning, captions, ffmpeg arguments, screencast timing, index. |
 | `record.mjs` | Chromium lifecycle, CDP actions, idle/evidence gates, ffmpeg execution. |
+| `diagnostics.mjs` | Bounded, redacted page errors and failure report sidecars. |
 | `publish.mjs` | Artifact validation, temporary staging repository/worktree, commit/push, Markdown. |
 | `fixtures/index.html` | Static synthetic data, including deliberately clipped evidence. |
 
@@ -79,7 +80,7 @@ Each run replaces only `.proof/<tour>/`, removing stale success markers:
 - `index.md`: captions, PNGs, contact sheet and video links.
 - `report.json`: proven/not-proven status, declared evidence, selector verification metadata, and `droppedScreencastFrames` (late frames discarded during video planning).
 
-On failure the command exits nonzero and writes a not-proven report. If a page is available it writes `NN-not-proven.png` with a NOT PROVEN band. If ffmpeg fails, the raw screenshot is retained under that name. Temporary `raw/` files are removed only on success and cannot be published. Browser startup failure may have no screenshot. Completed steps do not make an incomplete tour proven.
+On failure the command exits nonzero and writes a not-proven report. If a page is available it writes `NN-not-proven.png` with a NOT PROVEN band. If ffmpeg fails, the raw screenshot is retained under that name. Temporary `raw/` files are removed only on success and cannot be published. Browser startup failure may have no screenshot. Completed steps do not make an incomplete tour proven. Every failure includes diagnostics in `report.json` and adjacent `NN-not-proven.json`: current URL without credentials/query/fragment, error boundary details text (including closed details), and the most recent 50 Runtime exceptions, Log errors and console.error events (4096 characters each; boundary text 8192). Objects are not expanded; credential fields, bearer values and opaque token strings are redacted before persistence. If page evaluation fails, the fallback target URL and capture error are explicit. Diagnostics never replace or relax evidence checks; only synthetic lab/fixture pages are allowed.
 
 ## Publishing
 

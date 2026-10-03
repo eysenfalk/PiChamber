@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
+import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
 import { fixture, brokenFixture, labTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 
@@ -76,6 +77,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   const frames = [];
   let droppedScreencastFrames = 0;
   const network = createPageNetworkGate();
+  const diagnostics = createPageDiagnostics();
   let capturing = false;
   const send = async (method, params = {}) => {
     signal?.throwIfAborted();
@@ -126,7 +128,9 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     const target = await createPageTarget(port);
     client = new CdpClient(target.webSocketDebuggerUrl);
     await client.connect();
-    await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
+    // Register before enabling domains so initial errors and buffered Log entries survive.
+    for (const [name, handler] of Object.entries(diagnostics.handlers)) client.on(name, handler);
+    await send('Page.enable'); await send('Runtime.enable'); await send('Log.enable'); await send('Network.enable');
     await send('Page.addScriptToEvaluateOnNewDocument', { source: idleProbe });
     for (const [name, handler] of Object.entries(network.handlers)) client.on(name, handler);
     await viewport(tour.steps[0].viewport);
@@ -195,6 +199,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await rm(join(out, 'raw'), { recursive: true, force: true });
     return out;
   } catch (error) {
+    const failureDiagnostics = await captureFailureDiagnostics(diagnostics, evaluate, targetUrl.href);
     if (client && !signal?.aborted) {
       try {
         const file = files[current];
@@ -206,7 +211,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
         try { await writeFile(join(out, files[current].failure), await readFile(join(out, files[current].raw))); } catch { /* No page was available. */ }
       }
     }
-    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'not-proven', tour: tour.name, droppedScreencastFrames, step: current + 1, error: error.message }, null, 2) + '\n');
+    await writeFailureReport(out, { status: 'not-proven', tour: tour.name, droppedScreencastFrames, step: current + 1, error: error.message }, failureDiagnostics);
     throw error;
   } finally {
     capturing = false;
@@ -251,4 +256,4 @@ async function main() {
     if (server) await new Promise(done => server.close(done));
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + error.message.replace(/\s+/g, ' ') + ')' : error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + error.message.replace(/\s+/g, ' ') + ')' : diagnosticText(error.message)); process.exitCode = 1; });
