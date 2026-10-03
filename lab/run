@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Host controller only. The only host mount is the checkout, read-only.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+name=pichamber-lab
+volume=pichamber-lab-state
+url=http://127.0.0.1:3111
+# Infra is limited separately before starting. Together with lab.yaml: 4 CPUs, 8 GiB.
+infra_cpus=0.1
+infra_memory=128m
+build_cpus=4
+build_memory=8g
+if [[ $# != 1 ]]; then echo 'usage: lab/run up|down|status' >&2; exit 2; fi
+if [[ "$(podman info --format '{{.Host.Security.Rootless}}')" != true ]]; then
+  echo 'lab/run requires rootless podman.' >&2; exit 1
+fi
+# Lock the private runtime directory inode, not a writable (possibly symlinked) file.
+exec 9<"${XDG_RUNTIME_DIR:?lab/run requires XDG_RUNTIME_DIR}"
+flock 9
+# Conmon survives podman; never let it inherit and retain the lifecycle lock.
+podman() { command podman "$@" 9>&-; }
+check_checkout() {
+  local owner
+  owner="$(podman pod inspect "$name" --format '{{index .Labels "io.pichamber.lab.checkout"}}')" || return 1
+  if [[ "$owner" != "$root" ]]; then
+    echo "Lab belongs to another checkout: ${owner:-unknown}; run lab/run there. Refusing from $root." >&2
+    return 1
+  fi
+}
+verify_limits() {
+  local actual expected="$2 100000 $3 $3"
+  actual="$(podman inspect "$1" --format '{{.HostConfig.CpuQuota}} {{.HostConfig.CpuPeriod}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}')" || return 1
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Lab resource limits not applied for $1: expected $expected; got $actual. Check cgroup v2 delegation." >&2
+    return 1
+  fi
+}
+cleanup() {
+  local result=0 remaining attempt
+  if podman pod exists "$name"; then
+    check_checkout || return 1
+    for attempt in 1 2 3; do
+      if podman pod rm --force "$name"; then break; fi
+      if ! podman pod exists "$name"; then break; fi
+      remaining="$(podman pod inspect "$name" --format '{{len .Containers}}')" || return 1
+      if [[ "$remaining" != 0 ]]; then
+        echo 'Removal failed with containers still present; keeping lab resources.' >&2
+        return 1
+      fi
+      [[ "$attempt" == 3 ]] || sleep 0.2
+    done
+  fi
+  if podman network exists "$name"; then podman network rm "$name" || result=1; fi
+  if podman volume exists "$volume"; then podman volume rm "$volume" || result=1; fi
+  for kind in pod network; do
+    if podman "$kind" exists "$name"; then echo "Left over: $kind $name" >&2; result=1; fi
+  done
+  if podman volume exists "$volume"; then echo "Left over: volume $volume" >&2; result=1; fi
+  return "$result"
+}
+case "$1" in
+  up)
+    if podman pod exists "$name"; then
+      echo 'Lab already exists; use lab/run status or lab/run down first.' >&2; exit 1
+    fi
+    [[ -f "$root/packages/web/dist/index.html" && -d "$root/node_modules" ]] || {
+      echo 'Run bun install --frozen-lockfile and bun run build on the host first.' >&2; exit 1;
+    }
+    tag="localhost/pichamber-lab:$(sha256sum "$root/lab/Containerfile" | cut -c1-16)"
+    if ! podman image exists "$tag"; then
+      podman build --cpu-period=100000 --cpu-quota=$((build_cpus * 100000)) \
+        --memory="$build_memory" --memory-swap="$build_memory" \
+        --tag "$tag" --file "$root/lab/Containerfile" "$root/lab"
+    fi
+    # A failed startup removes its partial pod, network and seeded volume. Images are cached.
+    trap 'code=$?; cleanup || true; exit "$code"' ERR
+    trap 'cleanup || true; exit 130' INT
+    trap 'cleanup || true; exit 143' TERM
+    podman network create --internal "$name" >/dev/null
+    podman volume create "$volume" >/dev/null
+    manifest="$(mktemp)"
+    trap 'rm -f "$manifest"' EXIT
+    LAB_IMAGE="$tag" LAB_REPOSITORY="$root" LAB_UID="$(id -u)" LAB_GID="$(id -g)" \
+      node --input-type=module -e '
+        import fs from "node:fs";
+        let yaml = fs.readFileSync(process.argv[1], "utf8");
+        for (const key of ["LAB_IMAGE", "LAB_REPOSITORY", "LAB_UID", "LAB_GID"])
+          yaml = yaml.replaceAll(key, key.endsWith("UID") || key.endsWith("GID") ? process.env[key] : JSON.stringify(process.env[key]));
+        fs.writeFileSync(process.argv[2], yaml);
+      ' "$root/lab/lab.yaml" "$manifest"
+    podman kube play --start=false --userns=keep-id --network="$name" \
+      --publish=127.0.0.1:3111:3000 "$manifest"
+    infra="$(podman pod inspect "$name" --format '{{.InfraContainerID}}')"
+    podman update --cpus="$infra_cpus" --memory="$infra_memory" --memory-swap="$infra_memory" "$infra" >/dev/null
+    # Derive the server swap ceiling and expected cgroup values from the pod contract.
+    limits="$(cd "$root" && node --input-type=module -e '
+      import fs from "node:fs";
+      import { parse } from "yaml";
+      const limits = parse(fs.readFileSync(process.argv[1], "utf8")).spec.containers.find(c => c.name === "server").resources.limits;
+      const bytes = value => {
+        const match = String(value).match(/^([0-9.]+)(Mi|Gi|m|g)$/);
+        if (!match) throw new Error("Unknown memory unit: " + value);
+        return Number(match[1]) * (match[2] === "Gi" || match[2] === "g" ? 1024 ** 3 : 1024 ** 2);
+      };
+      const quota = value => Math.round(Number(value) * 100000);
+      console.log(quota(limits.cpu), bytes(limits.memory), quota(process.argv[2]), bytes(process.argv[3]));
+    ' "$root/lab/lab.yaml" "$infra_cpus" "$infra_memory")"
+    read -r server_quota server_memory infra_quota infra_bytes <<< "$limits"
+    podman update --memory-swap="$server_memory" "$name-server" >/dev/null
+    podman pod start "$name" >/dev/null
+    verify_limits "$name-server" "$server_quota" "$server_memory"
+    verify_limits "$infra" "$infra_quota" "$infra_bytes"
+    # Volume root is owned by the mapped user on first mount under keep-id.
+    ready=false
+    for ((i=0; i<90; i++)); do
+      if podman logs "$name-server" 2>&1 | grep -q 'Lab ready:'; then ready=true; break; fi
+      if [[ "$(podman inspect "$name-server" --format '{{.State.Status}}')" == exited ]]; then break; fi
+      sleep 1
+    done
+    if [[ "$ready" != true ]]; then podman logs "$name-server" >&2; false; fi
+    trap - ERR INT TERM
+    echo "$url"
+    ;;
+  down) cleanup ;;
+  status)
+    if ! podman pod exists "$name"; then echo 'Lab is down.'; exit 0; fi
+    check_checkout
+    echo "Checkout: $root"
+    podman pod ps --filter name="^$name$"
+    podman ps --all --filter pod="$name"
+    curl --fail --silent --show-error --max-time 5 "$url/api/pi/runtime"
+    printf '\n%s\n' "$url"
+    ;;
+  *) echo 'usage: lab/run up|down|status' >&2; exit 2 ;;
+esac

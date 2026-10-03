@@ -9,6 +9,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0001](0001-decisions-and-live-context-in-separate-places.md) | Decisions and live context in separate places | Accepted |
 | [0002](0002-workflow-from-jira-connector.md) | Workflow from jira-connector: plans in draft pull requests, proof before merge | Accepted |
 | [0003](0003-roadmap-in-issues.md) | Roadmap in issues: one roadmap issue with ordered sub-issues and a generated graph | Accepted |
+| [0004](0004-proof-lab.md) | Proof lab in rootless podman with synthetic SDK sessions | Accepted |
 
 ## Rules
 
