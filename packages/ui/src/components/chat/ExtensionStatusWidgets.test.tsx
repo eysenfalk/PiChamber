@@ -124,6 +124,17 @@ describe('ExtensionWidgetCard subagent-async widget', () => {
     expect(markup).toContain('aria-label="failed"');
   });
 
+  test('shows no timing for a queued node, even when it carries timestamps', () => {
+    const queued = { id: 'q1', kind: 'subagent', label: 'waiting-helper', state: 'queued', updatedAt: GENERATED_AT - 1_000, activity: { lastActivityAt: GENERATED_AT - 1_000 } };
+    const markup = renderCard([widgetEntry('subagent-async', [snapshotLine({ runs: [queued] })])]);
+    expect(markup).toContain('waiting-helper');
+    expect(markup).not.toContain('ago');
+    expect(markup).not.toMatch(/\d+s/);
+    // A non-queued node without a start time still shows its last activity.
+    const idle = { id: 'p1', kind: 'subagent', label: 'paused-helper', state: 'paused', updatedAt: GENERATED_AT - 5_000 };
+    expect(renderCard([widgetEntry('subagent-async', [snapshotLine({ runs: [idle] })])])).toContain('5s ago');
+  });
+
   test('shows omitted runs and children as a count', () => {
     const markup = renderCard([widgetEntry('subagent-async', [snapshotLine({ omitted: { runs: 3, children: 1, byteLimitExceeded: false } })])]);
     expect(markup).toContain('3 more runs and 1 nested run not shown');

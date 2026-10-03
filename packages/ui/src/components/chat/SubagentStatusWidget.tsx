@@ -38,9 +38,11 @@ const formatDuration = (milliseconds: number): string => {
 };
 
 const nodeTiming = (node: SubagentStatusNode, generatedAt: number): string | null => {
-  const live = node.state === 'running' || node.state === 'queued';
-  if (node.startedAt !== undefined && node.state !== 'queued') {
-    const end = live ? generatedAt : node.endedAt ?? node.updatedAt ?? generatedAt;
+  // A queued node has not started. Its `updatedAt` is only the producer's last
+  // poll tick, so "N s ago" would say nothing about the node.
+  if (node.state === 'queued') return null;
+  if (node.startedAt !== undefined) {
+    const end = node.state === 'running' ? generatedAt : node.endedAt ?? node.updatedAt ?? generatedAt;
     return formatDuration(end - node.startedAt);
   }
   const lastActive = node.activity?.lastActivityAt ?? node.updatedAt;
