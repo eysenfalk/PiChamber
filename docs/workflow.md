@@ -22,7 +22,7 @@ How work moves from an idea to `main` in this repository, who does what, and wha
 | Pull request | The plan (how), its proof, the review and the CI result | agent drafts, user approves |
 | Git history on `main` | One squash commit per pull request, containing its title and full description | automatic |
 
-There is no archive of plans and no hand-maintained catalogue. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests, arrives with #11.
+There is no archive of plans and no hand-maintained catalogue. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests through the lab, is a separate roadmap item after #11.
 
 ## Configuration: `workflow.json`
 
@@ -91,7 +91,8 @@ The user approves the plan before code is written. Changing the plan later means
 ### 5. Implementation
 
 - Follow [AGENTS.md](../AGENTS.md): load the matching project skills and read the nearest `README.md` and `DOCUMENTATION.md` before editing.
-- **Proof** for a user-visible change is what the user would see: a recording of the feature in the real program, or at least screenshots, in the pull request, with before and after when behavior changes. Cover the states [CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests) names (desktop and mobile, narrow and wide, light and dark). Unit tests support the proof; they are not the proof. Where proof files are stored is still open ([CONTEXT.md](../CONTEXT.md)).
+- **Proof** for a user-visible change is what the user would see: a recording of the feature in the real program, or at least screenshots, in the pull request, with before and after when behavior changes. Cover the states [CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests) names (desktop and mobile, narrow and wide, light and dark). Unit tests support the proof; they are not the proof. Record through `lab/run record <tour>` into gitignored `.proof/<tour>/`. Publish on the host with `bun run proof:publish -- <pr> <tour>` to the orphan `proofs` branch under `pr-<n>/<tour>/` ([ADR 0004](adr/0004-proof-lab.md)).
+- **Reproduce through the lab.** On the host run `bun install --frozen-lockfile` and `bun run build`, then `lab/run up` and `lab/run record lab`. Inspect every PNG, the contact sheet and the whole recording before publishing. `lab/run status` checks the lab at `http://127.0.0.1:3111`; `lab/run down` removes its pod, network and state volume. Tests needing a separate environment run through `lab/run`; everything else stays on the host. The detailed proof steps live in `.agents/skills/pichamber-verify/SKILL.md`.
 - **Every proof says how to get there.** For each proof, the description tells a developer how to reach it and check it themselves: the commands from a fresh checkout, the URL to open, and what to look at. A proof the reviewer cannot reproduce is only a claim.
 - **Look at the proof before attaching it.** Whoever attaches a screenshot or recording, person or agent, has looked at every screenshot and at the whole recording, and each one shows what its caption claims, readable and not covered. A recording that merely finished is not checked. The description says that this was done.
 - The checks that cover the change are green before every commit; `bun run test` (which includes `bun run test:repo`) before the hand-over.

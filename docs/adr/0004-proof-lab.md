@@ -11,15 +11,17 @@ The owner decided on 2026-10-02 that only work needing a separate environment ru
 
 ## Decision
 
-- Run the proof lab as a rootless pod on an internal network, with only the repository mounted read-only. Put HOME and all Pi and PiChamber state in a disposable lab volume. Publish only on host loopback, keep the caller's user ID, drop capabilities and forbid privilege escalation.
+- Run the proof lab as a rootless pod on an internal network, with the repository mounted read-only. The recorder mounts only `.proof/` writable on the host. Put HOME and all Pi and PiChamber state in a disposable lab volume. Publish only on host loopback, keep the caller's user ID, drop capabilities and forbid privilege escalation.
 - Bound all lab runtime containers together to 4 CPUs and 8 GiB. Image builds use the same maximum budget and do not overlap the running lab. Repository tests check the aggregate limits and image runtime versions against packageManager and CI.
 - Write synthetic cwd-scoped sessions with the pinned SDK SessionManager: short and long conversations, successful and failed tools, a linked subsession and distinct ages. Register projects through existing public routes, without changing package source.
-- Use one Ubuntu 26.04 image for the server and future recorder: Bun, Node, Chromium (pinned full Chrome for Testing, since Ubuntu Chromium requires Snap), git and ffmpeg with libx264 and drawtext. The recorder uses CDP plus ffmpeg, not a new Playwright dependency; captions go below the image.
-- Store published proof on an orphan `proofs` branch and publish from the host. Recorder and publishing implementation follow in the stacked pull request. Every proof must be fully viewed before attaching.
+- Use one Ubuntu 26.04 image for the server and recorder: Bun, Node, Chromium (pinned full Chrome for Testing, since Ubuntu Chromium requires Snap), git and ffmpeg with libx264 and drawtext. The recorder uses CDP plus ffmpeg, not a new Playwright dependency; captions go below the image.
+- Store published proof on an orphan `proofs` branch and publish from the host. The recorder writes local files to gitignored `.proof/<tour>/`, and host publishing uses a temporary worktree under `pr-<n>/<tour>/` on that branch. Every proof must be fully viewed before attaching.
 
 ## Consequences
 
 The lab avoids accidental access to the developer's home and credentials, reproducibly demonstrates the actual web runtime, and keeps normal development on the host. Containers still share the host kernel; this is not hostile code isolation. The image build needs internet and disk space, while the running lab does not. Other local users can reach the loopback UI.
+
+Chrome for Testing runs with `--no-sandbox` only through the lab recorder launcher. The rootless container drops capabilities and forbids privilege escalation, so Chrome cannot use its setuid sandbox; its namespace sandbox is also unavailable in this environment. The container, read-only mounts and internal network are the accidental-access boundary, not Chrome. Host recording keeps Chrome sandbox defaults. The server (1.9 CPUs, 3968 MiB), infra (0.1 CPU, 128 MiB) and recorder (2 CPUs, 4096 MiB) share the fixed 4 CPU / 8 GiB ceiling; their swap ceilings equal memory.
 
 Matching Ubuntu glibc permits using the host's node_modules without another installation. If incompatible native modules are found on another host, the approved plan allows an isolated frozen-lockfile installation into a volume with a one-time network; that fallback must be proven before adding it. `down` discards seeded state; cached images remain. Rollback is reverting the tooling and running `lab/run down`.
 

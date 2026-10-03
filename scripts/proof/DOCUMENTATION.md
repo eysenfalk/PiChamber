@@ -45,7 +45,7 @@ Actions execute in order:
 
 Each step resets to its declared viewport/theme before actions. The final viewport action controls screenshot dimensions and caption planning. Unknown keys fail validation. Clicks require a visible, uncovered target; CDP delivers input rather than invoking React handlers. Mobile enables touch capability. Theme emulates the media query and sets the app's `themeMode` storage preference, dispatching the storage event consumed by ThemeSystemContext. The fixture also uses `html.dark`.
 
-The `lab` tour reads `lab/seed-manifest.json` by default. The lab owns project names/paths and sessions with `project`, `title` and `role` (long/short). Project names and the long title are visible text targets, never a session row index. Source-derived selectors `[data-chat-activity-row]`, `html.dark [data-chat-activity-row]`, `button[aria-label="Open sessions and projects"]` and `[data-mobile-sessions-drawer]` remain **unverified against the lab** until the integration recording. The mobile step opens `mobile.html`. Virtualized long history may require integration adjustments to reveal the seeded tool row.
+The `lab` tour reads `lab/seed-manifest.json` by default. The lab owns project names/paths and sessions with `project`, `title` and `role` (long/short). Project names and the long title are visible text targets, never a session row index. Project display labels deterministically replace hyphens/underscores with spaces and capitalize word initials, matching the sidebar formatter, so `lab-alpha` becomes `Lab Alpha`. The tour opens the exact long session title and expands its visible `Expand activity` control before checking `[data-chat-activity-row]`; dark evidence also requires `html.dark`. The hosted mobile step opens `mobile.html` and its sessions drawer through the header button. Evidence scopes the selected drawer button and checks the readable short session title from the manifest; the long title is intentionally ellipsized in the narrow drawer, so it is proven in the desktop header instead. Checking the entire drawer would incorrectly claim all its overflowed content is visible. The integration recording checks these targets in the real seeded app, not just source code.
 
 ## Evidence rule
 
@@ -55,7 +55,7 @@ All positive rectangles must fit fully within the CSS viewport. Every ancestor w
 
 `evidenceExpression` serializes `checkEvidence` and the pure `visibilityReason` into one Runtime.evaluate expression. Browser globals are used only in the page, never at import. DOM fixture tests need no Chromium.
 
-Before a screenshot the page must be complete, fonts ready, with 500ms of DOM mutation and finite network quiet. SSE/WebSockets do not hold this gate open. Idle expires after 15s instead of assuming success. Evidence is checked after idle and again after a static hold, immediately before the screenshot.
+Before a screenshot the page must be complete, fonts ready, with 500ms of DOM mutation and finite network quiet. SSE/WebSockets do not hold this gate open, including fetch-backed SSE responses identified by their `text/event-stream` MIME type. CDP requests with an empty loaderId are worker-owned: their finish events belong to another target and are excluded from the page network gate. A committed top-level frame also drops requests from the replaced document, retaining requests owned by the new loader; canceled old fetches need not emit finish events to this target. The DOM and evidence gates still check visible effects. This is page idle, not a claim that worker computation has stopped. Idle expires after 15s instead of assuming success. Evidence is checked after idle and again after a static hold, immediately before the screenshot.
 
 ## Host fixture reproduction
 
@@ -67,7 +67,7 @@ node scripts/proof/record.mjs fixture-broken --chrome /usr/bin/google-chrome --f
 # Last command must exit 1, reporting clipped by div and writing 01-not-proven.png.
 ```
 
-For the lab provide `--url` or `PROOF_URL`, `--chrome` or `PROOF_CHROME`, and `--ffmpeg` or `PROOF_FFMPEG`. `--manifest` overrides the manifest path. Lab integration owns the `lab/run record <tour>` wrapper/container. Each recording creates and cleans up its own temporary Chromium profile. SIGINT/SIGTERM request cancellation; protocol calls and subprocesses have deadlines.
+For the lab provide `--url` or `PROOF_URL`, `--chrome` or `PROOF_CHROME`, and `--ffmpeg` or `PROOF_FFMPEG`. `--manifest` overrides the manifest path. `lab/run record <tour>` owns the lab-only URL, read-only source and writable `.proof/` mount, fixed aggregate budget, and container-only Chrome sandbox launcher. Each recording creates and cleans up its own temporary Chromium profile. SIGINT/SIGTERM request cancellation; protocol calls and subprocesses have deadlines.
 
 ## Output and failures
 
