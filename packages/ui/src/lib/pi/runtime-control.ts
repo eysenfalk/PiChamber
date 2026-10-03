@@ -1,4 +1,7 @@
 import { toast } from '@/components/ui';
+import { invalidateCommandCatalogCache } from '@/lib/pi/commandCatalog';
+import { invalidatePromptTemplatesLoadCache } from '@/stores/usePromptTemplatesStore';
+import { invalidateSkillsLoadCache, useSkillsStore } from '@/stores/useSkillsStore';
 import { piClient, PiRequestError } from './client';
 import { fetchPiRuntimeHealth } from './transport';
 import type { PiRuntimeReloadResult, PiRuntimeRestartResult } from './protocol';
@@ -50,7 +53,19 @@ export interface RuntimeControlDeps {
   notify: Pick<typeof toast, 'success' | 'warning' | 'error' | 'loading'>;
   wait: (milliseconds: number) => Promise<void>;
   now: () => number;
+  /** Drops what the UI cached about discovered skills, prompts and slash commands. */
+  refreshResources: () => void;
 }
+
+// A reload changes what Pi discovers, but the UI keeps its own caches of
+// skills, prompts and the slash-command catalog, so they are invalidated and
+// the skills list that Settings shows is fetched again.
+const refreshDiscoveredResources = (): void => {
+  invalidateCommandCatalogCache();
+  invalidatePromptTemplatesLoadCache();
+  invalidateSkillsLoadCache();
+  void useSkillsStore.getState().loadSkills();
+};
 
 const defaultDeps = (): RuntimeControlDeps => ({
   client: piClient,
@@ -58,6 +73,7 @@ const defaultDeps = (): RuntimeControlDeps => ({
   notify: toast,
   wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   now: () => Date.now(),
+  refreshResources: refreshDiscoveredResources,
 });
 
 /** Reloads every loaded Pi session and reports how many reloaded now and how many are deferred. Returns whether the call succeeded. */
@@ -65,6 +81,7 @@ export const reloadPiRuntime = async (overrides: Partial<RuntimeControlDeps> = {
   const deps = { ...defaultDeps(), ...overrides };
   try {
     const result = await deps.client.reloadRuntime();
+    deps.refreshResources();
     const { level, message } = summarizeReload(result);
     deps.notify[level](message);
     return true;

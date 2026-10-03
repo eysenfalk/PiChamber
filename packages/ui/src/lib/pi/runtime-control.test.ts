@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 
 import { PiRequestError } from './client';
+import { useSkillsStore } from '@/stores/useSkillsStore';
 import { reloadPiRuntime, restartPiRuntime, summarizeReload, type RuntimeControlDeps } from './runtime-control';
 
 type Notify = RuntimeControlDeps['notify'];
@@ -50,9 +51,51 @@ describe('reloadPiRuntime', () => {
     const ok = await reloadPiRuntime({
       client: { reloadRuntime: async () => ({ reloaded: 2, deferred: 1, failed: 0 }), restartRuntime: mock() },
       notify,
+      refreshResources: () => {},
     });
     expect(ok).toBe(true);
     expect(events).toEqual([{ kind: 'success', message: 'Reloaded Pi in 2 sessions. 1 busy session reloads when its turn ends.', options: undefined }]);
+  });
+
+  test('refreshes the UI caches of skills, prompts and commands once the reload succeeded', async () => {
+    const { notify } = makeNotify();
+    let refreshCalls = 0;
+    const refreshResources = () => { refreshCalls += 1; };
+    await reloadPiRuntime({
+      client: { reloadRuntime: async () => ({ reloaded: 1, deferred: 0, failed: 0 }), restartRuntime: mock() },
+      notify,
+      refreshResources,
+    });
+    expect(refreshCalls).toBe(1);
+  });
+
+  test('by default fetches the skills list that Settings shows again', async () => {
+    const { notify } = makeNotify();
+    let loadCalls = 0;
+    const loadSkills = async () => { loadCalls += 1; return true; };
+    const original = useSkillsStore.getState().loadSkills;
+    useSkillsStore.setState({ loadSkills });
+    try {
+      await reloadPiRuntime({
+        client: { reloadRuntime: async () => ({ reloaded: 1, deferred: 0, failed: 0 }), restartRuntime: mock() },
+        notify,
+      });
+      expect(loadCalls).toBe(1);
+    } finally {
+      useSkillsStore.setState({ loadSkills: original });
+    }
+  });
+
+  test('does not refresh when the reload call fails', async () => {
+    const { notify } = makeNotify();
+    let refreshCalls = 0;
+    const refreshResources = () => { refreshCalls += 1; };
+    await reloadPiRuntime({
+      client: { reloadRuntime: async () => { throw new PiRequestError('DAEMON_UNAVAILABLE'); }, restartRuntime: mock() },
+      notify,
+      refreshResources,
+    });
+    expect(refreshCalls).toBe(0);
   });
 
   test('shows an error toast when the call fails', async () => {
