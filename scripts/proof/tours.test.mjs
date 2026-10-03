@@ -41,10 +41,14 @@ describe('tours.mjs format', () => {
     }
   });
   test('lab title and project evidence are taken from the seed manifest, never row position', () => {
-    const tour = labTour({ projects: [{ name: 'one', path: '/one' }, { name: 'two', path: '/two' }], sessions: [{ project: 'one', title: 'Long named session', role: 'long' }] });
-    expect(tour.steps[0].evidence).toEqual([{ text: 'one' }, { text: 'two' }, { text: 'Long named session' }]);
+    const tour = labTour({ projects: [{ name: 'lab-one', path: '/one' }, { name: 'lab_two', path: '/two' }], sessions: [{ project: 'lab-one', title: 'Long named session', role: 'long' }, { project: 'lab_two', title: 'Short session', role: 'short' }] });
+    expect(tour.steps[0].evidence).toEqual([{ text: 'Lab One' }, { text: 'Lab Two' }, { text: 'Long named session' }]);
     expect(tour.steps[1].actions[0]).toEqual({ type: 'click', text: 'Long named session' });
     expect(tour.steps.at(-1).viewport).toBe('mobile');
+    expect(tour.steps.at(-1).evidence).toContainEqual({ text: 'Short session' });
+    expect(tour.steps.at(-1).evidence).not.toContainEqual({ text: 'Long named session' });
+    expect(tour.steps[1].actions).toContainEqual({ type: 'click', selector: 'button[aria-label="Expand activity"]' });
+    expect(tour.steps.at(-1).actions[0]).toEqual({ type: 'navigate', path: 'mobile.html' });
     expect(() => labTour({})).toThrow('Invalid lab seed manifest');
   });
 });

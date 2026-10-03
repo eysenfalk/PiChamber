@@ -55,25 +55,30 @@ export const brokenFixture = validateTour({ name: 'fixture-broken', steps: [
     actions: [{ type: 'navigate', path: '' }], evidence: [{ selector: '#clipped' }] },
 ] });
 
-/** Names are owned by the lab seed manifest, not by the recorder. Runtime selectors remain unverified until integration. */
+/** Names are owned by the lab seed manifest, not by the recorder. Display labels follow sidebar/utils.ts formatProjectLabel; selectors are checked by the lab tour. */
 export function labTour(manifest) {
   const projects = manifest?.projects;
   const sessions = manifest?.sessions;
   const long = sessions?.find(session => session.role === 'long');
+  const short = sessions?.find(session => session.role === 'short');
   if (!Array.isArray(projects) || projects.length < 2 || projects.some(project => !nonempty(project.name) || !nonempty(project.path)) ||
-      !long || !nonempty(long.title) || !projects.some(project => project.name === long.project)) throw new Error('Invalid lab seed manifest');
-  const sidebar = [...projects.map(project => ({ text: project.name })), { text: long.title }];
+      !short || !nonempty(short.title) || !long || !nonempty(long.title) || !projects.some(project => project.name === long.project)) throw new Error('Invalid lab seed manifest');
+  const label = name => name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const sidebar = [...projects.map(project => ({ text: label(project.name) })), { text: long.title }];
   const tool = { selector: '[data-chat-activity-row]', index: 0 };
   return validateTour({ name: 'lab', steps: [
     { caption: 'Prepared projects and sessions in the lab sidebar.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: long.title }], evidence: sidebar },
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(projects[0].name) }, { type: 'click', text: long.title }], evidence: sidebar },
     { caption: 'The long session includes a tool call.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'click', text: long.title }, { type: 'wait', selector: tool.selector }, { type: 'scroll', selector: tool.selector }], evidence: [tool] },
+      actions: [{ type: 'click', text: long.title }, { type: 'wait', selector: 'button[aria-label="Expand activity"]' },
+        { type: 'scroll', selector: 'button[aria-label="Expand activity"]' }, { type: 'click', selector: 'button[aria-label="Expand activity"]' },
+        { type: 'wait', selector: tool.selector }, { type: 'scroll', selector: tool.selector }], evidence: [tool] },
     { caption: 'The same tool call in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ ...tool, selector: 'html.dark [data-chat-activity-row]' }] },
     { caption: 'Projects and sessions in the hosted mobile sidebar.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }],
-      evidence: [{ selector: '[data-mobile-sessions-drawer]' }, ...sidebar] },
+      evidence: [{ selector: '[data-mobile-sessions-drawer] button[aria-pressed="true"]' },
+        ...projects.map(project => ({ text: label(project.name) })), { text: short.title }] },
   ] });
 }

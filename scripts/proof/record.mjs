@@ -15,6 +15,35 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
 const idleProbe = 'window.__proofLastMutation = performance.now(); new MutationObserver(() => { window.__proofLastMutation = performance.now(); }).observe(document, {subtree:true, childList:true, attributes:true, characterData:true});';
 
+// CDP defines an empty loaderId as a request fetched from a worker. Its finish
+// events belong to the worker target, not this page's network/DOM idle gate.
+export const tracksPageRequest = event => event.loaderId !== '' && !['WebSocket', 'EventSource'].includes(event.type);
+export const isStreamingResponse = event => event.type === 'EventSource' || event.response?.mimeType === 'text/event-stream';
+
+export function createPageNetworkGate(now = Date.now) {
+  const pending = new Map();
+  let changed = now();
+  const finished = event => { if (pending.delete(event.requestId)) changed = now(); };
+  return {
+    quiet: () => pending.size === 0 && now() - changed >= 500,
+    handlers: {
+      'Network.requestWillBeSent': event => {
+        if (tracksPageRequest(event)) { pending.set(event.requestId, event.loaderId); changed = now(); }
+      },
+      'Network.loadingFinished': finished,
+      'Network.loadingFailed': finished,
+      'Network.responseReceived': event => { if (isStreamingResponse(event)) finished(event); },
+      // A committed main frame replaces old fetches whose cancellation events
+      // may never reach this target. Keep the new document's pending requests.
+      'Page.frameNavigated': event => {
+        if (event.frame.parentId) return;
+        for (const [id, loader] of pending) if (loader !== event.frame.loaderId) pending.delete(id);
+        changed = now();
+      },
+    },
+  };
+}
+
 /** A visible literal target, matching the smallest element that contains it. */
 function targetPoint(target) {
   const normalize = text => text.replace(/\s+/g, ' ').trim();
@@ -45,8 +74,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   const profileDir = await mkdtemp(join(tmpdir(), 'pichamber-proof-chrome-'));
   let browser, client, frameError, current = 0;
   const frames = [];
-  const requests = new Set();
-  let networkChanged = Date.now();
+  const network = createPageNetworkGate();
   let capturing = false;
   const send = async (method, params = {}) => {
     signal?.throwIfAborted();
@@ -70,12 +98,12 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   };
   const idle = async () => {
     await evaluate('document.fonts.ready.then(() => true)');
-    await until(async () => !requests.size && Date.now() - networkChanged >= 500 &&
+    await until(async () => network.quiet() &&
       await evaluate('document.readyState === "complete" && performance.now() - (window.__proofLastMutation || 0) >= 500'), 'page idle (500ms DOM and finite network quiet)');
   };
   const viewport = async name => {
     const size = VIEWPORTS[name];
-    await send('Emulation.setDeviceMetricsOverride', { ...size, deviceScaleFactor: 1 });
+    await send('Emulation.setDeviceMetricsOverride', { ...size, screenWidth: size.width, screenHeight: size.height, deviceScaleFactor: 1 });
     await send('Emulation.setTouchEmulationEnabled', { enabled: size.mobile, maxTouchPoints: size.mobile ? 5 : 1 });
   };
   const theme = async mode => {
@@ -99,11 +127,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await client.connect();
     await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
     await send('Page.addScriptToEvaluateOnNewDocument', { source: idleProbe });
-    client.on('Network.requestWillBeSent', event => {
-      if (!['WebSocket', 'EventSource'].includes(event.type)) { requests.add(event.requestId); networkChanged = Date.now(); }
-    });
-    for (const name of ['Network.loadingFinished', 'Network.loadingFailed']) client.on(name, event => { requests.delete(event.requestId); networkChanged = Date.now(); });
-    client.on('Network.responseReceived', event => { if (event.type === 'EventSource') requests.delete(event.requestId); });
+    for (const [name, handler] of Object.entries(network.handlers)) client.on(name, handler);
     await viewport(tour.steps[0].viewport);
     // Give about:blank the target origin before applying storage-backed theme.
     const navigation = await send('Page.navigate', { url: targetUrl.href });
@@ -164,7 +188,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await writeFile(join(out, 'raw/frames.ffconcat'), frameTimeline(frames, endedAt));
     runFfmpeg(videoArgs()); runFfmpeg(contactSheetArgs(files));
     await writeFile(join(out, 'index.md'), proofIndex(tour, files));
-    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'proven', tour: tour.name, steps: tour.steps.map((step, index) => ({ caption: step.caption, image: files[index].image, viewport: step.viewport, theme: step.theme, evidence: step.evidence })), selectorsVerified: tour.name !== 'lab' }, null, 2) + '\n');
+    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'proven', tour: tour.name, steps: tour.steps.map((step, index) => ({ caption: step.caption, image: files[index].image, viewport: step.viewport, theme: step.theme, evidence: step.evidence })), selectorsVerified: true }, null, 2) + '\n');
     await rm(join(out, 'raw'), { recursive: true, force: true });
     return out;
   } catch (error) {
