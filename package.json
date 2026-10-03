@@ -41,7 +41,7 @@
     "test": "node scripts/lab/test-env.mjs --run",
     "proof:publish": "node scripts/proof/publish.mjs",
     "test:repo": "bun test scripts/workflow",
-    "test:tools": "bun test scripts/lab",
+    "test:tools": "bun test scripts/lab scripts/proof",
     "test:web": "bun run --cwd packages/web test",
     "test:runtime": "bun run --cwd packages/web test:runtime",
     "test:ui": "bun run --cwd packages/ui test",

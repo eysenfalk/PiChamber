@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host controller only. The only host mount is the checkout, read-only.
+# Host controller only. Source is read-only; only .proof is writable during recording.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 name=pichamber-lab
@@ -8,9 +8,16 @@ url=http://127.0.0.1:3111
 # Infra is limited separately before starting. Together with lab.yaml: 4 CPUs, 8 GiB.
 infra_cpus=0.1
 infra_memory=128m
+recorder_cpus=2
+recorder_memory=4096m
 build_cpus=4
 build_memory=8g
-if [[ $# != 1 ]]; then echo 'usage: lab/run up|down|status' >&2; exit 2; fi
+usage() { echo 'usage: lab/run up|down|status|record <lab|fixture-broken>' >&2; exit 2; }
+if [[ ${1:-} == record ]]; then
+  [[ $# == 2 && ( $2 == lab || $2 == fixture-broken ) ]] || usage
+else
+  [[ $# == 1 && ( $1 == up || $1 == down || $1 == status ) ]] || usage
+fi
 if [[ "$(podman info --format '{{.Host.Security.Rootless}}')" != true ]]; then
   echo 'lab/run requires rootless podman.' >&2; exit 1
 fi
@@ -74,7 +81,7 @@ case "$1" in
       --publish=127.0.0.1:3111:3000 "$manifest"
     infra="$(podman pod inspect "$name" --format '{{.InfraContainerID}}')"
     podman update --cpus="$infra_cpus" --memory="$infra_memory" --memory-swap="$infra_memory" "$infra" >/dev/null
-    podman update --memory-swap=8064m "$name-server" >/dev/null
+    podman update --memory-swap=3968m "$name-server" >/dev/null
     podman pod start "$name" >/dev/null
     # Volume root is owned by the mapped user on first mount under keep-id.
     ready=false
@@ -87,6 +94,26 @@ case "$1" in
     trap - ERR INT TERM
     echo "$url"
     ;;
+  record)
+    [[ "$(podman inspect "$name-server" --format '{{.State.Running}}')" == true ]] || {
+      echo 'Start the lab with lab/run up first.' >&2; exit 1;
+    }
+    [[ ! -L "$root/.proof" ]] || { echo '.proof must not be a symlink.' >&2; exit 1; }
+    mkdir -p "$root/.proof"
+    # Use exactly the running server image, not an unbuilt or newer tag.
+    tag="$(podman inspect "$name-server" --format '{{.Image}}')"
+    trap 'podman rm --force "$name-recorder" >/dev/null 2>&1 || true' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    podman run --rm --name "$name-recorder" --network="$name" --userns=keep-id \
+      --user="$(id -u):$(id -g)" --cap-drop=ALL --security-opt=no-new-privileges \
+      --read-only --tmpfs=/tmp:rw,size=512m --shm-size=256m \
+      --cpus="$recorder_cpus" --memory="$recorder_memory" --memory-swap="$recorder_memory" \
+      --volume="$root:/repo:ro" --volume="$root/.proof:/repo/.proof:rw" \
+      --workdir=/repo --env=HOME=/tmp --env=XDG_CONFIG_HOME=/tmp/config \
+      --env=XDG_CACHE_HOME=/tmp/cache "$tag" \
+      node scripts/proof/record.mjs "$2" --url "http://$name:3000/" --chrome /repo/lab/chromium
+    ;;
   down) cleanup ;;
   status)
     if ! podman pod exists "$name"; then echo 'Lab is down.'; exit 0; fi
@@ -95,5 +122,5 @@ case "$1" in
     curl --fail --silent --show-error --max-time 5 "$url/api/pi/runtime"
     printf '\n%s\n' "$url"
     ;;
-  *) echo 'usage: lab/run up|down|status' >&2; exit 2 ;;
+  *) usage ;;
 esac

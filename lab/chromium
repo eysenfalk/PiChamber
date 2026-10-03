@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Only used by the read-only rootless lab recorder; never by host recording.
+exec /usr/local/bin/chromium --no-sandbox "$@"

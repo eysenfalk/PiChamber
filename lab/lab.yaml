@@ -20,8 +20,8 @@ spec:
           drop: [ALL]
       resources:
         limits:
-          cpu: "3.9"
-          memory: 8064Mi
+          cpu: "1.9"
+          memory: 3968Mi
       env:
         - { name: HOME, value: /lab }
         - { name: XDG_RUNTIME_DIR, value: /lab/runtime }
