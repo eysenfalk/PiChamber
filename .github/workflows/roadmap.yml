@@ -1,0 +1,37 @@
+name: Roadmap
+
+# Regenerates the order and graph in the roadmap issue (tracker.roadmap in workflow.json) from its
+# sub-issues (docs/workflow.md, The roadmap). Sub-issue and dependency changes may not raise an issues
+# event, so a schedule catches them; roadmap-sync.mjs add and move regenerate directly.
+on:
+  issues:
+    types: [opened, edited, closed, reopened, deleted, transferred, labeled, unlabeled]
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: roadmap
+  cancel-in-progress: true
+
+jobs:
+  roadmap:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '24'
+
+      - name: Regenerate the roadmap issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/workflow/roadmap-sync.mjs sync

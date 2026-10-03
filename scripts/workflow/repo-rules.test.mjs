@@ -97,9 +97,10 @@ describe('CONTEXT.md entries', () => {
 });
 
 describe('workflow.json', () => {
-  test('a GitHub tracker needs its repository', () => {
+  test('a GitHub tracker needs its repository and its roadmap issue', () => {
     expect(workflowConfigProblems({ tracker: { type: 'github' }, plans: 'pull-request' }, false)).toEqual([
       'tracker.repo is required for tracker.type github',
+      'tracker.roadmap is required for tracker.type github',
     ]);
   });
 
@@ -108,7 +109,7 @@ describe('workflow.json', () => {
       'a local tracker needs plans: file',
     ]);
     expect(workflowConfigProblems({ tracker: { type: 'local', dir: 'issues' }, plans: 'file' }, true)).toEqual([]);
-    expect(workflowConfigProblems({ tracker: { type: 'github', repo: 'a/b' }, plans: 'pull-request' }, true)).toEqual([
+    expect(workflowConfigProblems({ tracker: { type: 'github', repo: 'a/b', roadmap: 1 }, plans: 'pull-request' }, true)).toEqual([
       'PLAN.md must exist exactly when plans is file',
     ]);
   });

@@ -51,14 +51,14 @@ Shared contracts must define intentional behavior for every applicable runtime: 
 
 Work follows [docs/workflow.md](docs/workflow.md) ([ADR 0002](docs/adr/0002-workflow-from-jira-connector.md)); `workflow.json` names the tracker.
 
-1. A GitHub issue in `eysenfalk/PiChamber` says what is missing and how we know it is done.
+1. A GitHub issue in `eysenfalk/PiChamber` says what is missing and how we know it is done. Planned work is a roadmap item: an issue labeled `roadmap` and a sub-issue of the roadmap issue (`tracker.roadmap` in `workflow.json`), whose order is the order of work.
 2. Branch `<issue>-short-name` from `origin/main`, push it, and open a **draft** pull request from `.github/PULL_REQUEST_TEMPLATE.md`. The description is the plan.
 3. Wait for the user to approve the plan. Do not implement before.
 4. Implement and prove: tests, and for anything a user sees, a recording or screenshots of the real program that you have looked at completely, with how to reproduce them. Check off each acceptance criterion in the description as soon as it is done and proven.
-5. Decisions go into `docs/adr/`, findings from outside the code into `CONTEXT.md`, settled entries leave `CONTEXT.md`, the finished roadmap line leaves `ROADMAP.md`, all in the same pull request.
+5. Decisions go into `docs/adr/`, findings from outside the code into `CONTEXT.md`, settled entries leave `CONTEXT.md`, all in the same pull request. The squash merge closes the issue, which takes it off the roadmap.
 6. Before the hand-over, check the whole description against the current code, CI result and proof, then mark the pull request ready. The user merges (squash only).
 
-Without asking, agents may: create and push branches other than `main`, open and update draft pull requests in `eysenfalk/PiChamber`, draft issues, and add `Proposed` decision records.
+Without asking, agents may: create and push branches other than `main`, open and update draft pull requests in `eysenfalk/PiChamber`, create issues, place and reorder roadmap items and add ideas to the roadmap issue (`node scripts/workflow/roadmap-sync.mjs`, docs/workflow.md), and add `Proposed` decision records.
 Only with approval: implement a plan, mark a pull request ready or merge it, push to `main`, rewrite pushed history, tags and releases, repository settings, close issues, and anything in an upstream repository.
 
 ## Correctness Invariants
