@@ -4,6 +4,7 @@ metadata:
   name: pichamber-lab
   labels:
     app: pichamber-lab
+    io.pichamber.lab.checkout: LAB_REPOSITORY
 spec:
   restartPolicy: Never
   containers:

@@ -4,7 +4,7 @@ import { delimiter, dirname, isAbsolute } from 'node:path';
 // A PiChamber/Electron parent must not select its installed assets, password or daemon for tests.
 export function isolatedTestEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key]) =>
-    !key.startsWith('PICHAMBER_') && !['PICHAMBER', 'PI_PACKAGE_DIR', 'ELECTRON_RUN_AS_NODE'].includes(key)));
+    (!key.startsWith('PICHAMBER_') || key.startsWith('PICHAMBER_TEST_')) && !['PICHAMBER', 'PI_PACKAGE_DIR', 'ELECTRON_RUN_AS_NODE'].includes(key)));
 }
 
 if (process.argv[2] === '--run') {

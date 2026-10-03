@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, rm, stat, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 // PiChamber's parent may point PI_PACKAGE_DIR into an Electron asar.
@@ -61,3 +61,37 @@ test('the seed clock restores Date even when the SDK writer throws', async () =>
     await rm(temporary, { recursive: true, force: true });
   }
 });
+
+test('an interrupted seed preserves projects not named by the manifest', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'pichamber-seed-owned-'));
+  const root = join(temporary, 'lab');
+  try {
+    await mkdir(join(root, 'projects/real-project'), { recursive: true });
+    await writeFile(join(root, 'projects/real-project/keep'), 'untouched');
+    await seedLab(root);
+    expect(await readFile(join(root, 'projects/real-project/keep'), 'utf8')).toBe('untouched');
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+
+for (const unsafe of ['mixed-agent-state', 'symlinked-projects', 'symlinked-agent']) {
+  test(`seeding refuses ${unsafe} before removing any fixture`, async () => {
+    const temporary = await mkdtemp(join(tmpdir(), 'pichamber-seed-guard-'));
+    const root = join(temporary, 'lab');
+    try {
+      await mkdir(join(root, 'projects/lab-alpha'), { recursive: true });
+      await writeFile(join(root, 'projects/lab-alpha/keep'), 'untouched');
+      await mkdir(join(temporary, 'outside/sessions'), { recursive: true });
+      await writeFile(join(temporary, 'outside/sessions/keep'), 'untouched');
+      if (unsafe === 'mixed-agent-state') {
+        await mkdir(join(root, 'pi-agent'));
+        await writeFile(join(root, 'pi-agent/auth.json'), 'synthetic');
+      } else if (unsafe === 'symlinked-projects') {
+        await rm(join(root, 'projects'), { recursive: true });
+        await symlink(join(temporary, 'outside'), join(root, 'projects'));
+      } else await symlink(join(temporary, 'outside'), join(root, 'pi-agent'));
+      await expect(seedLab(root)).rejects.toThrow(unsafe === 'mixed-agent-state' ? 'must contain only sessions' : 'must not be a symlink');
+      expect(await readFile(join(temporary, 'outside/sessions/keep'), 'utf8')).toBe('untouched');
+      if (unsafe !== 'symlinked-projects') expect(await readFile(join(root, 'projects/lab-alpha/keep'), 'utf8')).toBe('untouched');
+    } finally { await rm(temporary, { recursive: true, force: true }); }
+  });
+}

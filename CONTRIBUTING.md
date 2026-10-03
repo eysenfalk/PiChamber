@@ -134,7 +134,7 @@ bun run test
 bun run build
 ```
 
-`bun run test` runs the web, UI, and Electron unit suites. Mobile has package
+`bun run test` runs repository rules, tools, web, UI and Electron suites through the host runner `scripts/lab/test-env.mjs`. It removes inherited `PICHAMBER_*` runtime selectors except `PICHAMBER_TEST_*`, plus `PICHAMBER`, `PI_PACKAGE_DIR` and `ELECTRON_RUN_AS_NODE`, and uses the invoking Bun for nested commands. Mobile has package
 scoped type-check and lint scripts, while native builds are validated through
 the mobile workflows or platform tools.
 

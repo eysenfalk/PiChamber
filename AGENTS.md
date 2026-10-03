@@ -116,7 +116,7 @@ Pure code-reading or explanation does not require implementation skills unless n
 - Tests needing a separate environment (lab, recordings and acceptance tests through the lab) run through `lab/run`. Install, builds, type checks, lint, unit tests and all other work stay on the host. Load `pichamber-verify` for visual proof.
 - Use `package.json` scripts as the command source of truth.
 - Prefer focused tests and package-scoped type-check/lint for executable source changes.
-- `bun run test` runs every unit suite (web, ui, electron) and must pass before handoff. UI tests run under `bun test --isolate` (per-file isolation) because bun's `mock.module()` is process-global; keep new UI test files self-contained and avoid partial mocks of shared modules.
+- `bun run test` runs repository rules, tools, web, UI and Electron suites through `scripts/lab/test-env.mjs` and must pass before handoff. The host runner removes inherited `PICHAMBER_*` runtime selectors (keeps `PICHAMBER_TEST_*`), `PICHAMBER`, `PI_PACKAGE_DIR` and `ELECTRON_RUN_AS_NODE`; it retains the invoking Bun for nested commands. UI tests run under `bun test --isolate` (per-file isolation) because bun's `mock.module()` is process-global; keep new UI test files self-contained and avoid partial mocks of shared modules.
 - Use workspace-wide checks for cross-workspace contracts, root tooling, dependencies, or shared generated assets.
 - Run `bun run dead-code` when source files are added/deleted/renamed or exports, types, entrypoints, or import shape change; inspect its report because it is non-blocking.
 - Do not assume TypeScript/lint covers server JS, CLI JS, Electron helpers, or native behavior; run focused tests, syntax checks, builds, or runtime validation for the touched surface.

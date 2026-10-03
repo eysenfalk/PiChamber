@@ -21,13 +21,31 @@ fi
 if [[ "$(podman info --format '{{.Host.Security.Rootless}}')" != true ]]; then
   echo 'lab/run requires rootless podman.' >&2; exit 1
 fi
-exec 9>"${XDG_RUNTIME_DIR:-/tmp}/pichamber-lab.lock"
+# Lock the private runtime directory inode, not a writable (possibly symlinked) file.
+exec 9<"${XDG_RUNTIME_DIR:?lab/run requires XDG_RUNTIME_DIR}"
 flock 9
 # Conmon survives podman; never let it inherit and retain the lifecycle lock.
 podman() { command podman "$@" 9>&-; }
+check_checkout() {
+  local owner
+  owner="$(podman pod inspect "$name" --format '{{index .Labels "io.pichamber.lab.checkout"}}')" || return 1
+  if [[ "$owner" != "$root" ]]; then
+    echo "Lab belongs to another checkout: ${owner:-unknown}; run lab/run there. Refusing from $root." >&2
+    return 1
+  fi
+}
+verify_limits() {
+  local actual expected="$2 100000 $3 $3"
+  actual="$(podman inspect "$1" --format '{{.HostConfig.CpuQuota}} {{.HostConfig.CpuPeriod}} {{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}')" || return 1
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Lab resource limits not applied for $1: expected $expected; got $actual. Check cgroup v2 delegation." >&2
+    return 1
+  fi
+}
 cleanup() {
   local result=0 remaining attempt
   if podman pod exists "$name"; then
+    check_checkout || return 1
     for attempt in 1 2 3; do
       if podman pod rm --force "$name"; then break; fi
       if ! podman pod exists "$name"; then break; fi
@@ -81,8 +99,24 @@ case "$1" in
       --publish=127.0.0.1:3111:3000 "$manifest"
     infra="$(podman pod inspect "$name" --format '{{.InfraContainerID}}')"
     podman update --cpus="$infra_cpus" --memory="$infra_memory" --memory-swap="$infra_memory" "$infra" >/dev/null
-    podman update --memory-swap=3968m "$name-server" >/dev/null
+    # Derive the server swap ceiling and expected cgroup values from the pod contract.
+    limits="$(cd "$root" && node --input-type=module -e '
+      import fs from "node:fs";
+      import { parse } from "yaml";
+      const limits = parse(fs.readFileSync(process.argv[1], "utf8")).spec.containers.find(c => c.name === "server").resources.limits;
+      const bytes = value => {
+        const match = String(value).match(/^([0-9.]+)(Mi|Gi|m|g)$/);
+        if (!match) throw new Error("Unknown memory unit: " + value);
+        return Number(match[1]) * (match[2] === "Gi" || match[2] === "g" ? 1024 ** 3 : 1024 ** 2);
+      };
+      const quota = value => Math.round(Number(value) * 100000);
+      console.log(quota(limits.cpu), bytes(limits.memory), quota(process.argv[2]), bytes(process.argv[3]));
+    ' "$root/lab/lab.yaml" "$infra_cpus" "$infra_memory")"
+    read -r server_quota server_memory infra_quota infra_bytes <<< "$limits"
+    podman update --memory-swap="$server_memory" "$name-server" >/dev/null
     podman pod start "$name" >/dev/null
+    verify_limits "$name-server" "$server_quota" "$server_memory"
+    verify_limits "$infra" "$infra_quota" "$infra_bytes"
     # Volume root is owned by the mapped user on first mount under keep-id.
     ready=false
     for ((i=0; i<90; i++)); do
@@ -117,6 +151,8 @@ case "$1" in
   down) cleanup ;;
   status)
     if ! podman pod exists "$name"; then echo 'Lab is down.'; exit 0; fi
+    check_checkout
+    echo "Checkout: $root"
     podman pod ps --filter name="^$name$"
     podman ps --all --filter pod="$name"
     curl --fail --silent --show-error --max-time 5 "$url/api/pi/runtime"
