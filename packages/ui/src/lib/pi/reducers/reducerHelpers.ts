@@ -172,6 +172,24 @@ const latestUserMessageId = (session: PiReducerSessionState): string | undefined
   return undefined;
 };
 
+// A displayed extension message (`pi.sendMessage`) carries text or details;
+// an appended entry (`pi.appendEntry`) carries only `data`. Only the former
+// can trigger a turn.
+const isDisplayedExtensionMessage = (message: PiReducerMessage): boolean => (
+  message.role === 'extension'
+  && (message.text.length > 0 || message.details !== undefined)
+);
+
+/** The latest user prompt or displayed extension message: the owner of an unparented assistant reply. */
+const latestTurnHeadId = (session: PiReducerSessionState): string | undefined => {
+  const messages = uniqueSessionMessages(session);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (candidate?.role === 'user' || (candidate && isDisplayedExtensionMessage(candidate))) return candidate.id;
+  }
+  return undefined;
+};
+
 export const resolveParentId = (session: PiReducerSessionState, parentId?: string): string | undefined => {
   if (!parentId) return undefined;
   const direct = session.messages.get(parentId)?.id;
@@ -200,11 +218,12 @@ export const ensureMessage = (
     }
   }
   // A live assistant start without a parent is a turn Pi began without a user
-  // prompt (extension `triggerTurn`, e.g. async subagent results). History
-  // projection owns such a reply to the latest preceding user entry; mirror
-  // that here so the live timeline groups it instead of dropping it.
+  // prompt (extension `triggerTurn`, e.g. async subagent results or a
+  // supervisor request). History projection owns such a reply to the latest
+  // preceding user entry or displayed extension message; mirror that here so
+  // the live timeline groups it in order instead of dropping it.
   const parentId = payload.parentId === undefined && payload.role === 'assistant'
-    ? latestUserMessageId(session)
+    ? latestTurnHeadId(session)
     : resolveParentId(session, payload.parentId);
   const message: PiReducerMessage = {
     id: payload.messageId,

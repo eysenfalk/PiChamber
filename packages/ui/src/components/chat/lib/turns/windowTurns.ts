@@ -1,3 +1,4 @@
+import { collectExtensionTurnHeadIds } from './extensionTurnHeads';
 import type { ChatMessageEntry } from './types';
 
 const resolveMessageRole = (message: ChatMessageEntry): string => {
@@ -144,13 +145,15 @@ export const buildTurnWindowModel = (messages: ChatMessageEntry[]): TurnWindowMo
     const messageToTurnIndex = new Map<string, number>();
     const userMessageToTurnIndex = new Map<string, number>();
 
+    const extensionTurnHeadIds = collectExtensionTurnHeadIds(messages);
+
     let currentTurnIndex = -1;
 
     messages.forEach((message, index) => {
         const role = resolveMessageRole(message);
         const messageId = message.info.id;
 
-        if (role === 'user') {
+        if (role === 'user' || (role === 'extension' && extensionTurnHeadIds.has(messageId))) {
             currentTurnIndex = turnIds.length;
             turnIds.push(messageId);
             turnMessageStartIndexes.push(index);

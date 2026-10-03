@@ -1213,3 +1213,93 @@ describe("unsolicited assistant turns", () => {
     expect(empty.bySession.get("sess-1")?.messages.get("lonely")?.parentId).toBeUndefined()
   })
 })
+
+describe("turn-triggering extension messages", () => {
+  // A displayed extension message (`pi.sendMessage`, e.g. a pi-subagents
+  // supervisor request) that triggers a turn heads that turn. The assistant
+  // reply starts without `parentId`, so it must attach to the message that
+  // triggered it, not to the previous user prompt. Extension entries
+  // (`pi.appendEntry`) never trigger turns.
+  const hydrateWithUserTurn = (extra: Array<{ message: Record<string, unknown>; parts: [] }> = []) => hydrateSessionFromDetail({
+    session: { id: "sess-1", directory: "/work" },
+    lastSequence: 10,
+    messages: [
+      {
+        message: { id: "u1", sessionId: "sess-1", directory: "/work", role: "user" as const, text: "start a worker", createdAt: 1_000 },
+        parts: [],
+      },
+      {
+        message: { id: "a1", sessionId: "sess-1", directory: "/work", role: "assistant" as const, parentId: "u1", text: "launched", thinking: "", createdAt: 1_100, durationMs: 10 },
+        parts: [{ id: "a1:text:0", index: 0, type: "text" as const, text: "launched" }],
+      },
+      ...extra,
+    ],
+  } as Parameters<typeof hydrateSessionFromDetail>[0]).state
+
+  const supervisorRequest = (sequence: number, id = "custom-sess-1-12") => baseEvent("extension.message", sequence, {
+    id,
+    customType: "subagent_supervisor_request",
+    text: "Subagent needs a supervisor decision.",
+    details: { reason: "decision", agent: "worker" },
+    createdAt: 3_000,
+  })
+
+  const playTriggeredTurn = (initial: ReturnType<typeof createReducerState>, firstSequence: number) => applyPiEvents(initial, [
+    baseEvent("session.lifecycle", firstSequence, { state: "busy" }),
+    supervisorRequest(firstSequence + 1, `custom-sess-1-${firstSequence + 1}`),
+    baseEvent("assistant.message.start", firstSequence + 2, { messageId: "auto", role: "assistant", startedAt: 3_100 }),
+    baseEvent("assistant.message.end", firstSequence + 3, { messageId: "auto", text: "I will answer", thinking: "", durationMs: 50 }),
+    baseEvent("session.lifecycle", firstSequence + 4, { state: "idle" }),
+  ]).state
+
+  const projectTurns = (state: ReturnType<typeof createReducerState>) => {
+    const session = state.bySession.get("sess-1") as PiReducerSessionState
+    return projectTurnRecords(piProjectedToRecords(projectSession(session)))
+  }
+
+  test("attaches a parentless reply to the extension message that triggered it", () => {
+    const state = playTriggeredTurn(hydrateWithUserTurn(), 11)
+
+    expect(state.bySession.get("sess-1")?.messages.get("auto")?.parentId).toBe("custom-sess-1-12")
+    const projection = projectTurns(state)
+    expect(projection.turns.map((turn) => turn.turnId)).toEqual(["u1", "custom-sess-1-12"])
+    expect(projection.turns.map((turn) => turn.assistantMessageIds)).toEqual([["a1"], ["auto"]])
+    expect(projection.ungroupedMessageIds.has("custom-sess-1-12")).toBe(false)
+  })
+
+  test("attaches to a hydrated displayed extension message after the last user message", () => {
+    const hydrated = hydrateWithUserTurn([
+      { message: { id: "entry-cm", role: "extension", createdAt: 2_000, customType: "subagent_supervisor_request", text: "Needs a decision", details: { reason: "decision" } }, parts: [] },
+    ])
+    const state = applyPiEvents(hydrated, [
+      baseEvent("assistant.message.start", 11, { messageId: "auto", role: "assistant", startedAt: 3_100 }),
+    ]).state
+
+    expect(state.bySession.get("sess-1")?.messages.get("auto")?.parentId).toBe("entry-cm")
+  })
+
+  test("keeps the latest user message as owner when it follows the extension message", () => {
+    let state = playTriggeredTurn(hydrateWithUserTurn(), 11)
+    state = applyPiEvents(state, [
+      baseEvent("assistant.message.start", 16, { messageId: "user-sess-1-16", role: "user", text: "next prompt", startedAt: 4_000 }),
+      baseEvent("assistant.message.start", 17, { messageId: "auto-2", role: "assistant", startedAt: 4_100 }),
+    ]).state
+
+    expect(state.bySession.get("sess-1")?.messages.get("auto-2")?.parentId).toBe("user-sess-1-16")
+  })
+
+  test("ignores extension entries and never replaces an explicit parentId", () => {
+    const withEntry = applyPiEvents(hydrateWithUserTurn(), [
+      baseEvent("extension.entry", 11, { id: "entry-1", customType: "subagent_supervisor_reply", data: { message: "go" }, createdAt: 2_000 }),
+      baseEvent("assistant.message.start", 12, { messageId: "auto", role: "assistant", startedAt: 3_100 }),
+    ]).state
+    expect(withEntry.bySession.get("sess-1")?.messages.get("auto")?.parentId).toBe("u1")
+
+    const explicit = applyPiEvents(hydrateWithUserTurn(), [
+      supervisorRequest(11),
+      baseEvent("assistant.message.start", 12, { messageId: "explicit", role: "assistant", parentId: "u1", startedAt: 3_100 }),
+    ]).state
+    expect(explicit.bySession.get("sess-1")?.messages.get("explicit")?.parentId).toBe("u1")
+  })
+})
+
