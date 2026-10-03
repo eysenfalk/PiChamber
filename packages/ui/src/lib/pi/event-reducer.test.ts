@@ -1140,3 +1140,76 @@ describe("Pi usage", () => {
     expect(session.thinking).toBe("high")
   })
 })
+
+describe("unsolicited assistant turns", () => {
+  // Pi starts a turn without a user prompt when an extension sends a message
+  // with `triggerTurn` (e.g. pi-subagents delivering async results). The
+  // daemon has no user message for that turn, so `assistant.message.start`
+  // arrives without `parentId`. History projection groups such a reply under
+  // the latest preceding user entry; the live reducer must do the same or the
+  // chat timeline drops the reply until the next reload.
+  const hydrateSettledTurn = () => hydrateSessionFromDetail({
+    session: { id: "sess-1", directory: "/work" },
+    lastSequence: 10,
+    messages: [
+      {
+        message: { id: "u1", sessionId: "sess-1", directory: "/work", role: "user" as const, text: "start subagents", createdAt: 1_000 },
+        parts: [],
+      },
+      {
+        message: { id: "a1", sessionId: "sess-1", directory: "/work", role: "assistant" as const, parentId: "u1", text: "launched", thinking: "", createdAt: 1_100, durationMs: 10 },
+        parts: [{ id: "a1:text:0", index: 0, type: "text" as const, text: "launched" }],
+      },
+    ],
+  }).state
+
+  const playUnsolicitedTurn = (initial: ReturnType<typeof createReducerState>, firstSequence: number) => applyPiEvents(initial, [
+    baseEvent("session.lifecycle", firstSequence, { state: "busy" }),
+    baseEvent("assistant.message.start", firstSequence + 1, { messageId: "auto", role: "assistant", startedAt: 5_000 }),
+    baseEvent("assistant.message.delta", firstSequence + 2, { messageId: "auto", contentIndex: 0, delta: "RESULTS" }),
+    baseEvent("assistant.message.end", firstSequence + 3, { messageId: "auto", text: "RESULTS", thinking: "", durationMs: 50 }),
+    baseEvent("session.lifecycle", firstSequence + 4, { state: "idle" }),
+  ]).state
+
+  const projectTurns = (state: ReturnType<typeof createReducerState>) => {
+    const session = state.bySession.get("sess-1") as PiReducerSessionState
+    return projectTurnRecords(piProjectedToRecords(projectSession(session)))
+  }
+
+  test("groups a parentless live reply under the latest hydrated user turn", () => {
+    const state = playUnsolicitedTurn(hydrateSettledTurn(), 11)
+
+    expect(state.bySession.get("sess-1")?.messages.get("auto")?.parentId).toBe("u1")
+    const projection = projectTurns(state)
+    expect(projection.turns).toHaveLength(1)
+    expect(projection.turns[0]?.assistantMessageIds).toEqual(["a1", "auto"])
+  })
+
+  test("groups a parentless live reply under a user turn that arrived live", () => {
+    let state = hydrateSettledTurn()
+    state = applyPiEvents(state, [
+      baseEvent("session.lifecycle", 11, { state: "busy" }),
+      baseEvent("assistant.message.start", 12, { messageId: "user-sess-1-12", role: "user", text: "second prompt", startedAt: 2_000 }),
+      baseEvent("assistant.message.start", 13, { messageId: "a2", role: "assistant", parentId: "user-sess-1-12", startedAt: 2_100 }),
+      baseEvent("assistant.message.end", 14, { messageId: "a2", text: "launched again", thinking: "", durationMs: 10 }),
+      baseEvent("session.lifecycle", 15, { state: "idle" }),
+    ]).state
+    state = playUnsolicitedTurn(state, 16)
+
+    expect(state.bySession.get("sess-1")?.messages.get("auto")?.parentId).toBe("user-sess-1-12")
+    const projection = projectTurns(state)
+    expect(projection.turns.map((turn) => turn.assistantMessageIds)).toEqual([["a1"], ["a2", "auto"]])
+  })
+
+  test("keeps an explicit parentId and invents none without a user message", () => {
+    const explicit = applyPiEvent(hydrateSettledTurn(), baseEvent("assistant.message.start", 11, {
+      messageId: "explicit", role: "assistant", parentId: "u-other", startedAt: 5_000,
+    })).state
+    expect(explicit.bySession.get("sess-1")?.messages.get("explicit")?.parentId).toBe("u-other")
+
+    const empty = applyPiEvent(createReducerState(), baseEvent("assistant.message.start", 1, {
+      messageId: "lonely", role: "assistant", startedAt: 5_000,
+    })).state
+    expect(empty.bySession.get("sess-1")?.messages.get("lonely")?.parentId).toBeUndefined()
+  })
+})
