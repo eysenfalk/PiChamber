@@ -44,10 +44,26 @@ describe('media.mjs planning without Chromium or ffmpeg', () => {
   });
   test('screencast intervals and final static hold survive encoding; unsafe frames fail', () => {
     const frames = [{ file: 'frames/000001.jpg', timestamp: 1 }, { file: 'frames/000002.jpg', timestamp: 3 }];
-    expect(frameTimeline(frames, 5)).toBe("ffconcat version 1.0\nfile 'frames/000001.jpg'\nduration 2.000000\nfile 'frames/000002.jpg'\nduration 2.000000\nfile 'frames/000002.jpg'\n");
+    expect(frameTimeline(frames, 5).content).toBe("ffconcat version 1.0\nfile 'frames/000001.jpg'\nduration 2.000000\nfile 'frames/000002.jpg'\nduration 2.000000\nfile 'frames/000002.jpg'\n");
     expect(() => frameTimeline([], 1)).toThrow('No screencast');
     expect(() => frameTimeline([{ file: '../escape', timestamp: 1 }], 3)).toThrow('Invalid screencast');
     expect(() => frameTimeline(frames, 2)).toThrow('Invalid screencast timing');
+  });
+  test('drops the real backward CDP timestamp without rewinding or shortening static holds', () => {
+    const frames = [
+      { file: 'frames/000030.jpg', timestamp: 1791020378.059534 },
+      { file: 'frames/000031.jpg', timestamp: 1791020379.059534 },
+      { file: 'frames/000032.jpg', timestamp: 1791020379.052211 },
+      { file: 'frames/000033.jpg', timestamp: 1791020380.059534 },
+    ];
+    const timeline = frameTimeline(frames, 1791020382.059534);
+    expect(timeline.droppedFrames).toBe(1);
+    expect(timeline.content).not.toContain('000032.jpg');
+    expect(timeline.content.match(/duration [0-9.]+/g)).toEqual(['duration 1.000000', 'duration 1.000000', 'duration 2.000000']);
+    expect(frameTimeline(frames.slice(0, 3), 1791020382.059534).content).toContain('duration 3.000000');
+    expect(frameTimeline([{ file: 'frames/1.jpg', timestamp: 1 }, { file: 'frames/2.jpg', timestamp: 1 }], 2).droppedFrames).toBe(0);
+    expect(() => frameTimeline([...frames, { file: '../escape', timestamp: 0 }], 1791020382.059534)).toThrow('Invalid screencast frame');
+    expect(() => frameTimeline([{ file: 'frames/1.jpg', timestamp: NaN }], 2)).toThrow('Invalid screencast frame');
   });
   test('index names every caption and artifact', () => {
     const index = proofIndex(fixture, files);

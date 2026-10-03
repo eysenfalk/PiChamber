@@ -53,18 +53,25 @@ export function contactSheetArgs(files) {
   return [...ffmpegBase, '-filter_complex_threads', '1', ...files.flatMap(file => ['-i', file.image]), '-filter_complex', filters.join(';'), '-map', '[out]', '-frames:v', '1', 'contact-sheet.png'];
 }
 
-/** CDP ScreencastFrameMetadata timestamps are seconds since epoch. Preserve static holds. */
+/** CDP timestamps are epoch seconds. Drop late frames, preserving retained static holds. */
 export function frameTimeline(frames, endedAt) {
   if (!frames.length) throw new Error('No screencast frames captured');
-  const lines = ['ffconcat version 1.0'];
-  frames.forEach((frame, index) => {
+  const retained = [];
+  for (const frame of frames) {
     if (!(frame.file.startsWith('frames/') && /^[0-9]+\.jpg$/.test(frame.file.slice(7))) || !Number.isFinite(frame.timestamp)) throw new Error('Invalid screencast frame');
-    const end = frames[index + 1]?.timestamp ?? endedAt;
+    // Arrival order is not timestamp order. A late image must not rewind the video
+    // or steal time from a newer image. Validate even the frames we discard.
+    if (retained.length && frame.timestamp < retained.at(-1).timestamp) continue;
+    retained.push(frame);
+  }
+  const lines = ['ffconcat version 1.0'];
+  retained.forEach((frame, index) => {
+    const end = retained[index + 1]?.timestamp ?? endedAt;
     if (!Number.isFinite(end) || end < frame.timestamp) throw new Error('Invalid screencast timing at frame ' + (index + 1) + ': ' + frame.timestamp + ' -> ' + end);
     lines.push("file '" + frame.file + "'", 'duration ' + Math.max(1 / 30, end - frame.timestamp).toFixed(6));
   });
-  lines.push("file '" + frames.at(-1).file + "'");
-  return lines.join('\n') + '\n';
+  lines.push("file '" + retained.at(-1).file + "'");
+  return { content: lines.join('\n') + '\n', droppedFrames: frames.length - retained.length };
 }
 
 export const markdownEscape = text => text.replace(/[\[\]\\]/g, '\\$&').replace(/\s+/g, ' ');

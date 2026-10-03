@@ -74,6 +74,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   const profileDir = await mkdtemp(join(tmpdir(), 'pichamber-proof-chrome-'));
   let browser, client, frameError, current = 0;
   const frames = [];
+  let droppedScreencastFrames = 0;
   const network = createPageNetworkGate();
   let capturing = false;
   const send = async (method, params = {}) => {
@@ -185,10 +186,12 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await send('Page.stopScreencast'); capturing = false;
     if (frameError) throw frameError;
     const endedAt = Date.now() / 1000;
-    await writeFile(join(out, 'raw/frames.ffconcat'), frameTimeline(frames, endedAt));
+    const timeline = frameTimeline(frames, endedAt);
+    droppedScreencastFrames = timeline.droppedFrames;
+    await writeFile(join(out, 'raw/frames.ffconcat'), timeline.content);
     runFfmpeg(videoArgs()); runFfmpeg(contactSheetArgs(files));
     await writeFile(join(out, 'index.md'), proofIndex(tour, files));
-    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'proven', tour: tour.name, steps: tour.steps.map((step, index) => ({ caption: step.caption, image: files[index].image, viewport: step.viewport, theme: step.theme, evidence: step.evidence })), selectorsVerified: true }, null, 2) + '\n');
+    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'proven', tour: tour.name, droppedScreencastFrames, steps: tour.steps.map((step, index) => ({ caption: step.caption, image: files[index].image, viewport: step.viewport, theme: step.theme, evidence: step.evidence })), selectorsVerified: true }, null, 2) + '\n');
     await rm(join(out, 'raw'), { recursive: true, force: true });
     return out;
   } catch (error) {
@@ -203,7 +206,7 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
         try { await writeFile(join(out, files[current].failure), await readFile(join(out, files[current].raw))); } catch { /* No page was available. */ }
       }
     }
-    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'not-proven', tour: tour.name, step: current + 1, error: error.message }, null, 2) + '\n');
+    await writeFile(join(out, 'report.json'), JSON.stringify({ status: 'not-proven', tour: tour.name, droppedScreencastFrames, step: current + 1, error: error.message }, null, 2) + '\n');
     throw error;
   } finally {
     capturing = false;

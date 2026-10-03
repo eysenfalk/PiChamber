@@ -74,10 +74,10 @@ For the lab provide `--url` or `PROOF_URL`, `--chrome` or `PROOF_CHROME`, and `-
 Each run replaces only `.proof/<tour>/`, removing stale success markers:
 
 - `01.png`, `02.png`, ...: app viewport followed by a caption band below it. ffmpeg pads the image and renders one textfile per wrapped line with expansion disabled. Captions never cover the app, including on mobile.
-- `video.mp4`: actual CDP screencast JPEG frames and epoch timestamps, with static intervals preserved. H.264, yuv420p limited range, faststart, 1440x900 at 30 fps. Mobile fits centered in this even canvas. Video shows actions, without captions.
+- `video.mp4`: actual CDP screencast JPEG frames and epoch timestamps, with static intervals preserved. Frames arriving behind the last retained timestamp are dropped, never sorted into earlier actions; malformed frames and invalid end times still fail. H.264, yuv420p limited range, faststart, 1440x900 at 30 fps. Mobile fits centered in this even canvas. Video shows actions, without captions.
 - `contact-sheet.png`: all captioned images fitted into a two column grid.
 - `index.md`: captions, PNGs, contact sheet and video links.
-- `report.json`: proven/not-proven status, declared evidence, and selector verification metadata.
+- `report.json`: proven/not-proven status, declared evidence, selector verification metadata, and `droppedScreencastFrames` (late frames discarded during video planning).
 
 On failure the command exits nonzero and writes a not-proven report. If a page is available it writes `NN-not-proven.png` with a NOT PROVEN band. If ffmpeg fails, the raw screenshot is retained under that name. Temporary `raw/` files are removed only on success and cannot be published. Browser startup failure may have no screenshot. Completed steps do not make an incomplete tour proven.
 
