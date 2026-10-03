@@ -131,6 +131,7 @@ export const createExtensionBridge = ({
 
   const createExtensionUIContext = (sessionId) => {
     const dialog = (method, fields, opts, parseResponse) => {
+      if (opts?.signal?.aborted) return Promise.resolve(parseResponse({}));
       const requestId = randomUUID();
       return new Promise((resolve) => {
         const settle = (response, reason = 'answered') => {
@@ -358,6 +359,9 @@ export const createExtensionBridge = ({
     if (!pending) {
       return { resolved: false };
     }
+    if (payload.sessionId !== undefined && payload.sessionId !== pending.sessionId) {
+      throw protocolError('INVALID_ARGUMENT', 'The dialog response belongs to a different session.');
+    }
     if (payload.directory !== undefined) await resolveDirectory(payload.directory);
     if (payload.cancelled === true) {
       // Dialog closures derive their typed result (undefined/false) from an
@@ -366,6 +370,9 @@ export const createExtensionBridge = ({
     } else if (payload.confirmed === true) {
       pending.settle({ confirmed: true });
     } else if (typeof payload.value === 'string') {
+      if (pending.payload.method === 'select' && !pending.payload.options.includes(payload.value)) {
+        throw protocolError('INVALID_ARGUMENT', 'The selected dialog option was not offered.');
+      }
       pending.settle({ value: payload.value });
     } else if (payload.values && typeof payload.values === 'object' && !Array.isArray(payload.values)) {
       const values = {};

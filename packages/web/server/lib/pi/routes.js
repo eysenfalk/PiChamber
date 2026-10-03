@@ -1764,6 +1764,7 @@ export const registerPiRuntimeRoutes = (app, {
     const body = req.body;
     if (!body || typeof body !== 'object' || Array.isArray(body)
       || typeof body.requestId !== 'string' || body.requestId.length === 0
+      || (body.sessionId !== undefined && (typeof body.sessionId !== 'string' || body.sessionId.length === 0))
       || (body.directory !== undefined && typeof body.directory !== 'string')) {
       res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
       return;
@@ -1786,6 +1787,7 @@ export const registerPiRuntimeRoutes = (app, {
     try {
       const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('extensions.respond', {
         requestId: body.requestId,
+        ...(typeof body.sessionId === 'string' ? { sessionId: body.sessionId } : {}),
         ...(typeof body.directory === 'string' && body.directory.length > 0 ? { directory: body.directory } : {}),
         ...(body.cancelled === true ? { cancelled: true } : {}),
         ...(body.confirmed === true ? { confirmed: true } : {}),

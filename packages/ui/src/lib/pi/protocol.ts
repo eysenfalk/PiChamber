@@ -1003,6 +1003,8 @@ export type PiExtensionDialogDismissEvent = PiEventEnvelope<
 /** Answer for a blocking extension dialog. Omit all answer fields to cancel. */
 export interface PiExtensionDialogResponseInput {
   requestId: string;
+  /** Owning session. New clients bind both IDs; request-only legacy clients remain supported. */
+  sessionId?: string;
   directory?: string;
   /** Explicit cancellation (Escape). */
   cancelled?: boolean;

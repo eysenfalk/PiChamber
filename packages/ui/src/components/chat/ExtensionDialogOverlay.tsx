@@ -28,7 +28,7 @@ const respond = async (
 ): Promise<void> => {
   try {
     await piClient.respondToExtensionDialog(
-      { requestId: request.requestId, ...answer },
+      { requestId: request.requestId, sessionId, ...answer },
       { runtimeKey: getRuntimeKey() },
     );
     // The daemon also publishes extension.dialog.dismiss for every connected
