@@ -103,9 +103,11 @@ The user approves the plan before code is written. Changing the plan later means
 
 | When | Workflow and job | What |
 |---|---|---|
-| every pull request | `Pull request checks`: `runtime-compatibility`, `checks` | runtime smoke on supported Node and Bun versions; build, type check, lint, `bun run test` (web, UI, Electron and the repository rules) |
+| every pull request | `Pull request checks`: `runtime-compatibility`, `checks` | runtime smoke on supported Node and Bun versions; build, type check, lint, `bun run test` (repository rules, tools, web, UI and Electron) |
 | issue changes, every six hours, on demand | `Roadmap`: `roadmap` | `scripts/workflow/roadmap-sync.mjs sync`: regenerates the order list and graph in the roadmap issue |
 | every change of a pull request, its title or its description | `Pull request description`: `pull-request` | `scripts/workflow/check-pr.mjs`: every template section present and filled, an issue referenced, acceptance criteria as a checklist, all checked once not a draft |
+
+`bun run test` uses the host runner `scripts/lab/test-env.mjs`: it strips inherited `PICHAMBER_*` runtime selectors except `PICHAMBER_TEST_*`, plus `PICHAMBER`, `PI_PACKAGE_DIR` and `ELECTRON_RUN_AS_NODE`, and retains the invoking Bun for nested suites.
 
 The repository rules in `scripts/workflow/` check decision records and their index, `CONTEXT.md` entries and `workflow.json`. Run them with `bun run test:repo`.
 
