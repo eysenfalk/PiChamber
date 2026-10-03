@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   MAX_EXTENSION_APP_HTML_CHARS,
+  clampExtensionWidgetLine,
   sanitizeExtensionFormFields,
   validateExtensionFormValues,
 } from '../extension-protocol.js';
@@ -217,8 +218,11 @@ export const createExtensionBridge = ({
         // Only string-array widgets are representable over the wire.
         if (content !== undefined && !Array.isArray(content)) return;
         const widgets = extensionWidgetsBySession.get(sessionId) ?? new Map();
-        if (Array.isArray(content) && content.length > 0) {
-          const lines = content.map((line) => String(line).slice(0, 2000)).slice(0, 100);
+        // One clamped value feeds both the reconnect mirror and the live event.
+        const lines = Array.isArray(content) && content.length > 0
+          ? content.slice(0, 100).map(clampExtensionWidgetLine)
+          : undefined;
+        if (lines) {
           const placement = options?.placement === 'belowEditor' ? 'belowEditor' : 'aboveEditor';
           widgets.set(key, { lines, placement });
         } else {
@@ -228,8 +232,8 @@ export const createExtensionBridge = ({
         else extensionWidgetsBySession.set(sessionId, widgets);
         publish('extension.widget', {
           key,
-          ...(Array.isArray(content) && content.length > 0 ? { lines: content.map((line) => String(line).slice(0, 2000)).slice(0, 100) } : {}),
-          ...(options?.placement === 'belowEditor' ? { placement: 'belowEditor' } : Array.isArray(content) && content.length > 0 ? { placement: 'aboveEditor' } : {}),
+          ...(lines ? { lines } : {}),
+          ...(options?.placement === 'belowEditor' ? { placement: 'belowEditor' } : lines ? { placement: 'aboveEditor' } : {}),
         }, sessionId);
       },
       // Terminal-only surfaces have no PiChamber equivalent yet.

@@ -1,4 +1,27 @@
 export const MAX_EXTENSION_APP_HTML_CHARS = 200_000;
+const MAX_EXTENSION_WIDGET_LINE_CHARS = 2000;
+
+/**
+ * pi-subagents publishes its async run status to RPC hosts as one widget line,
+ * `PI_SUBAGENT_ASYNC_JSON:` plus a JSON snapshot capped at 32 KiB
+ * (`maxSerializedBytes` in pi-subagents' async-status-projection). Cutting that
+ * JSON at the ordinary widget line limit would break it, so this one line shape
+ * keeps its payload whole up to the producer's cap. Every other line keeps
+ * `MAX_EXTENSION_WIDGET_LINE_CHARS`.
+ */
+export const SUBAGENT_ASYNC_STATUS_LINE_PREFIX = 'PI_SUBAGENT_ASYNC_JSON:';
+const MAX_SUBAGENT_ASYNC_STATUS_PAYLOAD_CHARS = 32 * 1024;
+
+export const extensionWidgetLineLimit = (line) => (
+  typeof line === 'string' && line.startsWith(SUBAGENT_ASYNC_STATUS_LINE_PREFIX)
+    ? SUBAGENT_ASYNC_STATUS_LINE_PREFIX.length + MAX_SUBAGENT_ASYNC_STATUS_PAYLOAD_CHARS
+    : MAX_EXTENSION_WIDGET_LINE_CHARS
+);
+
+export const clampExtensionWidgetLine = (line) => {
+  const text = String(line);
+  return text.slice(0, extensionWidgetLineLimit(text));
+};
 const MAX_EXTENSION_FORM_FIELDS = 12;
 const MAX_EXTENSION_FORM_OPTIONS = 20;
 

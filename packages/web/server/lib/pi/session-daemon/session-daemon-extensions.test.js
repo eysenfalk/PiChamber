@@ -316,6 +316,45 @@ describe('Pi session daemon extension bridging', () => {
     });
   });
 
+  it('keeps a pi-subagents async status line whole while clamping every other widget line', async () => {
+    const { client, session } = await startWithExtensibleSession();
+    const ui = session.boundBindings.uiContext;
+    const snapshotLine = `PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({ kind: 'pi-subagents.async-status-snapshot', pad: 'x'.repeat(20_000) })}`;
+    const ordinaryLine = 'y'.repeat(2500);
+    expect(snapshotLine.length).toBeGreaterThan(2000);
+
+    ui.setWidget('subagent-async', [snapshotLine]);
+    const snapshotEvent = await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'subagent-async');
+    expect(snapshotEvent.payload.lines).toEqual([snapshotLine]);
+
+    ui.setWidget('todo', [ordinaryLine]);
+    const ordinaryEvent = await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'todo');
+    expect(ordinaryEvent.payload.lines).toEqual([ordinaryLine.slice(0, 2000)]);
+
+    // The reconnect mirror carries the same value as the live event.
+    const opened = await client.request('sessions.open', { sessionId: session.sessionId });
+    const widgets = new Map(opened.result.extensionWidgets.map((widget) => [widget.key, widget.lines]));
+    expect(widgets.get('subagent-async')).toEqual(snapshotEvent.payload.lines);
+    expect(widgets.get('todo')).toEqual(ordinaryEvent.payload.lines);
+    await client.close();
+  });
+
+  it('cuts an async status line only beyond the 32 KiB snapshot cap', async () => {
+    const { client, session } = await startWithExtensibleSession();
+    const prefix = 'PI_SUBAGENT_ASYNC_JSON:';
+    const atCap = `${prefix}${'z'.repeat(32 * 1024)}`;
+    const overCap = `${atCap}extra`;
+
+    session.boundBindings.uiContext.setWidget('subagent-async', [atCap]);
+    const first = await client.next((message) => message.event === 'extension.widget' && message.payload?.lines?.[0]?.length === atCap.length);
+    expect(first.payload.lines).toEqual([atCap]);
+
+    session.boundBindings.uiContext.setWidget('subagent-async', [overCap]);
+    const second = await client.next((message) => message.event === 'extension.widget' && message.sequence > first.sequence);
+    expect(second.payload.lines).toEqual([atCap]);
+    await client.close();
+  });
+
   it('projects appended custom entries and custom messages as extension events', async () => {
     const { client, session } = await startWithExtensibleSession();
 
