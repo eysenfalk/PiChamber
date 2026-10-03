@@ -190,6 +190,7 @@ describe('extension surface collapse', () => {
     const markup = renderCard([widgetEntry('todo', ['first-line']), widgetEntry('other', ['second-line'])], true);
     expect(markup).toContain('aria-label="Show extension widgets, 2 widgets"');
     expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain('>Extensions<');
     expect(markup).toContain('>2<');
     expect(markup).not.toContain('first-line');
     expect(markup.match(/<button/g)).toHaveLength(1);
@@ -222,6 +223,7 @@ describe('extension surface collapse', () => {
     const collapsed = renderToStaticMarkup(<ExtensionStatusPill statuses={statuses} collapsed onCollapsedChange={noop} />);
     expect(collapsed).toContain('aria-label="Show extension status, 2 entries"');
     expect(collapsed).toContain('aria-expanded="false"');
+    expect(collapsed).toContain('>Status<');
     expect(collapsed).not.toContain('fast-mode');
     expect(collapsed.match(/<button/g)).toHaveLength(1);
     expect(renderToStaticMarkup(<ExtensionStatusPill statuses={[]} collapsed onCollapsedChange={noop} />)).toBe('');

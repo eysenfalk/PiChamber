@@ -41,11 +41,12 @@ const pluralize = (count: number, singular: string, plural: string): string => (
 
 /** The one small button a collapsed extension surface leaves behind. */
 const CollapsedExtensionButton: React.FC<{
+  text: string;
   count: number;
   label: string;
   onExpand: () => void;
   className?: string;
-}> = ({ count, label, onExpand, className }) => (
+}> = ({ text, count, label, onExpand, className }) => (
   <div className={cn('chat-input-column', className)}>
     <div className="flex">
       <Button
@@ -58,6 +59,7 @@ const CollapsedExtensionButton: React.FC<{
         onClick={onExpand}
       >
         <Icon name="plug-2" className="size-3.5" />
+        <span>{text}</span>
         <span className="tabular-nums">{count}</span>
       </Button>
     </div>
@@ -90,6 +92,7 @@ export const ExtensionStatusPill: React.FC<{
   if (collapsed) {
     return (
       <CollapsedExtensionButton
+        text="Status"
         count={statuses.length}
         label={`Show extension status, ${pluralize(statuses.length, 'entry', 'entries')}`}
         onExpand={() => onCollapsedChange(false)}
@@ -227,6 +230,7 @@ export const ExtensionWidgetCard: React.FC<{
   if (collapsed) {
     return (
       <CollapsedExtensionButton
+        text="Extensions"
         count={visible.length}
         label={`Show extension widgets, ${pluralize(visible.length, 'widget', 'widgets')}`}
         onExpand={() => onCollapsedChange(false)}
