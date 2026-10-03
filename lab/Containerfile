@@ -1,0 +1,21 @@
+FROM docker.io/oven/bun:1.4.2 AS bun
+FROM docker.io/library/node:24-slim AS node
+FROM docker.io/library/ubuntu:26.04
+
+ARG CHROME_VERSION=154.0.8037.92
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl unzip git ffmpeg fonts-liberation fonts-noto-color-emoji \
+    libnss3 libatk-bridge2.0-0t64 libatk1.0-0t64 libcups2t64 libdrm2 libgbm1 \
+    libxkbcommon0 libasound2t64 libpango-1.0-0 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libx11-xcb1 \
+ && curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip \
+ && unzip -q /tmp/chrome.zip -d /opt \
+ && ln -s /opt/chrome-linux64/chrome /usr/local/bin/chromium \
+ && ! ldd /opt/chrome-linux64/chrome | grep 'not found' \
+ && chromium --version \
+ && ffmpeg -hide_banner -encoders 2>/dev/null | grep libx264 \
+ && ffmpeg -hide_banner -filters 2>/dev/null | grep drawtext \
+ && rm -rf /tmp/chrome.zip /var/lib/apt/lists/*
+WORKDIR /repo
