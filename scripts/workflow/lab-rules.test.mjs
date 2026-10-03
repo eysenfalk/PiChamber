@@ -53,17 +53,22 @@ describe('proof lab repository rules', () => {
     expect(run).toContain('podman update --cpus="$infra_cpus" --memory="$infra_memory"');
     expect(run).toContain('--cpu-quota=$((build_cpus * 100000))');
     expect(run).toContain('--memory-swap="$build_memory"');
+    expect(run).toContain('podman update --memory-swap="$server_memory"');
+    expect(run).toContain('verify_limits "$name-server" "$server_quota" "$server_memory"');
+    expect(run).toContain('verify_limits "$infra" "$infra_quota" "$infra_bytes"');
   });
 
   test('the runtime has only a read-only checkout and a volume, offline state and no privileges', () => {
     expect(pod.spec.volumes).toHaveLength(2);
     expect(pod.spec.volumes[0].hostPath.path).toBe('LAB_REPOSITORY');
-    const server = pod.spec.containers[0];
-    expect(server.volumeMounts.find((v) => v.name === 'repository').readOnly).toBe(true);
-    expect(server.securityContext.allowPrivilegeEscalation).toBe(false);
-    expect(server.securityContext.capabilities.drop).toEqual(['ALL']);
-    expect(server.env.find((e) => e.name === 'PI_OFFLINE').value).toBe('1');
-    expect(server.env.find((e) => e.name === 'HOME').value).toBe('/lab');
+    expect(pod.metadata.labels['io.pichamber.lab.checkout']).toBe('LAB_REPOSITORY');
+    for (const container of [...(pod.spec.initContainers ?? []), ...pod.spec.containers]) {
+      expect(container.volumeMounts.find((v) => v.name === 'repository').readOnly).toBe(true);
+      expect(container.securityContext.allowPrivilegeEscalation).toBe(false);
+      expect(container.securityContext.capabilities.drop).toEqual(['ALL']);
+      expect(container.env.find((e) => e.name === 'PI_OFFLINE').value).toBe('1');
+      expect(container.env.find((e) => e.name === 'HOME').value).toBe('/lab');
+    }
     expect(run).toContain('podman network create --internal');
     expect(run).toContain('--userns=keep-id');
     expect(run).toContain('--publish=127.0.0.1:3111:3000');

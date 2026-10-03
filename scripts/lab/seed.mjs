@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, utimes, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, utimes, rm, readdir, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { SessionManager } from '../../packages/web/node_modules/@earendil-works/pi-coding-agent/dist/index.js';
@@ -22,8 +22,17 @@ export async function seedLab(root, now = Date.now()) {
     if (error.code !== 'ENOENT') throw error;
   }
   const agentDir = join(root, 'pi-agent');
-  // A previous interrupted seed has no marker: discard only lab-owned fixture directories.
-  await rm(join(root, 'projects'), { recursive: true, force: true });
+  // Refuse symlinked parents and mixed agent state before deleting interrupted fixtures.
+  for (const directory of [root, join(root, 'projects'), agentDir]) {
+    try {
+      if (!(await lstat(directory)).isDirectory()) throw new Error(`Seed directory must not be a symlink or file: ${directory}`);
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  let agentEntries = [];
+  try { agentEntries = await readdir(agentDir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (agentEntries.some(name => name !== 'sessions')) throw new Error('Seed agent directory must contain only sessions.');
+  // A previous interrupted seed has no marker: discard only manifest-owned project names.
+  for (const fixture of SEED_MANIFEST.projects) await rm(join(root, 'projects', fixture.name), { recursive: true, force: true });
   await rm(join(agentDir, 'sessions'), { recursive: true, force: true });
   const projects = [];
   const sessions = [];
