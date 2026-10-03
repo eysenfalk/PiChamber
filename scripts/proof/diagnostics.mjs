@@ -4,7 +4,8 @@ import { join } from 'node:path';
 export function diagnosticUrl(value) {
   try {
     const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) ? url.origin + url.pathname : url.protocol;
+    return ['http:', 'https:'].includes(url.protocol) ?
+      (url.origin + url.pathname).replace(/[A-Za-z0-9_+=-]{40,}/g, '[redacted]').slice(0, 2048) : url.protocol;
   } catch { return '[unavailable]'; }
 }
 

@@ -38,6 +38,9 @@ test('diagnostics.mjs bounds recent errors and boundary text, and redacts creden
   expect(text).toContain('[redacted]');
   expect(diagnosticUrl('data:text/html,private')).toBe('data:');
   expect(diagnosticUrl('bad URL')).toBe('[unavailable]');
+  expect(diagnosticUrl('http://lab/' + 'A'.repeat(80))).toBe('http://lab/[redacted]');
+  expect(diagnosticUrl('http://lab/' + 'path/'.repeat(1000)).length).toBe(2048);
+  expect(diagnosticText('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJsYWIifQ.signature')).toBe('[redacted]');
 });
 
 test('diagnostics.mjs reads only error boundary pre text even with closed details, without changing the page', async () => {
