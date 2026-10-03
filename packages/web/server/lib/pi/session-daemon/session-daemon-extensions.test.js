@@ -327,6 +327,16 @@ describe('Pi session daemon extension bridging', () => {
     const snapshotEvent = await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'subagent-async');
     expect(snapshotEvent.payload.lines).toEqual([snapshotLine]);
 
+    // The exception is for line 0 of subagent-async only.
+    ui.setWidget('other-widget', [snapshotLine]);
+    const otherKeyEvent = await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'other-widget');
+    expect(otherKeyEvent.payload.lines).toEqual([snapshotLine.slice(0, 2000)]);
+    ui.setWidget('subagent-async', ['first line', snapshotLine]);
+    const secondLineEvent = await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'subagent-async' && message.payload?.lines?.length === 2);
+    expect(secondLineEvent.payload.lines).toEqual(['first line', snapshotLine.slice(0, 2000)]);
+    ui.setWidget('subagent-async', [snapshotLine]);
+    await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'subagent-async' && message.payload?.lines?.length === 1);
+
     ui.setWidget('todo', [ordinaryLine]);
     const ordinaryEvent = await client.next((message) => message.event === 'extension.widget' && message.payload?.key === 'todo');
     expect(ordinaryEvent.payload.lines).toEqual([ordinaryLine.slice(0, 2000)]);

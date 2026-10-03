@@ -9,19 +9,35 @@ import {
 } from './extension-protocol.js';
 
 describe('extension widget line limits', () => {
+  const prefix = SUBAGENT_ASYNC_STATUS_LINE_PREFIX;
+
   it('clamps ordinary lines to 2000 characters', () => {
-    expect(clampExtensionWidgetLine('a'.repeat(2500))).toHaveLength(2000);
-    expect(clampExtensionWidgetLine('short')).toBe('short');
-    expect(clampExtensionWidgetLine(42)).toBe('42');
-    expect(extensionWidgetLineLimit(`x${SUBAGENT_ASYNC_STATUS_LINE_PREFIX}`)).toBe(2000);
+    expect(clampExtensionWidgetLine('todo', 0, 'a'.repeat(2500))).toHaveLength(2000);
+    expect(clampExtensionWidgetLine('todo', 0, 'short')).toBe('short');
+    expect(clampExtensionWidgetLine('todo', 0, 42)).toBe('42');
+    expect(extensionWidgetLineLimit('subagent-async', 0, `x${prefix}`)).toBe(2000);
   });
 
-  it('keeps a pi-subagents async status line whole up to prefix plus 32 KiB', () => {
-    const limit = SUBAGENT_ASYNC_STATUS_LINE_PREFIX.length + 32 * 1024;
-    expect(extensionWidgetLineLimit(`${SUBAGENT_ASYNC_STATUS_LINE_PREFIX}{}`)).toBe(limit);
-    const whole = `${SUBAGENT_ASYNC_STATUS_LINE_PREFIX}${'a'.repeat(32 * 1024)}`;
-    expect(clampExtensionWidgetLine(whole)).toBe(whole);
-    expect(clampExtensionWidgetLine(`${whole}b`)).toBe(whole);
+  it('keeps line 0 of subagent-async whole up to prefix plus 32 KiB', () => {
+    const limit = prefix.length + 32 * 1024;
+    expect(extensionWidgetLineLimit('subagent-async', 0, `${prefix}{}`)).toBe(limit);
+    const whole = `${prefix}${'a'.repeat(32 * 1024)}`;
+    expect(clampExtensionWidgetLine('subagent-async', 0, whole)).toBe(whole);
+    expect(clampExtensionWidgetLine('subagent-async', 0, `${whole}b`)).toBe(whole);
+  });
+
+  it('clamps a prefixed line under another widget key', () => {
+    const line = `${prefix}${'a'.repeat(5000)}`;
+    expect(extensionWidgetLineLimit('todo', 0, line)).toBe(2000);
+    expect(clampExtensionWidgetLine('todo', 0, line)).toHaveLength(2000);
+    expect(clampExtensionWidgetLine('subagent-async-extra', 0, line)).toHaveLength(2000);
+  });
+
+  it('clamps a prefixed line at any index other than 0 of subagent-async', () => {
+    const line = `${prefix}${'a'.repeat(5000)}`;
+    expect(extensionWidgetLineLimit('subagent-async', 1, line)).toBe(2000);
+    expect(clampExtensionWidgetLine('subagent-async', 1, line)).toHaveLength(2000);
+    expect(clampExtensionWidgetLine('subagent-async', 99, line)).toHaveLength(2000);
   });
 });
 

@@ -2,25 +2,32 @@ export const MAX_EXTENSION_APP_HTML_CHARS = 200_000;
 const MAX_EXTENSION_WIDGET_LINE_CHARS = 2000;
 
 /**
- * pi-subagents publishes its async run status to RPC hosts as one widget line,
- * `PI_SUBAGENT_ASYNC_JSON:` plus a JSON snapshot capped at 32 KiB
- * (`maxSerializedBytes` in pi-subagents' async-status-projection). Cutting that
- * JSON at the ordinary widget line limit would break it, so this one line shape
- * keeps its payload whole up to the producer's cap. Every other line keeps
- * `MAX_EXTENSION_WIDGET_LINE_CHARS`.
+ * pi-subagents publishes its async run status to RPC hosts as exactly one line,
+ * line 0 of the widget `subagent-async`: `PI_SUBAGENT_ASYNC_JSON:` plus a JSON
+ * snapshot capped at 32 KiB (`maxSerializedBytes` in pi-subagents'
+ * async-status-projection). Cutting that JSON at the ordinary widget line limit
+ * would break it, so that one position keeps its payload whole up to the
+ * producer's cap. Every other line, including a prefixed line under another key
+ * or at another index, keeps `MAX_EXTENSION_WIDGET_LINE_CHARS`, so a widget
+ * stays within the bound it had before.
  */
+export const SUBAGENT_ASYNC_WIDGET_KEY = 'subagent-async';
 export const SUBAGENT_ASYNC_STATUS_LINE_PREFIX = 'PI_SUBAGENT_ASYNC_JSON:';
 const MAX_SUBAGENT_ASYNC_STATUS_PAYLOAD_CHARS = 32 * 1024;
 
-export const extensionWidgetLineLimit = (line) => (
-  typeof line === 'string' && line.startsWith(SUBAGENT_ASYNC_STATUS_LINE_PREFIX)
+export const extensionWidgetLineLimit = (key, index, line) => (
+  key === SUBAGENT_ASYNC_WIDGET_KEY
+    && index === 0
+    && typeof line === 'string'
+    && line.startsWith(SUBAGENT_ASYNC_STATUS_LINE_PREFIX)
     ? SUBAGENT_ASYNC_STATUS_LINE_PREFIX.length + MAX_SUBAGENT_ASYNC_STATUS_PAYLOAD_CHARS
     : MAX_EXTENSION_WIDGET_LINE_CHARS
 );
 
-export const clampExtensionWidgetLine = (line) => {
+/** `index` is the line's position in the widget as published, before any filtering. */
+export const clampExtensionWidgetLine = (key, index, line) => {
   const text = String(line);
-  return text.slice(0, extensionWidgetLineLimit(text));
+  return text.slice(0, extensionWidgetLineLimit(key, index, text));
 };
 const MAX_EXTENSION_FORM_FIELDS = 12;
 const MAX_EXTENSION_FORM_OPTIONS = 20;

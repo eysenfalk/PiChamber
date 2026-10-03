@@ -40,6 +40,11 @@ describe('extension public projections', () => {
       payload: { key: 'subagent-async', lines: [snapshotLine] },
     });
     expect(projectEventFrame(frame('extension.widget', { key: 'todo', lines: ['y'.repeat(2001)] }))).toBeNull();
+    // The exception is for line 0 of subagent-async only.
+    expect(projectEventFrame(frame('extension.widget', { key: 'other', lines: [snapshotLine] }))).toBeNull();
+    expect(projectEventFrame(frame('extension.widget', { key: 'subagent-async', lines: ['first', snapshotLine] }))).toBeNull();
+    const clamped = projectEventFrame(frame('extension.widget', { key: 'subagent-async', lines: [snapshotLine.slice(0, 100)] }));
+    expect(clamped.payload.lines).toEqual([snapshotLine.slice(0, 100)]);
 
     const projected = projectEventFrame({
       ...frame('session.snapshot', {}),
@@ -48,13 +53,17 @@ describe('extension public projections', () => {
         directory: '/work',
         extensionWidgets: [
           { key: 'subagent-async', lines: [snapshotLine] },
-          { key: 'todo', lines: ['y'.repeat(2500)] },
-        ],
+            { key: 'todo', lines: ['y'.repeat(2500)] },
+            { key: 'other', lines: [snapshotLine] },
+            { key: 'subagent-inspect', lines: ['first', snapshotLine] },
+          ],
       },
     });
     const widgets = new Map(projected.payload.snapshot.extensionWidgets.map((widget) => [widget.key, widget.lines]));
     expect(widgets.get('subagent-async')).toEqual([snapshotLine]);
     expect(widgets.get('todo')).toEqual(['y'.repeat(2000)]);
+    expect(widgets.get('other')).toEqual([snapshotLine.slice(0, 2000)]);
+    expect(widgets.get('subagent-inspect')).toEqual(['first', snapshotLine.slice(0, 2000)]);
   });
 
   it('projects extension.ui panels with caps and removals', () => {

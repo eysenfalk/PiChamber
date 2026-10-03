@@ -220,7 +220,7 @@ export const createExtensionBridge = ({
         const widgets = extensionWidgetsBySession.get(sessionId) ?? new Map();
         // One clamped value feeds both the reconnect mirror and the live event.
         const lines = Array.isArray(content) && content.length > 0
-          ? content.slice(0, 100).map(clampExtensionWidgetLine)
+          ? content.slice(0, 100).map((line, index) => clampExtensionWidgetLine(key, index, line))
           : undefined;
         if (lines) {
           const placement = options?.placement === 'belowEditor' ? 'belowEditor' : 'aboveEditor';
