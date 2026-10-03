@@ -40,7 +40,7 @@ const pluralize = (count: number, singular: string, plural: string): string => (
 );
 
 /** The one small button a collapsed extension surface leaves behind. */
-export const CollapsedExtensionButton: React.FC<{
+const CollapsedExtensionButton: React.FC<{
   count: number;
   label: string;
   onExpand: () => void;

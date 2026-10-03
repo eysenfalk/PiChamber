@@ -76,7 +76,7 @@ export interface SubagentStatusSnapshot {
   runs: SubagentStatusNode[];
 }
 
-export type SubagentStatusParseResult =
+type SubagentStatusParseResult =
   | { ok: true; snapshot: SubagentStatusSnapshot }
   | { ok: false };
 
