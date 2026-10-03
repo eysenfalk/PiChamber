@@ -11,7 +11,7 @@ const MAX_EXTENSION_WIDGET_LINE_CHARS = 2000;
  * or at another index, keeps `MAX_EXTENSION_WIDGET_LINE_CHARS`, so a widget
  * stays within the bound it had before.
  */
-const SUBAGENT_ASYNC_WIDGET_KEY = 'subagent-async';
+export const SUBAGENT_ASYNC_WIDGET_KEY = 'subagent-async';
 export const SUBAGENT_ASYNC_STATUS_LINE_PREFIX = 'PI_SUBAGENT_ASYNC_JSON:';
 const MAX_SUBAGENT_ASYNC_STATUS_PAYLOAD_CHARS = 32 * 1024;
 
