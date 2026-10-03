@@ -163,16 +163,21 @@ export const aliasSyntheticUserIfPersisted = (
   session.messages.set(key, message);
 };
 
+const latestUserMessageId = (session: PiReducerSessionState): string | undefined => {
+  const messages = uniqueSessionMessages(session);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (candidate?.role === 'user') return candidate.id;
+  }
+  return undefined;
+};
+
 export const resolveParentId = (session: PiReducerSessionState, parentId?: string): string | undefined => {
   if (!parentId) return undefined;
   const direct = session.messages.get(parentId)?.id;
   if (direct) return direct;
   if (isSyntheticUserMessageId(parentId, session.sessionId)) {
-    const messages = uniqueSessionMessages(session);
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const candidate = messages[index];
-      if (candidate?.role === 'user') return candidate.id;
-    }
+    return latestUserMessageId(session) ?? parentId;
   }
   return parentId;
 };
@@ -194,7 +199,13 @@ export const ensureMessage = (
       return persisted;
     }
   }
-  const parentId = resolveParentId(session, payload.parentId);
+  // A live assistant start without a parent is a turn Pi began without a user
+  // prompt (extension `triggerTurn`, e.g. async subagent results). History
+  // projection owns such a reply to the latest preceding user entry; mirror
+  // that here so the live timeline groups it instead of dropping it.
+  const parentId = payload.parentId === undefined && payload.role === 'assistant'
+    ? latestUserMessageId(session)
+    : resolveParentId(session, payload.parentId);
   const message: PiReducerMessage = {
     id: payload.messageId,
     sessionId: session.sessionId,
