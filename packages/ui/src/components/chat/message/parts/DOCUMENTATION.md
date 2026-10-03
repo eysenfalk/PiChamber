@@ -42,6 +42,9 @@ Use this doc when you ask an agent to change tool/header/description behavior.
 - `../FabricRunStrip.tsx` / `../fabricRunSelectors.ts`
   - The live strip above the composer, standing in for pi-fabric's Pi widget, whose lines are pi-tui components that never cross the RPC bridge. It derives running `fabric_exec` tool parts (live state only, at most three) from the reducer and shows name, `done/total calls`, progress, and a running duration. Shell tasks and agents, which Pi's widget also lists, have no data source here and are not shown.
 
+- `extension/ExtensionMessageCard.tsx` / `extension/SupervisorMessageRow.tsx` / `extension/ExtensionDisclosureRow.tsx`
+  - Own the rows for extension-authored chat items. `pichamber.ui` descriptors stay open cards. A valid pi-subagents `subagent_supervisor_request` is one compact row (agent, reason badge, the question as Markdown) whose run, child index, request id and reply hint sit behind a Details disclosure; a valid `subagent_supervisor_reply` is one collapsed row `Reply to <agent>: <first line>` that expands to the full reply (`@/lib/pi/supervisor-ui` validates and bounds the payload). Every other extension item, including a malformed supervisor payload, starts as one collapsed row (custom type and first text line) and expands to the preformatted fallback content. Disclosure content mounts only while expanded. Replying to a request stays with the parent agent; the rows have no reply controls.
+
 - `taskToolModel.ts`
   - Owns Task metadata parsing and child-session summary projection.
   - `part.state.metadata.sessionId` is the only live identity contract between a Task and its child session.

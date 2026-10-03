@@ -384,23 +384,26 @@ export const createExtensionBridge = ({
     return { resolved: true };
   };
 
+  // Returns the published event id, or undefined when nothing was published.
   const publishExtensionCustomMessage = (sessionId, message, directory = getDefaultDirectory()) => {
-    if (typeof message.customType !== 'string' || message.customType.length === 0) return;
+    if (typeof message.customType !== 'string' || message.customType.length === 0) return undefined;
     // Context-only custom messages (display: false) are not user-visible content.
-    if (message.display === false) return;
+    if (message.display === false) return undefined;
     const text = typeof message.content === 'string'
       ? message.content
       : Array.isArray(message.content)
         ? textFromContent(message.content)
         : '';
     const timestamp = Number.isFinite(message.timestamp) ? message.timestamp : Date.now();
+    const id = `custom-${sessionId}-${getSequence() + 1}`;
     publish('extension.message', {
-      id: `custom-${sessionId}-${getSequence() + 1}`,
+      id,
       customType: message.customType,
       text: redactAttachmentPaths(text),
       ...(message.details !== undefined ? { details: redactAttachmentValues(message.details) } : {}),
       createdAt: timestamp,
     }, sessionId, directory);
+    return id;
   };
 
   // Mirrors a declarative `pichamber.ui` descriptor into normalized panel
