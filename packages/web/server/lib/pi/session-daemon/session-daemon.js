@@ -50,6 +50,7 @@ import { withCrossProcessLock } from '../../server/cross-process-lock.js';
 import {
   findPiSessionJsonlById,
   getPiSessionDirectory,
+  createPiSessionListCache,
   listPiSessionJsonlDirectory,
   validatePiSessionJsonlDirectory,
   validatePiSessionJsonlFile,
@@ -173,9 +174,11 @@ export function createSessionDaemon({
   idleTimeoutMs = 5 * 60 * 1_000,
   subagentHoldCapMs = 6 * 60 * 60 * 1_000,
   sendOperationTtlMs = 10 * 60 * 1_000,
+  sessionListCache = createPiSessionListCache(),
   listSessions = ({ cwd: sessionCwd, agentDir: sessionAgentDir = agentDir }) => listPiSessionJsonlDirectory({
     cwd: sessionCwd,
     agentDir: sessionAgentDir,
+    cache: sessionListCache,
   }),
   createSettingsManager = ({ cwd: settingsCwd, agentDir: settingsAgentDir = agentDir, projectTrusted }) => SettingsManager.create(
     settingsCwd,
