@@ -6,11 +6,20 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { validName } from './tours.mjs';
 import { markdownEscape } from './media.mjs';
+import { diagnosticText } from './diagnostics.mjs';
+import { validateCheckout } from './checkout.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const usage = 'bun run proof:publish -- <pr> <tour> [--remote NAME|URL|PATH] [--repo OWNER/NAME] [--dry-run]';
 export const resolveRemoteUrl = (remote, cwd) => remote.includes(':') ? remote : resolve(cwd, remote);
-const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 }).trim();
+const git = (cwd, args) => {
+  try {
+    return execFileSync('git', ['-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000,
+      env: { ...process.env, GIT_AUTHOR_NAME: 'PiChamber proof recorder', GIT_AUTHOR_EMAIL: 'proof@pichamber.invalid',
+        GIT_COMMITTER_NAME: 'PiChamber proof recorder', GIT_COMMITTER_EMAIL: 'proof@pichamber.invalid' },
+    }).trim();
+  } catch (error) { throw new Error(diagnosticText('git ' + args[0] + ' failed: ' + (error.stderr?.toString() || 'command unsuccessful'))); }
+};
 export function validatePublish({ pr, tour, repo, remote }) {
   if (!/^[1-9][0-9]*$/.test(String(pr)) || !Number.isSafeInteger(Number(pr))) throw new Error('PR must be a positive integer');
   if (!validName(tour)) throw new Error('Invalid tour name');
@@ -18,11 +27,12 @@ export function validatePublish({ pr, tour, repo, remote }) {
   if (typeof remote !== 'string' || !remote || remote.startsWith('-') || /[\r\n]/.test(remote)) throw new Error('Invalid remote');
 }
 
-export function publishMarkdown({ pr, tour, repo, steps, dryRun = false }) {
-  const base = 'https://raw.githubusercontent.com/' + repo + '/proofs/pr-' + pr + '/' + tour + '/';
+export function publishMarkdown({ pr, tour, repo, steps, commit, dryRun = false }) {
+  if (!dryRun && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit)) throw new Error('Published links require a commit SHA');
+  const base = 'https://raw.githubusercontent.com/' + repo + '/' + (dryRun ? 'proofs' : commit) + '/pr-' + pr + '/' + tour + '/';
   return (dryRun ? '**Dry run: not published.**\n\n' : '') + '[Video](' + base + 'video.mp4)\n\n' +
     '![Contact sheet](' + base + 'contact-sheet.png)\n\n' + steps.map(step =>
-      '![' + markdownEscape(step.caption) + '](' + base + step.image + ')').join('\n\n') + '\n';
+      '![' + markdownEscape(diagnosticText(step.caption, 500)) + '](' + base + step.image + ')').join('\n\n') + '\n';
 }
 
 async function proofFiles(source, tour) {
@@ -40,12 +50,19 @@ async function proofFiles(source, tour) {
 }
 
 /** Isolated staging repository + linked worktree. Never changes the caller's index, refs or checkout. */
-export async function publishProof({ pr, tour, cwd = root, remote = 'origin', repo, dryRun = false, proofRoot = join(cwd, '.proof') }) {
+export async function publishProof(options) {
+  try { return await prepareProof(options); }
+  catch (error) { throw new Error(diagnosticText(error.message)); }
+}
+
+async function prepareProof({ pr, tour, cwd = root, remote = 'origin', repo, dryRun = false, proofRoot = join(cwd, '.proof') }) {
   repo ??= JSON.parse(await readFile(join(cwd, 'workflow.json'), 'utf8')).tracker.repo;
   validatePublish({ pr, tour, repo, remote });
   const source = join(proofRoot, tour);
   if ((await lstat(source)).isSymbolicLink()) throw new Error('Proof directory must not be a symbolic link');
   const { report, files } = await proofFiles(source, tour);
+  validateCheckout(report.checkout);
+  if (report.checkout.commit !== git(cwd, ['rev-parse', 'HEAD'])) throw new Error('Proof checkout differs from HEAD; record again before publishing');
   // A configured remote name is resolved from the host; URLs and local paths are accepted too.
   let remoteUrl = remote;
   const remotes = git(cwd, ['remote']).split('\n');
@@ -83,7 +100,7 @@ export async function publishProof({ pr, tour, cwd = root, remote = 'origin', re
     if (changed) git(tree, ['commit', '--quiet', '-m', 'Proof for PR #' + pr + ': ' + tour]);
     const commit = git(tree, ['rev-parse', 'HEAD']);
     if (!dryRun) git(tree, ['push', '--quiet', '--', remoteUrl, 'HEAD:refs/heads/proofs']);
-    return { commit, dryRun, markdown: publishMarkdown({ pr, tour, repo, steps: report.steps, dryRun }) };
+    return { commit, dryRun, markdown: publishMarkdown({ pr, tour, repo, steps: report.steps, commit, dryRun }) };
   } finally {
     try { if (worktreeAdded) git(staging, ['worktree', 'remove', '--force', tree]); }
     finally { await rm(temp, { recursive: true, force: true }); }
@@ -101,4 +118,4 @@ async function main() {
     remote: values.remote || process.env.PROOF_REMOTE || 'origin', repo: values.repo || process.env.PROOF_REPO, dryRun: values['dry-run'] || false });
   process.stdout.write(result.markdown);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + error.message.replace(/\s+/g, ' ') + ')' : error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + diagnosticText(error.message).replace(/\s+/g, ' ') + ')' : diagnosticText(error.message)); process.exitCode = 1; });

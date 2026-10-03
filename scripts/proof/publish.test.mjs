@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { publishProof, publishMarkdown, validatePublish, resolveRemoteUrl } from './publish.mjs';
@@ -18,7 +18,7 @@ async function setup() {
   git(cwd, ['add', '.']); git(cwd, ['commit', '--quiet', '-m', 'Host source']);
   const proof = join(cwd, '.proof/fixture'); await mkdir(proof, { recursive: true });
   const steps = [{ caption: 'A complete screenshot', image: '01.png' }];
-  await writeFile(join(proof, 'report.json'), JSON.stringify({ status: 'proven', tour: 'fixture', steps }));
+  await writeFile(join(proof, 'report.json'), JSON.stringify({ status: 'proven', tour: 'fixture', steps, checkout: { commit: git(cwd, ['rev-parse', 'HEAD']), dirty: false } }));
   for (const file of ['01.png', 'contact-sheet.png', 'video.mp4', 'index.md']) await writeFile(join(proof, file), file + ' fixture bytes');
   return { cwd, remote, proof, steps };
 }
@@ -44,8 +44,8 @@ describe('publish.mjs local bare remote only', () => {
     expect(files).toEqual(['01.png', 'contact-sheet.png', 'index.md', 'report.json', 'video.mp4'].map(file => 'pr-27/fixture/' + file));
     expect(git(remote, ['rev-list', '--parents', '-n', '1', 'proofs']).split(' ')).toHaveLength(1);
     expect(git(remote, ['rev-parse', 'proofs'])).toBe(result.commit);
-    expect(result.markdown).toContain('![A complete screenshot](https://raw.githubusercontent.com/eysenfalk/PiChamber/proofs/pr-27/fixture/01.png)');
-    expect(result.markdown).toContain('[Video](https://raw.githubusercontent.com/eysenfalk/PiChamber/proofs/pr-27/fixture/video.mp4)');
+    expect(result.markdown).toContain('![A complete screenshot](https://raw.githubusercontent.com/eysenfalk/PiChamber/' + result.commit + '/pr-27/fixture/01.png)');
+    expect(result.markdown).toContain('[Video](https://raw.githubusercontent.com/eysenfalk/PiChamber/' + result.commit + '/pr-27/fixture/video.mp4)');
     expect({ status: git(cwd, ['status', '--porcelain']), head: git(cwd, ['rev-parse', 'HEAD']), trees: git(cwd, ['worktree', 'list', '--porcelain']) }).toEqual(before);
   });
   test('later publish appends, preserves unrelated proofs, replaces one tour, and identical retry adds no commit', async () => {
@@ -85,8 +85,9 @@ describe('publish.mjs local bare remote only', () => {
   });
   test('a rejected push leaves remote and host untouched', async () => {
     const { cwd, remote } = await setup();
-    await writeFile(join(remote, 'hooks/pre-receive'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-    await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow();
+    await writeFile(join(remote, 'hooks/pre-receive'), '#!/bin/sh\necho "failed https://user:SECRETTOKEN@localhost/x" >&2\nexit 1\n', { mode: 0o755 });
+    try { await publish({ cwd, remote, pr: 27, tour: 'fixture' }); throw new Error('Expected rejected push'); }
+    catch (error) { expect(error.message).toContain('git push failed'); expect(error.message).not.toContain('SECRETTOKEN'); }
     expect(git(remote, ['for-each-ref', '--format=%(refname)', 'refs/heads'])).toBe('');
     expect(git(cwd, ['status', '--porcelain'])).toBe('');
   });
@@ -94,6 +95,53 @@ describe('publish.mjs local bare remote only', () => {
     for (const bad of [{ pr: '-1' }, { tour: '../bad' }, { repo: 'bad' }, { remote: '--upload-pack=bad' }]) {
       expect(() => validatePublish({ pr: 27, tour: 'fixture', repo: 'eysenfalk/PiChamber', remote: 'origin', ...bad })).toThrow();
     }
-    expect(publishMarkdown({ pr: 1, tour: 'fixture', repo: 'other/fork', steps: [{ caption: '[safe]', image: '01.png' }] })).toContain('https://raw.githubusercontent.com/other/fork/proofs/pr-1/fixture/01.png');
+    expect(publishMarkdown({ pr: 1, tour: 'fixture', repo: 'other/fork', dryRun: true, steps: [{ caption: '[safe]', image: '01.png' }] })).toContain('https://raw.githubusercontent.com/other/fork/proofs/pr-1/fixture/01.png');
   });
+});
+
+test('publish.mjs reviewer credentialed ls-remote probe throws no credentials, and CLI argument errors redact too', async () => {
+  const { cwd } = await setup();
+  try { await publish({ cwd, remote: 'https://user:SECRETTOKEN@127.0.0.1:9/x.git', pr: 27, tour: 'fixture' }); throw new Error('Expected git failure'); }
+  catch (error) {
+    expect(error.message).toContain('git ls-remote failed');
+    expect(error.message).not.toContain('SECRETTOKEN');
+    expect(error.message).not.toContain('user:');
+    expect(error.message).not.toContain('Command failed:');
+  }
+  const result = spawnSync('node', [new URL('./publish.mjs', import.meta.url).pathname, '--https://user:SECRETTOKEN@127.0.0.1:9/x.git'], { encoding: 'utf8' });
+  expect(result.status).toBe(1);
+  expect(result.stdout).toBe('');
+  expect(result.stderr).toContain('Usage:');
+  expect(result.stderr).not.toContain('SECRETTOKEN');
+});
+
+test('publish.mjs refuses a proof from another source commit before contacting a remote', async () => {
+  const { cwd, proof, remote } = await setup();
+  const report = JSON.parse(await readFile(join(proof, 'report.json'), 'utf8'));
+  report.checkout.commit = 'a'.repeat(40);
+  await writeFile(join(proof, 'report.json'), JSON.stringify(report));
+  await expect(publish({ cwd, remote, pr: 27, tour: 'fixture' })).rejects.toThrow('differs from HEAD');
+  expect(git(remote, ['for-each-ref', '--format=%(refname)', 'refs/heads'])).toBe('');
+});
+
+test('publish.mjs explicit author/committer and unsigned commits ignore global signing and identity', async () => {
+  const { cwd, remote } = await setup();
+  const config = join(cwd, 'host-global-config');
+  await writeFile(config, '[commit]\n  gpgsign = true\n[user]\n  name = Wrong global identity\n  email = wrong@example.invalid\n');
+  const previous = process.env.GIT_CONFIG_GLOBAL;
+  process.env.GIT_CONFIG_GLOBAL = config;
+  try {
+    const result = await publishProof({ cwd, remote, pr: 27, tour: 'fixture' });
+    expect(git(remote, ['show', '-s', '--format=%an <%ae> / %cn <%ce>', result.commit])).toBe('PiChamber proof recorder <proof@pichamber.invalid> / PiChamber proof recorder <proof@pichamber.invalid>');
+  } finally { if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous; }
+});
+
+test('publish.mjs successful Markdown is pinned, dry-run links remain explicitly mutable and captions redact credentials', () => {
+  const commit = 'b'.repeat(40), steps = [{ caption: 'See https://user:SECRETTOKEN@localhost/x', image: '01.png' }];
+  const options = { pr: 27, tour: 'fixture', repo: 'eysenfalk/PiChamber', steps, commit };
+  const markdown = publishMarkdown(options);
+  expect(markdown).toContain('/' + commit + '/pr-27/fixture/');
+  expect(markdown).not.toContain('SECRETTOKEN');
+  expect(publishMarkdown({ ...options, dryRun: true })).toContain('/proofs/pr-27/fixture/');
+  expect(() => publishMarkdown({ ...options, commit: undefined })).toThrow('commit SHA');
 });
