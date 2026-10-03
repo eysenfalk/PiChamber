@@ -20,7 +20,7 @@ const MAX_INTERVIEW_CHARS = 4_000;
 const MAX_SUMMARY_CHARS = 200;
 const TRUNCATION_MARKER = '[truncated]';
 
-export type SupervisorReason = 'need_decision' | 'interview_request' | 'progress_update';
+type SupervisorReason = 'need_decision' | 'interview_request' | 'progress_update';
 
 export interface SupervisorDetail {
   label: string;
