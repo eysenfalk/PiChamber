@@ -951,6 +951,26 @@ export function createSessionDaemon({
     return [...candidates].some((targetRuntime) => pendingResourceReloads.has(targetRuntime));
   };
 
+  // Reload Pi resources (extensions, skills, prompts, settings) in every
+  // resident runtime. Idle runtimes reload now through the same in-place path
+  // resource edits use; busy ones stay in `pendingResourceReloads` and reload
+  // at their next safe lifecycle edge, so no turn is interrupted. A reload
+  // that throws stays pending for that edge and is counted as failed.
+  const reloadAllResidentRuntimes = async () => {
+    const targets = activeRuntimes().filter((targetRuntime) => targetRuntime?.session?.sessionId);
+    const outcomes = await Promise.all(targets.map(async (targetRuntime) => {
+      pendingResourceReloads.add(targetRuntime);
+      if (!isRuntimeReloadSafe(targetRuntime)) return 'deferred';
+      if (await flushPendingResourceReload(targetRuntime)) {
+        touchIdleDisposal(targetRuntime.session?.sessionId);
+        return 'reloaded';
+      }
+      return isRuntimeReloadSafe(targetRuntime) ? 'failed' : 'deferred';
+    }));
+    const count = (outcome) => outcomes.filter((candidate) => candidate === outcome).length;
+    return { reloaded: count('reloaded'), deferred: count('deferred'), failed: count('failed') };
+  };
+
   // In-flight idle disposals by session id. A read or prompt that arrives
   // while disposal is running waits for it and then reopens from JSONL
   // instead of adopting a runtime that is about to be disposed.
@@ -3819,7 +3839,7 @@ export function createSessionDaemon({
               // and health result carries `streamEpoch`, and session read
               // responses stamp it so clients can reject stale-epoch data.
               'events.streamEpoch',
-              'runtime.claim', 'runtime.shutdown',
+              'runtime.claim', 'runtime.shutdown', 'runtime.reloadResources',
               'projects.list', 'projects.select', 'sessions.list', 'sessions.create', 'sessions.open', 'sessions.messages', 'sessions.rename', 'sessions.delete',
               'sessions.tree', 'sessions.navigate', 'sessions.fork', 'sessions.clone', 'sessions.prompt',
               'sessions.steer', 'sessions.followUp', 'sessions.sendReceipt', 'sessions.abort', 'sessions.setModel',
@@ -3888,6 +3908,11 @@ export function createSessionDaemon({
             }
           });
         }
+        return;
+      }
+      case 'runtime.reloadResources': {
+        const result = await reloadAllResidentRuntimes();
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
         return;
       }
       case 'projects.list':
