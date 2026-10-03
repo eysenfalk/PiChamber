@@ -3,8 +3,12 @@ import * as React from 'react';
 import { usePiSessionSnapshot } from '@/sync/pi-session-context';
 import { cn } from '@/lib/utils';
 import { containsAnsiEscape, extractAnsiTruecolor, stripAnsi } from '@/lib/pi/ansi';
+import { SUBAGENT_ASYNC_WIDGET_KEY, SUBAGENT_INSPECT_WIDGET_KEY } from '@/lib/pi/subagentStatusSnapshot';
 import { Icon } from '@/components/icon/Icon';
 import { toast } from '@/components/ui';
+import { Button } from '@/components/ui/button';
+import { useUIStore } from '@/stores/useUIStore';
+import { SubagentStatusWidget } from './SubagentStatusWidget';
 
 /**
  * Live pi extension surfaces for the selected session: footer-style status
@@ -31,20 +35,67 @@ function renderStatusText(text: string): React.ReactNode {
   return <span style={{ color }}>{clean}</span>;
 }
 
-export const ExtensionStatusStrip: React.FC<{ sessionId?: string | null }> = ({ sessionId }) => {
-  const selectedSessionId = usePiSessionSnapshot((state) => state.selectedSessionId);
-  const activeSessionId = sessionId ?? selectedSessionId;
+const pluralize = (count: number, singular: string, plural: string): string => (
+  count === 1 ? `1 ${singular}` : `${count} ${plural}`
+);
 
-  const statuses = usePiSessionSnapshot(
-    (state) => {
-      const session = activeSessionId ? state.reducer.bySession.get(activeSessionId) : undefined;
-      return [...(session?.extensionStatuses.entries() ?? [])];
-    },
-    (a, b) => stripEquality(a.flat(), b.flat()),
-    `session:${activeSessionId ?? ''}`,
-  );
+/** The one small button a collapsed extension surface leaves behind. */
+export const CollapsedExtensionButton: React.FC<{
+  count: number;
+  label: string;
+  onExpand: () => void;
+  className?: string;
+}> = ({ count, label, onExpand, className }) => (
+  <div className={cn('chat-input-column', className)}>
+    <div className="flex">
+      <Button
+        variant="outline"
+        size="xs"
+        className="gap-1.5"
+        aria-label={label}
+        aria-expanded={false}
+        title={label}
+        onClick={onExpand}
+      >
+        <Icon name="plug-2" className="size-3.5" />
+        <span className="tabular-nums">{count}</span>
+      </Button>
+    </div>
+  </div>
+);
 
+const CollapseButton: React.FC<{ label: string; className?: string; onCollapse: () => void }> = ({ label, className, onCollapse }) => (
+  <Button
+    variant="ghost"
+    size="icon"
+    className={cn('size-6 shrink-0 rounded-full', className)}
+    aria-label={label}
+    aria-expanded
+    title={label}
+    onClick={onCollapse}
+  >
+    <Icon name="arrow-down-s" className="size-4" />
+  </Button>
+);
+
+type ExtensionStatusEntry = [key: string, text: string];
+
+export const ExtensionStatusPill: React.FC<{
+  statuses: readonly ExtensionStatusEntry[];
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
+}> = ({ statuses, collapsed, onCollapsedChange }) => {
   if (statuses.length === 0) return null;
+
+  if (collapsed) {
+    return (
+      <CollapsedExtensionButton
+        count={statuses.length}
+        label={`Show extension status, ${pluralize(statuses.length, 'entry', 'entries')}`}
+        onExpand={() => onCollapsedChange(false)}
+      />
+    );
+  }
 
   return (
     <div className="chat-input-column">
@@ -76,9 +127,28 @@ export const ExtensionStatusStrip: React.FC<{ sessionId?: string | null }> = ({ 
             );
           })}
         </div>
+        <CollapseButton label="Hide extension status" onCollapse={() => onCollapsedChange(true)} />
       </div>
     </div>
   );
+};
+
+export const ExtensionStatusStrip: React.FC<{ sessionId?: string | null }> = ({ sessionId }) => {
+  const selectedSessionId = usePiSessionSnapshot((state) => state.selectedSessionId);
+  const activeSessionId = sessionId ?? selectedSessionId;
+  const collapsed = useUIStore((state) => state.extensionStatusCollapsed === true);
+  const setCollapsed = useUIStore((state) => state.setExtensionStatusCollapsed);
+
+  const statuses = usePiSessionSnapshot(
+    (state) => {
+      const session = activeSessionId ? state.reducer.bySession.get(activeSessionId) : undefined;
+      return [...(session?.extensionStatuses.entries() ?? [])];
+    },
+    (a, b) => stripEquality(a.flat(), b.flat()),
+    `session:${activeSessionId ?? ''}`,
+  );
+
+  return <ExtensionStatusPill statuses={statuses} collapsed={collapsed} onCollapsedChange={setCollapsed} />;
 };
 
 /**
@@ -134,24 +204,36 @@ export const ExtensionNoticeToasts: React.FC<{ sessionId?: string | null }> = ({
   return null;
 };
 
-export const ExtensionWidgetStrip: React.FC<{
-  sessionId?: string | null;
-  placement?: 'aboveEditor' | 'belowEditor';
+type ExtensionWidgetEntry = [key: string, widget: { lines: string[]; placement: 'aboveEditor' | 'belowEditor' }];
+
+const widgetEntriesEqual = (a: ExtensionWidgetEntry[], b: ExtensionWidgetEntry[]): boolean => (
+  a.length === b.length && a.every(([key, widget], index) => {
+    const other = b[index];
+    return other !== undefined && key === other[0] && widget.placement === other[1].placement && stripEquality(widget.lines, other[1].lines);
+  })
+);
+
+export const ExtensionWidgetCard: React.FC<{
+  widgets: readonly ExtensionWidgetEntry[];
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
   className?: string;
-}> = ({ sessionId, placement = 'aboveEditor', className }) => {
-  const selectedSessionId = usePiSessionSnapshot((state) => state.selectedSessionId);
-  const activeSessionId = sessionId ?? selectedSessionId;
+}> = ({ widgets, collapsed, onCollapsedChange, className }) => {
+  // `subagent-inspect` carries on-demand inspect replies for hosts that opt
+  // in; pi-subagents asks every other host not to render it.
+  const visible = widgets.filter(([key]) => key !== SUBAGENT_INSPECT_WIDGET_KEY);
+  if (visible.length === 0) return null;
 
-  const widgets = usePiSessionSnapshot(
-    (state) => {
-      const session = activeSessionId ? state.reducer.bySession.get(activeSessionId) : undefined;
-      return [...(session?.extensionWidgets.entries() ?? [])].filter(([, widget]) => widget.placement === placement);
-    },
-    (a, b) => stripEquality(a.map(([key, widget]) => `${key}:${widget.lines.join('\n')}`), b.map(([key, widget]) => `${key}:${widget.lines.join('\n')}`)),
-    `session:${activeSessionId ?? ''}`,
-  );
-
-  if (widgets.length === 0) return null;
+  if (collapsed) {
+    return (
+      <CollapsedExtensionButton
+        count={visible.length}
+        label={`Show extension widgets, ${pluralize(visible.length, 'widget', 'widgets')}`}
+        onExpand={() => onCollapsedChange(false)}
+        className={className}
+      />
+    );
+  }
 
   return (
     <div className={cn('chat-input-column', className)}>
@@ -161,22 +243,58 @@ export const ExtensionWidgetStrip: React.FC<{
           <span className="typography-micro font-medium uppercase tracking-wide text-muted-foreground">
             Extensions
           </span>
+          <CollapseButton label="Hide extension widgets" className="-my-1 ml-auto" onCollapse={() => onCollapsedChange(true)} />
         </div>
         <div className="flex flex-col gap-2">
-          {widgets.map(([key, widget]) => (
-            <div
-              key={key}
-              className="rounded-lg border border-border/30 bg-muted/40 px-2.5 py-2 font-mono text-xs leading-relaxed text-foreground"
-            >
-              {widget.lines.map((line, index) => (
-                <span key={index} className="block whitespace-pre-wrap">
-                  {containsAnsiEscape(line) ? stripAnsi(line) : line}
-                </span>
-              ))}
-            </div>
+          {visible.map(([key, widget]) => (
+            key === SUBAGENT_ASYNC_WIDGET_KEY ? (
+              <div
+                key={key}
+                className="rounded-lg border border-border/30 bg-muted/40 px-2.5 py-2 leading-relaxed text-foreground"
+              >
+                <SubagentStatusWidget lines={widget.lines} />
+              </div>
+            ) : (
+              <div
+                key={key}
+                className="rounded-lg border border-border/30 bg-muted/40 px-2.5 py-2 font-mono text-xs leading-relaxed text-foreground"
+              >
+                {widget.lines.map((line, index) => (
+                  <span key={index} className="block whitespace-pre-wrap">
+                    {containsAnsiEscape(line) ? stripAnsi(line) : line}
+                  </span>
+                ))}
+              </div>
+            )
           ))}
         </div>
       </div>
     </div>
   );
+};
+
+export const ExtensionWidgetStrip: React.FC<{
+  sessionId?: string | null;
+  placement?: 'aboveEditor' | 'belowEditor';
+  className?: string;
+}> = ({ sessionId, placement = 'aboveEditor', className }) => {
+  const selectedSessionId = usePiSessionSnapshot((state) => state.selectedSessionId);
+  const activeSessionId = sessionId ?? selectedSessionId;
+  const collapsed = useUIStore((state) => state.extensionWidgetsCollapsed === true);
+  const setCollapsed = useUIStore((state) => state.setExtensionWidgetsCollapsed);
+
+  // Filtering inside the selector keeps hidden `subagent-inspect` updates from
+  // re-rendering the card, and the line comparison avoids joining large
+  // snapshot lines on every session event.
+  const widgets = usePiSessionSnapshot(
+    (state): ExtensionWidgetEntry[] => {
+      const session = activeSessionId ? state.reducer.bySession.get(activeSessionId) : undefined;
+      return [...(session?.extensionWidgets.entries() ?? [])]
+        .filter(([key, widget]) => widget.placement === placement && key !== SUBAGENT_INSPECT_WIDGET_KEY);
+    },
+    widgetEntriesEqual,
+    `session:${activeSessionId ?? ''}`,
+  );
+
+  return <ExtensionWidgetCard widgets={widgets} collapsed={collapsed} onCollapsedChange={setCollapsed} className={className} />;
 };
