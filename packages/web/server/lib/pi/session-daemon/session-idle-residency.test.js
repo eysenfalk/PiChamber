@@ -134,6 +134,14 @@ class FakeSession {
   }
 }
 
+// Mirrors the Pi session contract the daemon uses to hand an extension its UI
+// context: bindExtensions receives the bindings the daemon builds.
+class ExtensionFakeSession extends FakeSession {
+  async bindExtensions(bindings) {
+    this.boundBindings = bindings;
+  }
+}
+
 class FakeRuntime {
   constructor({ cwd, session }) {
     this.cwd = cwd;
@@ -327,7 +335,7 @@ describe('Pi session daemon idle residency', () => {
     }
   }
 
-  async function startSingleSessionDaemon(prefix, sessionId, idleTimeoutMs, createRuntimeOverride) {
+  async function startSingleSessionDaemon(prefix, sessionId, idleTimeoutMs, createRuntimeOverride, extraDaemonOptions = {}) {
     const root = await createTemporaryRoot(prefix);
     const endpoint = testDaemonEndpoint(root);
     const sessionFile = join(root, 'session.jsonl');
@@ -359,6 +367,7 @@ describe('Pi session daemon idle residency', () => {
       credential,
       cwd: root,
       idleTimeoutMs,
+      ...extraDaemonOptions,
       listSessions: async () => [{ path: sessionFile, id: sessionId, cwd: root }],
       createRuntime: trackedCreateRuntime,
     });
@@ -745,5 +754,120 @@ describe('Pi session daemon idle residency', () => {
     daemon = undefined;
     expect(disposeCalls).toBe(1);
     expect(targetRuntime.disposed).toBe(true);
+  });
+
+  describe('async subagent runs', () => {
+    const SUBAGENT_KEY = 'subagent-async';
+    const IDLE_MS = 100;
+
+    const snapshotLine = (states, overrides = {}) => `PI_SUBAGENT_ASYNC_JSON:${JSON.stringify({
+      kind: 'pi-subagents.async-status-snapshot',
+      version: 1,
+      generatedAt: Date.now(),
+      caps: { maxRuns: 20, maxChildrenPerNode: 8, maxDepth: 3, maxStringLength: 160, maxSerializedBytes: 32768 },
+      omitted: { runs: 0, children: 0, byteLimitExceeded: false },
+      runs: states.map((state, index) => ({ id: `run-${index}`, kind: 'subagent', label: `run ${index}`, state })),
+      ...overrides,
+    })}`;
+
+    async function startExtensionDaemon(prefix, sessionId, extraDaemonOptions = {}) {
+      const sessions = [];
+      const started = await startSingleSessionDaemon(
+        prefix,
+        sessionId,
+        IDLE_MS,
+        async (daemonOptions, hooks) => {
+          const session = new ExtensionFakeSession(sessionId, join(daemonOptions.cwd, 'session.jsonl'));
+          await session.bindExtensions(hooks.createExtensionBindings(session));
+          sessions.push(session);
+          return new FakeRuntime({ cwd: daemonOptions.cwd, session });
+        },
+        extraDaemonOptions,
+      );
+      const client = await connectAuthenticatedClient(started.endpoint);
+      await openSession(client, sessionId, started.root);
+      expect(started.runtimes).toHaveLength(1);
+      const setWidget = (lines) => sessions[0].boundBindings.uiContext.setWidget(SUBAGENT_KEY, lines);
+      return { ...started, client, setWidget };
+    }
+
+    it('keeps an idle session resident while a run is queued or running, then disposes it after the last run ends', async () => {
+      const { root, client, runtimes, setWidget } = await startExtensionDaemon('pichamber-pi-daemon-idle-hold-', 'hold-session');
+      setWidget([snapshotLine(['running', 'queued'])]);
+
+      await sleep(IDLE_MS * 4);
+      expect(runtimes[0].disposed).toBe(false);
+
+      // A view-only open re-arms nothing while the hold applies.
+      await openSession(client, 'hold-session', root);
+      await sleep(IDLE_MS * 3);
+      expect(runtimes[0].disposed).toBe(false);
+
+      // One run ended, one still queued: still held.
+      setWidget([snapshotLine(['complete', 'queued'])]);
+      await sleep(IDLE_MS * 3);
+      expect(runtimes[0].disposed).toBe(false);
+
+      // Nothing left to wait for: the normal idle timer applies again.
+      setWidget([snapshotLine(['complete', 'failed'])]);
+      await waitFor(() => runtimes[0].disposed === true, { message: 'idle disposal never resumed after the last run ended' });
+    });
+
+    it('arms the normal timer again when the widget is removed', async () => {
+      const { runtimes, setWidget } = await startExtensionDaemon('pichamber-pi-daemon-idle-hold-removed-', 'removed-session');
+      setWidget([snapshotLine(['running'])]);
+      await sleep(IDLE_MS * 4);
+      expect(runtimes[0].disposed).toBe(false);
+
+      setWidget(undefined);
+      await waitFor(() => runtimes[0].disposed === true, { message: 'removing the widget did not release the hold' });
+    });
+
+    it.each([
+      ['a truncated snapshot', () => [snapshotLine(['running']).slice(0, 90)]],
+      ['malformed JSON', () => ['PI_SUBAGENT_ASYNC_JSON:{not json']],
+      ['an unknown version', () => [snapshotLine(['running'], { version: 2 })]],
+      ['a snapshot with no queued or running run', () => [snapshotLine(['complete', 'failed', 'stopped'])]],
+      ['a snapshot on line 1 instead of line 0', () => ['first line', snapshotLine(['running'])]],
+      ['text without the snapshot prefix', () => ['running']],
+    ])('does not hold the session for %s', async (_name, lines) => {
+      const { runtimes, setWidget } = await startExtensionDaemon('pichamber-pi-daemon-idle-nohold-', 'nohold-session');
+      setWidget(lines());
+      await waitFor(() => runtimes[0].disposed === true, { message: 'a snapshot that is not live held the session' });
+    });
+
+    it('does not hold the session for a snapshot under another widget key', async () => {
+      const { runtimes } = await startExtensionDaemon('pichamber-pi-daemon-idle-otherkey-', 'otherkey-session');
+      runtimes[0].session.boundBindings.uiContext.setWidget('todo', [snapshotLine(['running'])]);
+      await waitFor(() => runtimes[0].disposed === true, { message: 'another widget key held the session' });
+    });
+
+    it('stops holding after the cap, measured from the first refused disposal', async () => {
+      const capMs = 500;
+      const { runtimes, setWidget } = await startExtensionDaemon(
+        'pichamber-pi-daemon-idle-hold-cap-',
+        'cap-session',
+        { subagentHoldCapMs: capMs },
+      );
+      const publishedAt = Date.now();
+      setWidget([snapshotLine(['running'])]);
+
+      await sleep(IDLE_MS + 150);
+      expect(runtimes[0].disposed).toBe(false);
+
+      // Later snapshot updates do not restart the cap.
+      setWidget([snapshotLine(['running', 'running'])]);
+      await waitFor(() => runtimes[0].disposed === true, { timeoutMs: 3_000, message: 'the hold never ended at the cap' });
+      expect(Date.now() - publishedAt).toBeGreaterThanOrEqual(IDLE_MS + capMs - 50);
+    });
+
+    it('rejects an invalid hold cap', () => {
+      expect(() => createSessionDaemon({
+        endpoint: '/tmp/pichamber-invalid-cap.sock',
+        credential,
+        cwd: '/tmp',
+        subagentHoldCapMs: -1,
+      })).toThrow(/subagent hold cap/);
+    });
   });
 });

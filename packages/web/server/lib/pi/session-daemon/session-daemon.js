@@ -171,6 +171,7 @@ export function createSessionDaemon({
   onOwnershipClaim,
   onShutdown,
   idleTimeoutMs = 5 * 60 * 1_000,
+  subagentHoldCapMs = 6 * 60 * 60 * 1_000,
   sendOperationTtlMs = 10 * 60 * 1_000,
   listSessions = ({ cwd: sessionCwd, agentDir: sessionAgentDir = agentDir }) => listPiSessionJsonlDirectory({
     cwd: sessionCwd,
@@ -208,6 +209,9 @@ export function createSessionDaemon({
   }
   if (!Number.isFinite(idleTimeoutMs) || idleTimeoutMs < 0) {
     throw new SessionDaemonProtocolError('INVALID_IDLE_TIMEOUT', 'The session daemon idle timeout is invalid.');
+  }
+  if (!Number.isFinite(subagentHoldCapMs) || subagentHoldCapMs < 0) {
+    throw new SessionDaemonProtocolError('INVALID_SUBAGENT_HOLD_CAP', 'The session daemon subagent hold cap is invalid.');
   }
   if (!Number.isFinite(sendOperationTtlMs) || sendOperationTtlMs <= 0) {
     throw new SessionDaemonProtocolError('INVALID_SEND_OPERATION_TTL', 'The session daemon send operation ttl is invalid.');
@@ -566,10 +570,12 @@ export function createSessionDaemon({
     getSequence: () => sequence,
     protocolError: (code, message) => new SessionDaemonProtocolError(code, message),
     requestSessionShutdown: (sessionId) => shutdownRequestedBySession.add(sessionId),
+    onSubagentAsyncWidgetChange: (sessionId) => releaseSubagentHoldWhenInactive(sessionId),
   });
   const {
     buildExtensionBindings,
     clearExtensionState,
+    hasLiveSubagentRunsForSession,
     mirrorExtensionApp,
     mirrorExtensionPanel,
     publishExtensionCustomMessage,
@@ -680,6 +686,12 @@ export function createSessionDaemon({
   };
 
   const idleDisposeTimers = new Map();
+  // One entry per session while idle disposal is being refused because the
+  // session's async subagents are still queued or running (the last
+  // `subagent-async` snapshot says so). `expired` marks a hold that reached
+  // `subagentHoldCapMs`: it stops holding until the snapshot is inactive
+  // again or the runtime is gone.
+  const subagentHolds = new Map();
   const activeSessionRequests = new Map();
   // Failed-create cleanup: when model/thinking setup fails after the
   // resident lease is acquired and the dispose-first cleanup rejects,
@@ -724,6 +736,8 @@ export function createSessionDaemon({
   const clearAllIdleDisposals = () => {
     for (const timer of idleDisposeTimers.values()) clearTimeout(timer);
     idleDisposeTimers.clear();
+    for (const hold of subagentHolds.values()) clearTimeout(hold.capTimer);
+    subagentHolds.clear();
   };
 
   const disposeRuntime = async () => {
@@ -953,16 +967,63 @@ export function createSessionDaemon({
     return true;
   };
 
+  const clearSubagentHold = (sessionId) => {
+    const hold = subagentHolds.get(sessionId);
+    if (!hold) return;
+    clearTimeout(hold.capTimer);
+    subagentHolds.delete(sessionId);
+  };
+
+  // Pi's pi-subagents stops watching for async results when its session is
+  // shut down, and a resumed session only delivers them at the next user
+  // turn. So a session whose snapshot still shows a queued or running run
+  // stays resident. The decision reads the bridge's widget mirror (the value
+  // clients get) and starts no polling: the first refusal arms one cap timer,
+  // and a later snapshot event releases the hold (`releaseSubagentHold`).
+  const subagentRunsHoldSession = (sessionId) => {
+    if (!hasLiveSubagentRunsForSession(sessionId)) {
+      clearSubagentHold(sessionId);
+      return false;
+    }
+    let hold = subagentHolds.get(sessionId);
+    if (hold?.expired) return false;
+    if (!hold) {
+      hold = { expired: false, capTimer: undefined };
+      const created = hold;
+      created.capTimer = setTimeout(() => {
+        created.expired = true;
+        void disposeIdleSessionRuntime(sessionId);
+      }, subagentHoldCapMs);
+      created.capTimer.unref?.();
+      subagentHolds.set(sessionId, created);
+    }
+    return true;
+  };
+
+  // A held session has no idle timer. When its snapshot turns inactive (or
+  // its widget is removed), end the hold and arm the normal timer. Sessions
+  // without a hold are left alone, so a stream of snapshot updates never
+  // extends a deadline or parses anything.
+  function releaseSubagentHoldWhenInactive(sessionId) {
+    if (!subagentHolds.has(sessionId)) return;
+    if (hasLiveSubagentRunsForSession(sessionId)) return;
+    clearSubagentHold(sessionId);
+    touchIdleDisposal(sessionId);
+  }
+
   const disposeIdleSessionRuntime = (sessionId) => {
     if (disposingSessionIds.has(sessionId)) return disposingSessionPromises.get(sessionId) ?? Promise.resolve();
     const targetRuntime = runtimeRegistry?.findBySessionId(sessionId);
     if (!targetRuntime) {
       shutdownRequestedBySession.delete(sessionId);
+      clearSubagentHold(sessionId);
       return Promise.resolve();
     }
     if (!isIdleDisposalSafe(sessionId, targetRuntime)) return Promise.resolve();
+    if (subagentRunsHoldSession(sessionId)) return Promise.resolve();
     disposingSessionIds.add(sessionId);
     clearIdleDisposal(sessionId);
+    clearSubagentHold(sessionId);
     activeSessionInputs.delete(targetRuntime);
     pendingResourceReloads.delete(targetRuntime);
     resourceReloadsByRuntime.delete(targetRuntime);
@@ -1069,6 +1130,7 @@ export function createSessionDaemon({
     if (disposingSessionIds.has(sessionId)) return;
     const targetRuntime = runtimeRegistry?.findBySessionId(sessionId);
     if (!isIdleDisposalSafe(sessionId, targetRuntime)) return;
+    if (subagentRunsHoldSession(sessionId)) return;
     scheduleIdleDisposal(sessionId);
   };
 
@@ -3337,6 +3399,7 @@ export function createSessionDaemon({
       if (active) {
         if (active.session?.isStreaming) await active.session.abort();
         await runtimeRegistry?.dispose(active);
+        clearSubagentHold(sessionId);
         if (runtime === active) runtime = undefined;
       }
       if (active && typeof activeSessionFile === 'string' && activeSessionFile.length > 0) {

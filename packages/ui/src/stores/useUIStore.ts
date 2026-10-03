@@ -131,6 +131,11 @@ interface UIStore {
   // Global draft welcome starters; null = unset (use the default built-in set).
   globalDraftStarters: DraftStarterRef[] | null;
   draftStartersVisible: boolean;
+  // Collapsed state of the Extensions widget card and of the extension status
+  // strip above the composer. Both persist; a collapsed surface keeps one
+  // small button that expands it again.
+  extensionWidgetsCollapsed: boolean;
+  extensionStatusCollapsed: boolean;
   // Saved preference: open every tool call by default. Pi's tool-expansion
   // toggle overrides it for this window only (see toolCallsExpansion.ts).
   expandToolCallsByDefault: boolean;
@@ -251,6 +256,8 @@ interface UIStore {
   setFontSize: (size: number) => void;
   setGlobalDraftStarters: (refs: DraftStarterRef[]) => void;
   setDraftStartersVisible: (value: boolean) => void;
+  setExtensionWidgetsCollapsed: (value: boolean) => void;
+  setExtensionStatusCollapsed: (value: boolean) => void;
   setExpandToolCallsByDefault: (value: boolean) => void;
   setToolCallsExpandedOverride: (value: boolean | null) => void;
   setTerminalFontSize: (size: number) => void;
@@ -406,6 +413,8 @@ export const useUIStore = create<UIStore>()(
         weekStartPreference: 'auto',
         expandedEditorToolbar: false,
         draftStartersVisible: true,
+        extensionWidgetsCollapsed: false,
+        extensionStatusCollapsed: false,
         expandToolCallsByDefault: false,
         toolCallsExpandedOverride: null,
         isExpandedInput: false,
@@ -1034,6 +1043,14 @@ export const useUIStore = create<UIStore>()(
 
         setDraftStartersVisible: (value) => {
           set({ draftStartersVisible: value });
+        },
+
+        setExtensionWidgetsCollapsed: (value) => {
+          set({ extensionWidgetsCollapsed: value });
+        },
+
+        setExtensionStatusCollapsed: (value) => {
+          set({ extensionStatusCollapsed: value });
         },
 
         // Changing the saved preference drops the transient override so the
@@ -1762,6 +1779,8 @@ export const useUIStore = create<UIStore>()(
           weekStartPreference: state.weekStartPreference,
           expandedEditorToolbar: state.expandedEditorToolbar,
           draftStartersVisible: state.draftStartersVisible,
+          extensionWidgetsCollapsed: state.extensionWidgetsCollapsed,
+          extensionStatusCollapsed: state.extensionStatusCollapsed,
           expandToolCallsByDefault: state.expandToolCallsByDefault,
           shortcutOverrides: state.shortcutOverrides,
           fileEditorKeymap: state.fileEditorKeymap,
