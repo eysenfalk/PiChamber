@@ -113,6 +113,23 @@ export interface PiRuntimeHealth {
   error?: PiError;
 }
 
+/** `POST /api/pi/runtime/reload` response: sessions reloaded now, deferred to turn end, or failed. */
+export interface PiRuntimeReloadResult {
+  reloaded: number;
+  deferred: number;
+  failed: number;
+}
+
+/**
+ * `POST /api/pi/runtime/restart` response. `process` means the server itself
+ * restarts (desktop relaunch or a process manager); `daemon` means this
+ * server cannot restart itself and only the Pi session daemon restarted.
+ */
+export interface PiRuntimeRestartResult {
+  accepted: true;
+  scope: 'process' | 'daemon';
+}
+
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------

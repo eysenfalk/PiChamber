@@ -11,6 +11,8 @@ import { runtimeFetch } from '@/lib/runtime-fetch';
 import { isDesktopLocalOriginActive, isElectronShell } from '@/lib/desktop';
 import type { UpdateInfo } from '@/lib/desktop';
 import { InstanceServiceUrls } from './InstanceServiceUrls';
+import { AboutBuilds } from './AboutBuilds';
+import { getUiBuild, readServerBuilds, type RuntimeBuilds } from '@/lib/build-info';
 import { DesktopUpdateChannelSettings } from './DesktopUpdateChannelSettings';
 import {
   SettingsSection,
@@ -37,6 +39,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
   );
   const [showChecking, setShowChecking] = React.useState(false);
   const [piChamberVersion, setPiChamberVersion] = React.useState<string | null>(null);
+  const [builds, setBuilds] = React.useState<RuntimeBuilds>(() => ({ ui: getUiBuild(), server: null, daemon: null }));
   const updateStore = useUpdateStore(useShallow((s) => ({
     info: s.info,
     serverInfo: s.serverInfo,
@@ -81,7 +84,10 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
         const version = typeof data?.pichamberVersion === 'string' && data.pichamberVersion.trim().length > 0
           ? data.pichamberVersion.trim()
           : null;
-        if (!cancelled) setPiChamberVersion(version);
+        if (!cancelled) {
+          setPiChamberVersion(version);
+          setBuilds({ ui: getUiBuild(), ...readServerBuilds(data) });
+        }
       } catch {
         if (!cancelled) setPiChamberVersion(null);
       }
@@ -131,6 +137,8 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
           </div>
           <InstanceServiceUrls />
         </div>
+
+        <AboutBuilds builds={builds} />
 
         <div className="flex justify-center">
           {!updateStore.available && !updateStore.error && (
@@ -283,6 +291,11 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
             <p className="typography-meta text-[var(--status-error)]">{updateStore.error}</p>
           </div>
         )}
+
+        <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 @xl:flex-row @xl:items-start @xl:justify-between">
+          <span className={SETTINGS_FIELD_LABEL_CLASS}>{"Build"}</span>
+          <AboutBuilds builds={builds} />
+        </div>
 
         <div className="flex flex-col gap-2 border-b border-border/40 px-4 py-3 @xl:flex-row @xl:items-center @xl:justify-between">
           <span className={SETTINGS_FIELD_LABEL_CLASS}>{"Instance URLs"}</span>

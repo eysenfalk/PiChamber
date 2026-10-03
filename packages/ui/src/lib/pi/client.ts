@@ -48,6 +48,8 @@ import {
   type PiSnippetUpdateInput,
   type PiCommandListResponse,
   type PiRuntimeHealth,
+  type PiRuntimeReloadResult,
+  type PiRuntimeRestartResult,
   type PiProjectListResponse,
   type PiProjectSelectResponse,
   type PiSessionCreateInput,
@@ -192,6 +194,8 @@ const jsonRequest = async <TBody, TResponse>(
 
   throw lastError;
 };
+
+const isCount = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
 
 export class PiRequestError extends Error {
   readonly code: string;
@@ -431,6 +435,37 @@ export class PiService {
       capabilities: health.capabilities,
       ...(health.error ? { error: health.error as PiError } : {}),
     };
+  }
+
+  /** Reload extensions, skills, prompts and settings in every loaded Pi session; busy sessions reload at turn end. */
+  async reloadRuntime(scope?: PiClientScope): Promise<PiRuntimeReloadResult> {
+    assertRuntimeUnchanged(scope);
+    const result = await jsonRequest<undefined, PiRuntimeReloadResult>('/api/pi/runtime/reload', {
+      method: 'POST',
+      ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
+    });
+    if (!isCount(result?.reloaded) || !isCount(result?.deferred) || !isCount(result?.failed)) {
+      throw new PiRequestError('DAEMON_PROTOCOL_MISMATCH');
+    }
+    return { reloaded: result.reloaded, deferred: result.deferred, failed: result.failed };
+  }
+
+  /**
+   * Restart the server (or only its Pi session daemon, see
+   * `PiRuntimeRestartResult.scope`). Not retried: the request is not
+   * idempotent and the server may already be going away.
+   */
+  async restartRuntime(scope?: PiClientScope): Promise<PiRuntimeRestartResult> {
+    assertRuntimeUnchanged(scope);
+    const result = await jsonRequest<undefined, PiRuntimeRestartResult>('/api/pi/runtime/restart', {
+      method: 'POST',
+      retry: false,
+      ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
+    });
+    if (result?.accepted !== true || (result.scope !== 'process' && result.scope !== 'daemon')) {
+      throw new PiRequestError('DAEMON_PROTOCOL_MISMATCH');
+    }
+    return { accepted: true, scope: result.scope };
   }
 
   // ----- Projects ---------------------------------------------------------
