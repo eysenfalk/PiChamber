@@ -8,6 +8,7 @@ import { validName } from './tours.mjs';
 import { markdownEscape } from './media.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const usage = 'bun run proof:publish -- <pr> <tour> [--remote NAME|URL|PATH] [--repo OWNER/NAME] [--dry-run]';
 export const resolveRemoteUrl = (remote, cwd) => remote.includes(':') ? remote : resolve(cwd, remote);
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 60000 }).trim();
 export function validatePublish({ pr, tour, repo, remote }) {
@@ -94,10 +95,10 @@ async function main() {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     remote: { type: 'string' }, repo: { type: 'string' }, 'dry-run': { type: 'boolean' }, help: { type: 'boolean' },
   } });
-  if (values.help) { console.log('bun run proof:publish -- <pr> <tour> [--remote NAME|URL|PATH] [--repo OWNER/NAME] [--dry-run]'); return; }
+  if (values.help) { console.log(usage); return; }
   if (positionals.length !== 2) throw new Error('PR and tour required; see --help');
   const result = await publishProof({ pr: positionals[0], tour: positionals[1], cwd: root,
     remote: values.remote || process.env.PROOF_REMOTE || 'origin', repo: values.repo || process.env.PROOF_REPO, dryRun: values['dry-run'] || false });
   process.stdout.write(result.markdown);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + error.message.replace(/\s+/g, ' ') + ')' : error.message); process.exitCode = 1; });

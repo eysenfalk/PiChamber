@@ -1,8 +1,18 @@
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { fixture, brokenFixture, labTour, validateTour, VIEWPORTS } from './tours.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
+  test('automation CLIs reject unknown flags with one usage line on stderr, and no stdout', () => {
+    for (const script of ['record.mjs', 'publish.mjs']) {
+      const result = spawnSync('node', [new URL(script, import.meta.url).pathname, '--quiet'], { encoding: 'utf8' });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr.trim().split('\n')).toHaveLength(1);
+      expect(result.stderr).toContain('Usage:');
+    }
+  });
   test('fixture and intentionally failing tour are valid data; exact desktop/mobile touch presets', () => {
     expect(validateTour(fixture)).toBe(fixture);
     expect(validateTour(brokenFixture)).toBe(brokenFixture);

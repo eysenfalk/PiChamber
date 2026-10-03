@@ -12,6 +12,7 @@ import { fixture, brokenFixture, labTour, validateTour, VIEWPORTS } from './tour
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
+const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
 const idleProbe = 'window.__proofLastMutation = performance.now(); new MutationObserver(() => { window.__proofLastMutation = performance.now(); }).observe(document, {subtree:true, childList:true, attributes:true, characterData:true});';
 
 /** A visible literal target, matching the smallest element that contains it. */
@@ -199,7 +200,7 @@ async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     url: { type: 'string' }, chrome: { type: 'string' }, ffmpeg: { type: 'string' }, manifest: { type: 'string' }, help: { type: 'boolean' },
   } });
-  if (values.help) { console.log('node scripts/proof/record.mjs <fixture|fixture-broken|lab> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]'); return; }
+  if (values.help) { console.log(usage); return; }
   const [name] = positionals;
   if (positionals.length !== 1 || !['fixture', 'fixture-broken', 'lab'].includes(name)) throw new Error('Choose fixture, fixture-broken or lab; see --help');
   const tour = name === 'lab' ? labTour(JSON.parse(await readFile(resolve(values.manifest || join(root, 'lab/seed-manifest.json')), 'utf8'))) : name === 'fixture' ? fixture : brokenFixture;
@@ -223,4 +224,4 @@ async function main() {
     if (server) await new Promise(done => server.close(done));
   }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error.code?.startsWith('ERR_PARSE_ARGS') ? 'Usage: ' + usage + ' (' + error.message.replace(/\s+/g, ' ') + ')' : error.message); process.exitCode = 1; });
