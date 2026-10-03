@@ -1331,6 +1331,9 @@ export interface ClientAuthAPI {
     label?: string;
     allowedClientKinds?: Array<'mobile' | 'desktop'>;
     serverUrl?: string;
+    // Second direct URL the device tries when `serverUrl` is unreachable
+    // (e.g. the home Wi-Fi URL behind a Tailscale URL).
+    fallbackServerUrl?: string;
     // Per-link transport choice. `includeRelay: true` adds the relay candidate
     // and enables the relay host on demand; `false` omits it; omitted keeps the
     // legacy "relay only if already enabled" behavior. `includeDirect: false`
@@ -1344,8 +1347,8 @@ export interface ClientAuthAPI {
   listPendingPairings(): Promise<PendingPairingRecord[]>;
   cancelPairing(id: string): Promise<{ cancelled: boolean }>;
   // Direct transports the server can be reached on, for the create-device dialog.
-  // LAN reflects the server's actual bind, independent of the UI origin.
-  getPairingTransports(): Promise<{ local: string | null; lan: string | null; relayAvailable: boolean }>;
+  // LAN and Tailscale reflect the server's actual bind, independent of the UI origin.
+  getPairingTransports(): Promise<{ local: string | null; lan: string | null; tailscale: string | null; relayAvailable: boolean }>;
 }
 
 export interface RuntimeAPIs {

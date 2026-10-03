@@ -17,6 +17,14 @@ import {
   resolvePairingServerUrl,
 } from './remoteInstanceHelpers';
 
+export type AddDeviceTransport = 'tailscale' | 'lan' | 'local';
+
+export interface PairingTransportOptions {
+  localUrl: string | null;
+  lanUrl: string | null;
+  tailscaleUrl: string | null;
+}
+
 export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
   const [remoteClients, setRemoteClients] = React.useState<RemoteClientRecord[]>([]);
   const [pendingPairings, setPendingPairings] = React.useState<PendingPairingRecord[]>([]);
@@ -30,13 +38,10 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
   const [addDeviceOpen, setAddDeviceOpen] = React.useState(false);
   const [addDevicePhase, setAddDevicePhase] = React.useState<'configure' | 'result'>('configure');
   const [addDeviceCreating, setAddDeviceCreating] = React.useState(false);
-  const [addDeviceTransport, setAddDeviceTransport] = React.useState<'local' | 'lan' | 'relay'>('relay');
-  const [addDeviceFallback, setAddDeviceFallback] = React.useState(true);
-  const [transportOptions, setTransportOptions] = React.useState<{
-    localUrl: string | null;
-    lanUrl: string | null;
-    relayAvailable: boolean;
-  } | null>(null);
+  const [addDeviceTransport, setAddDeviceTransport] = React.useState<AddDeviceTransport>('tailscale');
+  // Tailscale only: also advertise the home Wi-Fi URL as a fallback candidate.
+  const [addDeviceFallback, setAddDeviceFallback] = React.useState(false);
+  const [transportOptions, setTransportOptions] = React.useState<PairingTransportOptions | null>(null);
 
   const revokedClientCount = React.useMemo(
     () => remoteClients.filter((client) => Boolean(client.revokedAt)).length,
@@ -103,18 +108,14 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
     return () => window.clearInterval(interval);
   }, [clientAuth, loadRemoteClients]);
 
-  const resolveTransportOptions = React.useCallback(async (): Promise<{
-    localUrl: string | null;
-    lanUrl: string | null;
-    relayAvailable: boolean;
-  }> => {
+  const resolveTransportOptions = React.useCallback(async (): Promise<PairingTransportOptions> => {
     if (clientAuth?.getPairingTransports) {
       try {
         const transports = await clientAuth.getPairingTransports();
         return {
           localUrl: transports.local,
           lanUrl: transports.lan,
-          relayAvailable: transports.relayAvailable,
+          tailscaleUrl: transports.tailscale,
         };
       } catch {
         // Fall back
@@ -133,7 +134,7 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
     } catch {
       // keep null
     }
-    return { localUrl, lanUrl, relayAvailable: true };
+    return { localUrl, lanUrl, tailscaleUrl: null };
   }, [clientAuth]);
 
   const openAddDevice = React.useCallback(async () => {
@@ -143,11 +144,11 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
     setPairingCopied(false);
     setCreatedPairingId(null);
     setAddDevicePhase('configure');
-    setAddDeviceFallback(true);
+    setAddDeviceFallback(false);
     setAddDeviceOpen(true);
     const opts = await resolveTransportOptions();
     setTransportOptions(opts);
-    setAddDeviceTransport(opts.relayAvailable ? 'relay' : opts.lanUrl ? 'lan' : 'local');
+    setAddDeviceTransport(opts.tailscaleUrl ? 'tailscale' : opts.lanUrl ? 'lan' : 'local');
   }, [resolveTransportOptions]);
 
   const createPairingLink = React.useCallback(async () => {
@@ -156,28 +157,27 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
     setAddDeviceCreating(true);
     try {
       const label = remoteClientLabel.trim() || undefined;
-      let serverUrl: string | undefined;
-      let includeRelay: boolean;
-      let includeDirect = true;
-      if (addDeviceTransport === 'local') {
-        serverUrl = transportOptions.localUrl ?? undefined;
-        includeRelay = false;
-      } else if (addDeviceTransport === 'lan') {
-        serverUrl = transportOptions.lanUrl ?? undefined;
-        includeRelay = addDeviceFallback;
-      } else if (addDeviceFallback && transportOptions.lanUrl) {
-        serverUrl = transportOptions.lanUrl;
-        includeRelay = true;
-      } else {
-        includeDirect = false;
-        includeRelay = true;
+      const serverUrl = {
+        tailscale: transportOptions.tailscaleUrl,
+        lan: transportOptions.lanUrl,
+        local: transportOptions.localUrl,
+      }[addDeviceTransport];
+      // Never fall back to the request origin: the desktop UI reaches its server
+      // over loopback, which another device cannot scan.
+      if (!serverUrl) {
+        setRemoteClientError('This connection type is not available right now.');
+        return;
       }
+      const fallbackServerUrl = addDeviceTransport === 'tailscale' && addDeviceFallback
+        ? transportOptions.lanUrl ?? undefined
+        : undefined;
+      // PiChamber Private Relay is disabled in this fork; links are direct only.
       const { pairing, server } = await clientAuth.createPairingSession({
         label,
         allowedClientKinds: ['mobile', 'desktop'],
         serverUrl,
-        includeRelay,
-        includeDirect,
+        fallbackServerUrl,
+        includeRelay: false,
       });
       const payload = buildPairingConnectionPayload({
         pairingId: pairing.id,
