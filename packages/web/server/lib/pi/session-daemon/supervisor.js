@@ -231,8 +231,12 @@ export const createPiSessionDaemonSupervisor = ({
   port,
   runtime,
   version,
+  buildId,
+  builtAt,
 } = {}) => {
-  const paths = resolvePiSessionDaemonPaths({ env, dataDir, platform, profile, port, runtime, version });
+  // `buildId` identifies the code of this build and wins over the package
+  // version: two builds of one version must not share a daemon.
+  const paths = resolvePiSessionDaemonPaths({ env, dataDir, platform, profile, port, runtime, version: buildId ?? version });
   const serverPid = processLike.pid;
   let startPromise = null;
   let intentionallyStopped = false;
@@ -555,6 +559,7 @@ export const createPiSessionDaemonSupervisor = ({
           '--daemon-id', daemonId,
           '--runtime', paths.profileRuntime,
           '--build-id', paths.buildId,
+          ...(typeof builtAt === 'string' && builtAt.length > 0 ? ['--built-at', builtAt] : []),
           ...(paths.agentDir ? ['--agent-dir', paths.agentDir] : []),
         ], {
           cwd,
@@ -665,6 +670,16 @@ export const createPiSessionDaemonSupervisor = ({
         state: 'ready',
         protocolVersion: PROTOCOL_VERSION,
         capabilities: ready.health.capabilities ?? [],
+        ...(typeof ready.health.buildId === 'string' && ready.health.buildId.length > 0
+          ? {
+              build: {
+                id: ready.health.buildId,
+                ...(typeof ready.health.builtAt === 'string' && ready.health.builtAt.length > 0
+                  ? { builtAt: ready.health.builtAt }
+                  : {}),
+              },
+            }
+          : {}),
         ...(typeof ready.health.streamEpoch === 'string' && ready.health.streamEpoch.length > 0
           ? { streamEpoch: ready.health.streamEpoch }
           : {}),

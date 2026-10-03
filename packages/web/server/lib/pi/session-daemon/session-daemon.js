@@ -168,6 +168,7 @@ export function createSessionDaemon({
   daemonId,
   daemonRuntime,
   buildId,
+  builtAt,
   onOwnershipClaim,
   onShutdown,
   idleTimeoutMs = 5 * 60 * 1_000,
@@ -3834,6 +3835,7 @@ export function createSessionDaemon({
             ...(Number.isInteger(ownerServerPid) && ownerServerPid > 0 ? { serverPid: ownerServerPid } : {}),
             ...(typeof daemonRuntime === 'string' && daemonRuntime.length > 0 ? { runtime: daemonRuntime } : {}),
             ...(typeof buildId === 'string' && buildId.length > 0 ? { buildId } : {}),
+            ...(typeof builtAt === 'string' && builtAt.length > 0 ? { builtAt } : {}),
           },
         });
         return;
