@@ -67,16 +67,15 @@ export function labTour(manifest) {
   const label = name => name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
   const sidebar = [...projects.map(project => ({ text: label(project.name) })), { text: long.title }];
   const tool = { selector: '[data-chat-activity-row]', index: 0, text: 'Edit File' };
-  const file = { ...tool, text: 'README.md' };
   return validateTour({ name: 'lab', steps: [
     { caption: 'Prepared projects and sessions in the lab sidebar.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(projects[0].name) }, { type: 'click', text: long.title }], evidence: sidebar },
-    { caption: 'The long session includes an Edit File tool call for README.md.', viewport: 'desktop', theme: 'light',
+    { caption: 'The long session includes an Edit File tool call.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', text: long.title }, { type: 'wait', selector: 'button[aria-label="Expand activity"]' },
         { type: 'scroll', selector: 'button[aria-label="Expand activity"]' }, { type: 'click', selector: 'button[aria-label="Expand activity"]' },
-        { type: 'wait', selector: tool.selector }, { type: 'scroll', selector: tool.selector }], evidence: [tool, file] },
+        { type: 'wait', selector: tool.selector }, { type: 'scroll', selector: tool.selector }], evidence: [tool] },
     { caption: 'The same tool call in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
-      evidence: [tool, file].map(item => ({ ...item, selector: 'html.dark [data-chat-activity-row]' })) },
+      evidence: [tool].map(item => ({ ...item, selector: 'html.dark [data-chat-activity-row]' })) },
     { caption: 'Projects and sessions in the hosted mobile sidebar.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }],

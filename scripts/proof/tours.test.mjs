@@ -44,7 +44,7 @@ describe('tours.mjs format', () => {
     const tour = labTour({ projects: [{ name: 'lab-one', path: '/one' }, { name: 'lab_two', path: '/two' }], sessions: [{ project: 'lab-one', title: 'Long named session', role: 'long' }, { project: 'lab_two', title: 'Short session', role: 'short' }] });
     expect(tour.steps[0].evidence).toEqual([{ text: 'Lab One' }, { text: 'Lab Two' }, { text: 'Long named session' }]);
     expect(tour.steps[1].evidence).toContainEqual({ selector: '[data-chat-activity-row]', index: 0, text: 'Edit File' });
-    expect(tour.steps[1].evidence).toContainEqual({ selector: '[data-chat-activity-row]', index: 0, text: 'README.md' });
+    expect(tour.steps[1].caption).toBe('The long session includes an Edit File tool call.');
     expect(tour.steps[2].evidence[0].selector).toBe('html.dark [data-chat-activity-row]');
     expect(tour.steps[1].actions[0]).toEqual({ type: 'click', text: 'Long named session' });
     expect(tour.steps.at(-1).viewport).toBe('mobile');
