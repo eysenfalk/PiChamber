@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pichamber-lab
+  labels:
+    app: pichamber-lab
+spec:
+  restartPolicy: Never
+  containers:
+    - name: server
+      image: LAB_IMAGE
+      imagePullPolicy: Never
+      workingDir: /repo
+      command: [node, /repo/scripts/lab/start.mjs]
+      securityContext:
+        runAsUser: LAB_UID
+        runAsGroup: LAB_GID
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+      resources:
+        limits:
+          cpu: "3.9"
+          memory: 8064Mi
+      env:
+        - { name: HOME, value: /lab }
+        - { name: XDG_RUNTIME_DIR, value: /lab/runtime }
+        - { name: XDG_CONFIG_HOME, value: /lab/config }
+        - { name: XDG_DATA_HOME, value: /lab/data }
+        - { name: XDG_CACHE_HOME, value: /lab/cache }
+        - { name: PI_CODING_AGENT_DIR, value: /lab/pi-agent }
+        - { name: PICHAMBER_PI_AGENT_DIR, value: /lab/pi-agent }
+        - { name: PICHAMBER_DATA_DIR, value: /lab/pichamber }
+        - { name: PI_OFFLINE, value: "1" }
+        - { name: PI_SKIP_VERSION_CHECK, value: "1" }
+        - { name: PI_TELEMETRY, value: "0" }
+        - { name: PICHAMBER_ALLOW_UNAUTHENTICATED_LAN, value: "true" }
+      volumeMounts:
+        - { name: repository, mountPath: /repo, readOnly: true }
+        - { name: state, mountPath: /lab }
+  volumes:
+    - name: repository
+      hostPath:
+        path: LAB_REPOSITORY
+        type: Directory
+    - name: state
+      persistentVolumeClaim:
+        claimName: pichamber-lab-state
