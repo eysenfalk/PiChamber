@@ -861,8 +861,13 @@ export const registerPiRuntimeRoutes = (app, {
   smallModelGenerator = async (input) => (await import('./small-model-generation.js')).generateWithSmallModel(input),
   eventHeartbeatMs = 15_000,
   eventStreamMaxBufferedBytes = DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
+  // Restarts the daemon, and the server process where a host can bring it
+  // back (see host-restart.js). Absent hosts answer 501.
+  restartHost = null,
+  logRestartFailure = (error) => console.warn(`[PiRuntime] restart did not complete: ${error?.code ?? 'UNKNOWN'}`),
 }) => {
   const eventStreamRegistry = createPiEventStreamRegistry();
+  let restartInFlight = false;
   app.get('/api/pi/ui-settings', async (_req, res) => {
     try {
       res.json(await uiSettingsStore.read());
@@ -1027,6 +1032,53 @@ export const registerPiRuntimeRoutes = (app, {
     } catch {
       res.status(503).json({ protocolVersion: 1, state: 'unavailable', error: { code: 'DAEMON_UNAVAILABLE' } });
     }
+  });
+
+  app.post('/api/pi/runtime/reload', async (_req, res) => {
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('runtime.reloadResources');
+      if (!Number.isInteger(result?.reloaded) || !Number.isInteger(result?.deferred) || !Number.isInteger(result?.failed)) {
+        throw protocolMismatch();
+      }
+      res.json({ reloaded: result.reloaded, deferred: result.deferred, failed: result.failed });
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
+  app.post('/api/pi/runtime/restart', async (_req, res) => {
+    if (typeof restartHost !== 'function') {
+      res.status(501).json({ error: { code: 'RESTART_UNSUPPORTED' } });
+      return;
+    }
+    if (restartInFlight) {
+      res.status(409).json({ error: { code: 'RESTART_IN_PROGRESS' } });
+      return;
+    }
+    restartInFlight = true;
+    let outcome;
+    try {
+      outcome = await restartHost();
+    } catch (error) {
+      restartInFlight = false;
+      logRestartFailure(error);
+      const cause = typeof error?.code === 'string' && /^[A-Z0-9_]{3,64}$/.test(error.code) ? error.code : undefined;
+      res.status(500).json({ error: { code: 'RESTART_FAILED', ...(cause ? { message: `The restart failed (${cause}).` } : {}) } });
+      return;
+    }
+    // The reply is written before the process is replaced so the client sees
+    // the acknowledgement and then reconnects.
+    res.status(202).json({ accepted: true, scope: outcome?.scope === 'process' ? 'process' : 'daemon' });
+    if (outcome?.scope !== 'process' || typeof outcome.commit !== 'function') {
+      restartInFlight = false;
+      return;
+    }
+    res.once('close', () => {
+      void Promise.resolve().then(() => outcome.commit()).catch((error) => {
+        restartInFlight = false;
+        logRestartFailure(error);
+      });
+    });
   });
 
   app.get('/api/pi/projects', async (_req, res) => {

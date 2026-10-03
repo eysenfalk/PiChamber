@@ -15,6 +15,15 @@ export interface StartWebUiServerOptions {
   attachSignals?: boolean;
   exitOnShutdown?: boolean;
   uiPassword?: string | null;
+  /**
+   * Hosts that can relaunch the server process themselves (the desktop app)
+   * supply this. `prepare` arms the relaunch and may throw; `commit` ends
+   * the current process after the HTTP reply was written.
+   */
+  restartProcess?: {
+    prepare?: () => void | Promise<void>;
+    commit: () => void | Promise<void>;
+  };
 }
 
 export declare function startWebUiServer(

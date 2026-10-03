@@ -41,6 +41,7 @@ import { createUiAuth } from './lib/ui-auth/ui-auth.js';
 import { assertCurrentRuntimeSupported as defaultAssertCurrentRuntimeSupported } from './lib/server/runtime-requirements.js';
 import { resolveStaticCacheControl } from './lib/static-cache-control.js';
 import { resolveServerBuild } from './lib/build-info.js';
+import { createHostRestart } from './lib/pi/host-restart.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -245,6 +246,13 @@ export async function startWebUiServer(options = {}) {
   const piRuntimeRoutes = registerPiRuntimeRoutes(app, {
     getPiSessionDaemonRuntime: () => piSessionDaemonRuntime,
     uiSettingsStore,
+    restartHost: createHostRestart({
+      getSupervisor: () => piSessionDaemonRuntime,
+      // The desktop app brings its own server back by relaunching itself;
+      // a CLI server relies on its process manager (see host-restart.js).
+      restartProcess: options.restartProcess,
+      exitProcess: () => gracefulShutdown({ exitProcess: true }),
+    }),
   });
   registerNotificationRoutes(app, { uiAuthController, delivery: notificationDelivery });
   // Cloudflare Tunnel external access (manual token + quick modes).
