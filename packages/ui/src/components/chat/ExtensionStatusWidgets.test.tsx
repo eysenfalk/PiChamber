@@ -129,7 +129,7 @@ describe('ExtensionWidgetCard subagent-async widget', () => {
     const markup = renderCard([widgetEntry('subagent-async', [snapshotLine({ runs: [queued] })])]);
     expect(markup).toContain('waiting-helper');
     expect(markup).not.toContain('ago');
-    expect(markup).not.toMatch(/\d+s/);
+    expect(/\d+s/.test(markup)).toBe(false);
     // A non-queued node without a start time still shows its last activity.
     const idle = { id: 'p1', kind: 'subagent', label: 'paused-helper', state: 'paused', updatedAt: GENERATED_AT - 5_000 };
     expect(renderCard([widgetEntry('subagent-async', [snapshotLine({ runs: [idle] })])])).toContain('5s ago');
