@@ -22,7 +22,7 @@ Two ways, chosen per run:
 
 ## Safety boundary
 
-- Never attack the owner's running instance: not the desktop app or AppImage, not port 39603, not `~/.pi/agent`, not real projects or sessions. Before any kill, pause or signal, confirm the target PID belongs to the lab or to an instance this run started (port, cwd, `PICHAMBER_DATA_DIR`).
+- Never attack the owner's running instance: not the desktop app or AppImage, not port 39603, not `~/.pi/agent`, not real projects or sessions. Before any kill, pause or signal, confirm the target PID belongs to the lab or to an instance this run started. Record PIDs in pidfiles when starting instances and signal those PIDs; never `pkill -f` or `pgrep -f` with a pattern on the host, because the pattern also matches the probe shell and it kills itself.
 - Chaos runs in the proof lab by default. A host instance is allowed only when the lab cannot run the scenario (desktop shell, live model turns, platform behavior), isolated as described in [references/chaos-actions.md](references/chaos-actions.md). Live model turns cost money: ask before using a real provider.
 - No host firewall, network or disk manipulation. No real credentials, tokens or pairing codes in logs, issues or screenshots.
 - Analysis probes are read-only on the host: inspect processes, run code in `/tmp`, run existing tests. Do not edit the repository.

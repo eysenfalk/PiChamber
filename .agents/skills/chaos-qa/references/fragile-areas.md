@@ -35,6 +35,10 @@ Load when writing the charter. Each entry is a place where PiChamber broke befor
 - **Pairing and reachability.** LAN may be unreachable while Tailscale works; relay is the fallback. Attack: pair with each candidate unreachable in turn (host-instance only).
 - **Authentication.** Every `/api/*` route needs the UI login. Attack: call new routes without the cookie, with an expired one, and from a paired device.
 
+## Double activation
+
+- **Buttons disabled through state.** A disabled flag set by a reducer applies only after the next render, so a double click fires the action twice; confirm buttons without an in-flight guard do the same (#67, Reload Pi and Restart confirm). Attack: two real mouse clicks 80 ms apart on every action button and dialog confirm, then check requests and toasts.
+
 ## Settings and persistence
 
 - **Settings round trip.** Missing versus empty, malformed files, concurrent writes. Attack: corrupt the settings file in the lab state, toggle quickly, reload.

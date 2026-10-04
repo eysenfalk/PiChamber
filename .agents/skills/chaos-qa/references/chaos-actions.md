@@ -6,6 +6,8 @@ Load when planning way 2. Pick the actions that hit the charter; each one names 
 
 Use `scripts/perf/cdp.mjs` (`resolveChrome`, `reservePort`, `launchChrome`, `createPageTarget`, `CdpClient`, `evaluateValue`) from a script under `/tmp/chaos-qa/<run>/`. Host Chrome against `http://127.0.0.1:3111` stays sandboxed. Set the viewport with `Emulation.setDeviceMetricsOverride` and the theme through the app's settings, as the recorder does. Collect `Runtime.consoleAPICalled`, `Runtime.exceptionThrown` and failed `Network` events for the whole run.
 
+Click with `Input.dispatchMouseEvent` at the element's center, not `element.click()`: synthetic clicks in one evaluation all land before React re-renders, which exaggerates spam results. Sample toasts and state every few hundred milliseconds instead of once, because toasts expire. Wait until the app is ready (a known control is visible) before judging a page; a fixed sleep after reload or restart produces false "missing" and splash-screen results. `[role=dialog]` also matches the Settings dialog itself.
+
 ## Catalogue
 
 | Class | Actions | How in the lab |
@@ -32,7 +34,9 @@ PICHAMBER_DATA_DIR="$run/data" PICHAMBER_PI_AGENT_DIR="$run/agent" \
   node packages/web/bin/cli.js serve --foreground --host 127.0.0.1 --port <free port>
 ```
 
-Use a free port other than 39603, a fresh browser profile under `$run`, and stop the server and its daemon at the end. A real model provider in `$run/agent` needs the owner's approval first. Desktop and AppImage chaos needs the owner's approval because it can collide with the running desktop app.
+Use a free port other than 39603, a fresh browser profile under `$run`, and stop the server and its daemon at the end. Start it with `setsid nohup ... &`, write `$!` to `$run/pid-<port>`, and find its daemon by `PICHAMBER_DATA_DIR` in `/proc/<pid>/environ`. A host instance requires the UI login: set `PICHAMBER_UI_PASSWORD` to a throwaway value and log in with `curl -c "$run/jar" -H 'content-type: application/json' -d '{"password":"<value>"}' http://127.0.0.1:<port>/auth/session`.
+
+A shell started inside Pi or PiChamber already carries `INVOCATION_ID` and other desktop session variables. Probes that depend on the environment must state which variables they set or unset. A real model provider in `$run/agent` needs the owner's approval first. Desktop and AppImage chaos needs the owner's approval because it can collide with the running desktop app.
 
 ## Replay
 
