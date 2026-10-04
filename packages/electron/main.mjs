@@ -1542,8 +1542,9 @@ const spawnLocalServer = async () => {
     exitOnShutdown: false,
     apiOnly: false,
     // "Restart PiChamber" in Settings: the server stops its daemon, then the
-    // app relaunches itself (from $APPIMAGE when set) and exits.
-    restartProcess: createDesktopRestartProcess({ app, prepareForQuit }),
+    // app relaunches itself (from $APPIMAGE through a helper outside the mount
+    // when set) and exits.
+    restartProcess: createDesktopRestartProcess({ app, prepareForQuit, spawnProcess: spawn }),
     onDesktopNotification: (payload) => maybeShowNativeNotification(payload),
     getIsWindowFocused: isAnyWindowFocused,
     getDesktopRuntimeConfig: () => ({
