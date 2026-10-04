@@ -97,6 +97,7 @@ process violation.
 |---|---|
 | Any source, dependency, export, build-config, generated-asset, package-contract, or module-ownership change | `pichamber-change-discipline` |
 | Visual proof, lab tours, recordings or proof publishing | `pichamber-verify` |
+| Hunting unknown bugs: QA, chaos or exploratory testing, "try to break it", or checking a change's assumptions against the real environment | `chaos-qa` |
 | CLI commands, prompts, terminal output, non-TTY, `--quiet`, or `--json` behavior | `clack-cli-patterns` |
 | Shared UI data access, Pi API, `RuntimeAPIs`, runtime fetch/auth/URLs, bridges/proxies, runtime switching, or server API routes | `ui-api-decoupling` |
 | Electron main/preload, IPC, native UI, updater, deep links, SSH/tunnels, packaging, or child processes | `desktop-shell` |
