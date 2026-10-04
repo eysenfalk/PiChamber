@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { requestSessionDaemon } from './ipc-client.js';
 import { createMessageEntryAliases } from './message-entry-aliases.js';
 import { createSessionDaemon as createSessionDaemonImpl, isLocalSessionDaemonEndpoint } from './session-daemon.js';
+import { getPiSessionDirectory } from './session-jsonl.js';
 
 const credential = 'a-private-daemon-credential';
 
@@ -745,6 +746,69 @@ describe('Pi session daemon spike', () => {
     await expect(client.request('sessions.rename', { sessionId: 'pi-session-new', title: '  Active title  ' })).resolves.toMatchObject({ result: {} });
     await expect(client.request('sessions.rename', { sessionId: 'pi-session-persisted', title: 'Persisted title' })).resolves.toMatchObject({ result: {} });
     expect(renamed).toEqual([{ sessionFile: persistedSessionFile, title: 'Persisted title' }]);
+    await client.close();
+  });
+
+  it('lists the rename of a large forked session after more work and a daemon restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-fork-rename-'));
+    const cwd = join(root, 'project');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd, agentDir });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true });
+    const sessionFile = join(sessionDirectory, '2026-01-01T00-00-00-000Z_pi-fork.jsonl');
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    let previousId = 'entry-user';
+    const assistantEntries = (count, prefix) => Array.from({ length: count }, (_, index) => {
+      const id = `${prefix}-${index}`;
+      const entry = {
+        type: 'message',
+        id,
+        parentId: previousId,
+        timestamp,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'x'.repeat(1000) }], timestamp: 0 },
+      };
+      previousId = id;
+      return JSON.stringify(entry);
+    });
+    // A fork copies the parent's path, including the parent's title, so the
+    // file is large from the start and its head names the parent.
+    await writeFile(sessionFile, `${[
+      JSON.stringify({ type: 'session', version: 3, id: 'pi-fork', timestamp, cwd, parentSession: join(sessionDirectory, 'parent.jsonl') }),
+      JSON.stringify({ type: 'session_info', id: 'entry-title', parentId: null, timestamp, name: 'Parent title' }),
+      JSON.stringify({ type: 'message', id: 'entry-user', parentId: 'entry-title', timestamp, message: { role: 'user', content: [{ type: 'text', text: 'Parent prompt' }], timestamp: 0 } }),
+      ...assistantEntries(600, 'before'),
+    ].join('\n')}\n`);
+    const startDaemon = async () => {
+      daemon = createSessionDaemon({
+        endpoint: testDaemonEndpoint(root),
+        credential,
+        cwd,
+        agentDir,
+        createRuntime: async () => { throw new Error('listing and renaming must not start a runtime'); },
+      });
+      await daemon.start();
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      await client.request('projects.select', { directory: cwd });
+      return client;
+    };
+    const listedTitle = async (client) => {
+      const listed = await client.request('sessions.list', { directory: cwd });
+      return listed.result.sessions.find((item) => item.session.id === 'pi-fork')?.session.title;
+    };
+
+    let client = await startDaemon();
+    await expect(listedTitle(client)).resolves.toBe('Parent title');
+    await expect(client.request('sessions.rename', { sessionId: 'pi-fork', title: 'Fork name' })).resolves.toMatchObject({ result: {} });
+    // Keep working in the fork until the rename is far from the end of the file.
+    await appendFile(sessionFile, `${assistantEntries(300, 'after').join('\n')}\n`);
+    await expect(listedTitle(client)).resolves.toBe('Fork name');
+    await client.close();
+    await daemon.stop();
+
+    client = await startDaemon();
+    await expect(listedTitle(client)).resolves.toBe('Fork name');
     await client.close();
   });
 

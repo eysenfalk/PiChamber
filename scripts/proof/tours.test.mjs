@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { fixture, brokenFixture, labTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -53,5 +53,15 @@ describe('tours.mjs format', () => {
     expect(tour.steps[1].actions).toContainEqual({ type: 'click', selector: 'button[aria-label="Expand activity"]' });
     expect(tour.steps.at(-1).actions[0]).toEqual({ type: 'navigate', path: 'mobile.html' });
     expect(() => labTour({})).toThrow('Invalid lab seed manifest');
+  });
+  test('fork-rename evidence is the fork title and project from the seed manifest', () => {
+    const tour = forkRenameTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Renamed fork', role: 'fork' }] });
+    expect(tour.name).toBe('fork-rename');
+    expect(tour.steps[0].evidence).toEqual([{ text: 'Lab One' }, { text: 'Renamed fork' }]);
+    expect(tour.steps[1].actions[0]).toEqual({ type: 'click', text: 'Renamed fork' });
+    expect(tour.steps.at(-1).viewport).toBe('mobile');
+    expect(tour.steps.at(-1).evidence).toEqual([{ text: 'Renamed fork' }]);
+    expect(() => forkRenameTour({ projects: [], sessions: [{ project: 'lab-one', title: 'Renamed fork', role: 'fork' }] })).toThrow('Invalid lab seed manifest');
+    expect(() => forkRenameTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
 });

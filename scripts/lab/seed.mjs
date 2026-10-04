@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile, utimes, rm, readdir, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -12,6 +13,27 @@ const usage = { input: 80, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens:
 const assistant = (text, timestamp, content = []) => ({ role: 'assistant',
   content: [...(text ? [{ type: 'text', text }] : []), ...content], api: 'openai-completions',
   provider: 'openai', model: 'gpt-4.1', usage, stopReason: content.length ? 'toolUse' : 'stop', timestamp });
+
+/** Bytes written after the rename: more than the 128 KiB tail the session list once searched, in a file above its 512 KiB head scan. */
+export const FORK_WORK_AFTER_RENAME_BYTES = 600 * 1024;
+
+// A Pi fork copies the parent's path, including the parent's title, then the
+// user renames it and keeps working. The bulk sits in collapsed bash output.
+function seedRenamedFork({ sourcePath, cwd, sessionDir, title, createdAt }) {
+  const fork = SessionManager.forkFrom(sourcePath, cwd, sessionDir);
+  fork.appendSessionInfo(title);
+  const log = Array.from({ length: 200 }, (_, line) => `synthetic check ${String(line + 1).padStart(3, '0')}: ok`).join('\n');
+  const before = Buffer.byteLength(readFileSync(fork.getSessionFile()));
+  for (let turn = 0; Buffer.byteLength(readFileSync(fork.getSessionFile())) - before < FORK_WORK_AFTER_RENAME_BYTES; turn++) {
+    const id = `lab-fork-bash-${turn}`;
+    const timestamp = createdAt + 2002000 + turn * 10;
+    fork.appendMessage({ role: 'user', content: `Run synthetic fork check ${turn + 1}.`, timestamp });
+    fork.appendMessage(assistant('', timestamp + 1, [{ type: 'toolCall', id, name: 'bash', arguments: { command: `./check.sh ${turn + 1}` } }]));
+    fork.appendMessage({ role: 'toolResult', toolCallId: id, toolName: 'bash', content: [{ type: 'text', text: log }], isError: false, timestamp: timestamp + 2 });
+    fork.appendMessage(assistant(`Fork check ${turn + 1} passed.`, timestamp + 3));
+  }
+  return fork;
+}
 
 // Every SDK operation gets an explicit volume-local session directory. Tests never use host Pi state.
 export async function seedLab(root, now = Date.now()) {
@@ -44,7 +66,8 @@ export async function seedLab(root, now = Date.now()) {
     if (git.error || git.status !== 0) throw git.error ?? new Error(git.stderr);
     projects.push({ name: fixture.name, path: cwd });
     const sessionDir = getPiSessionDirectory({ cwd, agentDir });
-    const spec = SEED_MANIFEST.sessions[index];
+    const spec = SEED_MANIFEST.sessions.find((session) => session.project === fixture.name && ['long', 'short'].includes(session.role));
+    const forkSpec = SEED_MANIFEST.sessions.find((session) => session.project === fixture.name && session.role === 'fork');
     const createdAt = now - (index + 1) * 86400000;
     // SessionManager owns entry/header timestamps and has no clock parameter.
     // Seed synchronously under a scoped clock, then restore Date before any await or server starts.
@@ -58,6 +81,8 @@ export async function seedLab(root, now = Date.now()) {
     try {
       const manager = SessionManager.create(cwd, sessionDir);
       manager.appendModelChange('openai', 'gpt-4.1');
+      // Named before the first prompt, as PiChamber does for new sessions, so a fork's head carries the parent title.
+      manager.appendSessionInfo(spec.title);
       const turns = spec.role === 'long' ? 22 : 2;
       for (let turn = 0; turn < turns; turn++) {
         const timestamp = createdAt + turn * 60000;
@@ -79,7 +104,6 @@ export async function seedLab(root, now = Date.now()) {
         }
         manager.appendMessage(assistant('The read, edit and git checks completed. The missing file check failed as expected: this is a fixture for error disclosure, not an unfinished run.', createdAt + 1802000));
       }
-      manager.appendSessionInfo(spec.title);
       const file = manager.getSessionFile();
       files.push({ path: file, modified: createdAt + 1802000 });
       sessions.push({ ...spec, id: manager.getSessionId(), path: file, directory: cwd });
@@ -91,6 +115,12 @@ export async function seedLab(root, now = Date.now()) {
         files.push({ path: child.getSessionFile(), modified: createdAt + 2001000 });
         sessions.push({ project: fixture.name, title: child.getSessionName(), role: 'child',
           id: child.getSessionId(), path: child.getSessionFile(), directory: cwd, parentId: manager.getSessionId() });
+      }
+      if (forkSpec) {
+        const fork = seedRenamedFork({ sourcePath: file, cwd, sessionDir, title: forkSpec.title, createdAt });
+        files.push({ path: fork.getSessionFile(), modified: createdAt + 2003000 });
+        sessions.push({ ...forkSpec, id: fork.getSessionId(), path: fork.getSessionFile(), directory: cwd,
+          parentId: manager.getSessionId() });
       }
     } finally {
       globalThis.Date = RealDate;

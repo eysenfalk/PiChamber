@@ -5,7 +5,7 @@ import { join } from 'node:path';
 // PiChamber's parent may point PI_PACKAGE_DIR into an Electron asar.
 const packageDir = process.env.PI_PACKAGE_DIR;
 delete process.env.PI_PACKAGE_DIR;
-const { seedLab, SessionManager, SEED_MANIFEST } = await import('./seed.mjs');
+const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES } = await import('./seed.mjs');
 if (packageDir !== undefined) process.env.PI_PACKAGE_DIR = packageDir;
 
 test('SDK-written fixtures round trip, list per project, link a subsession and keep recency order', async () => {
@@ -36,6 +36,16 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(results.some((m) => m.isError)).toBe(true);
     const child = seed.sessions.find((s) => s.role === 'child');
     expect(SessionManager.open(child.path).getHeader().parentSession).toBe(long.path);
+    const fork = seed.sessions.find((s) => s.role === 'fork');
+    const forkText = await readFile(fork.path, 'utf8');
+    const forkManager = SessionManager.open(fork.path);
+    expect(forkManager.getHeader().parentSession).toBe(long.path);
+    expect(forkManager.getSessionName()).toBe(fork.title);
+    // The parent's title is copied into the fork; the rename sits far before the end of a large file.
+    expect(forkText).toContain(JSON.stringify(long.title));
+    const renameAt = Buffer.byteLength(forkText.slice(0, forkText.lastIndexOf('"type":"session_info"')));
+    expect(Buffer.byteLength(forkText) - renameAt).toBeGreaterThan(FORK_WORK_AFTER_RENAME_BYTES);
+    expect(Buffer.byteLength(forkText)).toBeGreaterThan(512 * 1024);
     expect((await stat(long.path)).mtimeMs).toBeGreaterThan((await stat(seed.sessions.find((s) => s.project === 'lab-beta').path)).mtimeMs);
     expect(await seedLab(root)).toEqual(seed); // A second startup preserves identities and user edits.
   } finally {

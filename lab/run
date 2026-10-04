@@ -12,9 +12,9 @@ recorder_cpus=2
 recorder_memory=4096m
 build_cpus=4
 build_memory=8g
-usage() { echo 'usage: lab/run up|down|status|record <lab|fixture-broken>' >&2; exit 2; }
+usage() { echo 'usage: lab/run up|down|status|record <lab|fork-rename|fixture-broken>' >&2; exit 2; }
 if [[ ${1:-} == record ]]; then
-  [[ $# == 2 && ( $2 == lab || $2 == fixture-broken ) ]] || usage
+  [[ $# == 2 && ( $2 == lab || $2 == fork-rename || $2 == fixture-broken ) ]] || usage
 else
   [[ $# == 1 && ( $1 == up || $1 == down || $1 == status ) ]] || usage
 fi
