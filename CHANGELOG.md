@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Pi 1.0.2 (#76).** The server and session daemon run on Pi SDK 1.0.2 instead of 0.99.2, matching current Pi installations and extensions built for Pi 1.0. No session, settings or model data migration is needed.
 - **Git identity profiles removed.** PiChamber no longer manages commit-author profiles: the profiles settings UI, the clone-time identity picker, and the silent default auto-apply are gone, along with the server profile storage, credential discovery, and the config-writing routes. Commits, pushes, and clones now use solely the user's own git configuration and credentials. The Git header shows a read-only `Committing as Name <email>` line resolved from git config, which PiChamber never writes. Any previously saved profiles file and any git config previously written into repositories are left untouched; set authorship with plain git (`git config user.email …`).
 
 ## [1.0.3] - 2026-09-21
