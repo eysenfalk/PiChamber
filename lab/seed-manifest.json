@@ -7,6 +7,7 @@
   "sessions": [
     { "project": "lab-alpha", "title": "Lab: long session with tools", "role": "long" },
     { "project": "lab-beta", "title": "Lab: short session", "role": "short" },
-    { "project": "lab-gamma", "title": "Lab: release notes", "role": "short" }
+    { "project": "lab-gamma", "title": "Lab: release notes", "role": "short" },
+    { "project": "lab-alpha", "title": "Lab: renamed fork", "role": "fork" }
   ]
 }

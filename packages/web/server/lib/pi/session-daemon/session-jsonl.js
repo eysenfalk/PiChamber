@@ -3,6 +3,8 @@ import { mkdir, open, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 
+import { findLatestSessionInfoBackward, findLatestSessionInfoForward } from './session-info-scan.js';
+
 /**
  * Encode a resolved cwd the same way Pi's SessionManager names
  * `~/.pi/agent/sessions/<encoded-cwd>`. Drive letters and both slash styles
@@ -35,8 +37,6 @@ const unreadable = () => new SessionJsonlError('SESSION_JSONL_UNREADABLE');
 
 /** Stop looking for the first user prompt after this many leading bytes. */
 const LIST_HEAD_SCAN_BYTES = 512 * 1024;
-/** Latest `session_info` (rename) is appended; read a tail instead of the whole log. */
-const LIST_TAIL_SCAN_BYTES = 128 * 1024;
 const LIST_PREVIEW_CHARS = 500;
 /** Bound in-directory JSONL listing so a large folder is not one file at a time. */
 const LIST_FILE_CONCURRENCY = 8;
@@ -204,43 +204,12 @@ export async function validatePiSessionJsonlFile(filePath) {
   if (!sawHeader) throw malformed();
 }
 
-async function readLatestSessionInfoFromTail(filePath, fileSize) {
-  const tailSize = Math.min(fileSize, LIST_TAIL_SCAN_BYTES);
-  if (tailSize <= 0) return null;
-  let handle;
-  try {
-    handle = await open(filePath, 'r');
-    const buffer = Buffer.alloc(tailSize);
-    const { bytesRead } = await handle.read(buffer, 0, tailSize, fileSize - tailSize);
-    const text = buffer.subarray(0, bytesRead).toString('utf8');
-    const lines = text.split('\n');
-    let seen = false;
-    let name;
-    for (const line of lines.slice(fileSize > tailSize ? 1 : 0)) {
-      if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line);
-        if (entry?.type === 'session_info') {
-          seen = true;
-          name = sessionInfoName(entry);
-        }
-      } catch {
-        continue;
-      }
-    }
-    return seen ? { name } : null;
-  } catch {
-    return null;
-  } finally {
-    await handle?.close().catch(() => {});
-  }
-}
-
 async function readPiSessionJsonlListFields(filePath, fileSize) {
   const input = createReadStream(filePath, { encoding: 'utf8' });
   const lines = createInterface({ input, crlfDelay: Infinity });
   let header;
-  let name;
+  let headerLine;
+  let sessionInfo;
   let firstMessage;
   let bytes = 0;
   const scanWholePrefix = fileSize <= LIST_HEAD_SCAN_BYTES;
@@ -262,8 +231,9 @@ async function readPiSessionJsonlListFields(filePath, fileSize) {
       if (!header) {
         if (!isSessionHeader(entry)) throw malformed();
         header = entry;
+        headerLine = line;
       } else if (entry?.type === 'session_info') {
-        name = sessionInfoName(entry);
+        sessionInfo = entry;
       } else if (!firstMessage && entry?.type === 'message' && entry.message?.role === 'user') {
         const preview = extractUserPreview(entry.message);
         if (preview) firstMessage = trimPreview(preview);
@@ -279,21 +249,135 @@ async function readPiSessionJsonlListFields(filePath, fileSize) {
     input.destroy();
   }
   if (!header) throw malformed();
-  return { header, name, firstMessage };
+  return { header, headerLine, sessionInfo, firstMessage, scannedBytes: Math.min(bytes, fileSize) };
+}
+
+const withFileHandle = async (filePath, read) => {
+  let handle;
+  try {
+    handle = await open(filePath, 'r');
+    return await read(handle);
+  } catch {
+    throw unreadable();
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+};
+
+const readBytes = async (handle, length, position) => {
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, position);
+  return buffer.subarray(0, bytesRead);
+};
+
+/**
+ * List fields for one file plus what is needed to continue from it: the file
+ * identity it was read from and `scannedTo`, the offset up to which complete
+ * lines have been searched for the latest `session_info`.
+ */
+const toListMemo = (fileStat, { header, headerLine, firstMessage, firstMessageSettled, name, scannedTo }) => ({
+  size: fileStat.size,
+  mtimeMs: fileStat.mtimeMs,
+  ino: fileStat.ino,
+  dev: fileStat.dev,
+  header,
+  headerPrefix: Buffer.from(`${headerLine}\n`),
+  firstMessage,
+  firstMessageSettled,
+  name,
+  scannedTo,
+});
+
+/**
+ * Read a file without a usable memo: the bounded head scan for header, first
+ * prompt and any early `session_info`, then a backward scan from the end to
+ * where the head scan stopped for the latest `session_info`. Pi's name is the
+ * latest `session_info` in the file (`SessionManager.getSessionName`), and an
+ * empty name clears it. A large session without a later rename is read whole.
+ */
+async function readColdListMemo(filePath, fileStat) {
+  const fields = await readPiSessionJsonlListFields(filePath, fileStat.size);
+  let sessionInfo = fields.sessionInfo;
+  let scannedTo = fields.scannedBytes;
+  if (fields.scannedBytes < fileStat.size) {
+    const tail = await withFileHandle(filePath, (handle) => findLatestSessionInfoBackward(handle, {
+      start: fields.scannedBytes,
+      end: fileStat.size,
+    }));
+    if (tail.entry) sessionInfo = tail.entry;
+    scannedTo = tail.completeEnd;
+  }
+  return toListMemo(fileStat, {
+    header: fields.header,
+    headerLine: fields.headerLine,
+    firstMessage: fields.firstMessage,
+    firstMessageSettled: Boolean(fields.firstMessage) || fields.scannedBytes >= LIST_HEAD_SCAN_BYTES,
+    name: sessionInfoName(sessionInfo),
+    scannedTo,
+  });
 }
 
 /**
+ * Continue a memo of a file Pi has appended to: only the bytes after
+ * `scannedTo` are searched. Returns `null` when the file no longer starts with
+ * the remembered header line or `scannedTo` is no longer a line boundary,
+ * because then it was rewritten rather than appended to.
+ */
+async function readAppendedListMemo(filePath, fileStat, cached) {
+  return withFileHandle(filePath, async (handle) => {
+    const prefix = await readBytes(handle, cached.headerPrefix.length, 0);
+    if (!prefix.equals(cached.headerPrefix)) return null;
+    if (cached.scannedTo > 0) {
+      const boundary = await readBytes(handle, 1, cached.scannedTo - 1);
+      if (boundary.length !== 1 || boundary[0] !== 0x0a) return null;
+    }
+    const appended = await findLatestSessionInfoForward(handle, { start: cached.scannedTo, end: fileStat.size });
+    return {
+      ...cached,
+      size: fileStat.size,
+      mtimeMs: fileStat.mtimeMs,
+      name: appended.entry ? sessionInfoName(appended.entry) : cached.name,
+      scannedTo: appended.completeEnd,
+    };
+  });
+}
+
+async function readListMemo(filePath, fileStat, cached) {
+  if (cached && cached.ino === fileStat.ino && cached.dev === fileStat.dev) {
+    if (cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) return cached;
+    // A first prompt that was not found yet may still be appended; the file
+    // is below the head scan bound then, so a cold read stays cheap.
+    if (fileStat.size > cached.size && cached.firstMessageSettled) {
+      const appended = await readAppendedListMemo(filePath, fileStat, cached);
+      if (appended) return appended;
+    }
+  }
+  return readColdListMemo(filePath, fileStat);
+}
+
+/**
+ * Opaque per-daemon memo for `listPiSessionJsonlDirectory`: session
+ * directory → file name → list fields and scanned offset. Each successful
+ * listing replaces its directory's entry, so deleted files drop out; memory
+ * grows with the number of listed directories and files, not their size.
+ */
+export const createPiSessionListCache = () => new Map();
+
+/**
  * Sidebar/list metadata for one cwd. Reads a header, a bounded prefix for
- * the first user prompt, and a tail for the latest rename. It does not
- * load whole transcripts. Files in the directory are read with bounded
- * concurrency; one unreadable or header-malformed file still fails the
- * whole directory list.
+ * the first user prompt, and the latest rename from the end of the file. It
+ * does not load whole transcripts when a rename is found near the end. With a
+ * `cache`, an unchanged file is not read again and an appended one only from
+ * where the last listing stopped. Files in the directory are read with bounded
+ * concurrency; one unreadable or header-malformed file still fails the whole
+ * directory list.
  */
 export async function listPiSessionJsonlDirectory({
   cwd,
   agentDir,
   platform = process.platform,
   resolvePath = resolve,
+  cache,
 } = {}) {
   let sessionDirectory;
   let entries;
@@ -306,6 +390,8 @@ export async function listPiSessionJsonlDirectory({
   }
 
   const files = entries.filter((entry) => entry.name.endsWith('.jsonl') && !entry.isDirectory());
+  const previous = cache?.get(sessionDirectory);
+  const memos = new Map();
   const sessions = await mapWithConcurrency(files, LIST_FILE_CONCURRENCY, async (entry) => {
     const filePath = join(sessionDirectory, entry.name);
     let fileStat;
@@ -314,26 +400,24 @@ export async function listPiSessionJsonlDirectory({
     } catch {
       throw unreadable();
     }
-    const fields = await readPiSessionJsonlListFields(filePath, fileStat.size);
-    const tail = fileStat.size > LIST_HEAD_SCAN_BYTES
-      ? await readLatestSessionInfoFromTail(filePath, fileStat.size)
-      : null;
-    const name = tail?.name ?? fields.name;
-    const headerTime = typeof fields.header.timestamp === 'string'
-      ? Date.parse(fields.header.timestamp)
+    const memo = await readListMemo(filePath, fileStat, previous?.get(entry.name));
+    memos.set(entry.name, memo);
+    const headerTime = typeof memo.header.timestamp === 'string'
+      ? Date.parse(memo.header.timestamp)
       : NaN;
     const created = Number.isFinite(headerTime) ? new Date(headerTime) : fileStat.mtime;
     return {
       path: filePath,
-      id: fields.header.id,
-      cwd: fields.header.cwd,
-      ...(name ? { name } : {}),
-      ...(typeof fields.header.parentSession === 'string' ? { parentSessionPath: fields.header.parentSession } : {}),
+      id: memo.header.id,
+      cwd: memo.header.cwd,
+      ...(memo.name ? { name: memo.name } : {}),
+      ...(typeof memo.header.parentSession === 'string' ? { parentSessionPath: memo.header.parentSession } : {}),
       created,
       modified: fileStat.mtime,
-      ...(fields.firstMessage ? { firstMessage: fields.firstMessage } : {}),
+      ...(memo.firstMessage ? { firstMessage: memo.firstMessage } : {}),
     };
   });
+  cache?.set(sessionDirectory, memos);
   sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
   return sessions;
 }

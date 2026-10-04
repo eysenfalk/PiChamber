@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { fixture, brokenFixture, labTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -23,7 +23,7 @@ export function recordingUrl(value) {
 }
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
+const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
 const idleProbe = 'window.__proofLastMutation = performance.now(); new MutationObserver(() => { window.__proofLastMutation = performance.now(); }).observe(document, {subtree:true, childList:true, attributes:true, characterData:true});';
 
 // CDP defines an empty loaderId as a request fetched from a worker. Its finish
@@ -253,15 +253,18 @@ async function main() {
   } });
   if (values.help) { console.log(usage); return; }
   const [name] = positionals;
-  if (positionals.length !== 1 || !['fixture', 'fixture-broken', 'lab'].includes(name)) throw new Error('Choose fixture, fixture-broken or lab; see --help');
-  const tour = name === 'lab' ? labTour(JSON.parse(await readFile(resolve(values.manifest || join(root, 'lab/seed-manifest.json')), 'utf8'))) : name === 'fixture' ? fixture : brokenFixture;
+  const labTours = { lab: labTour, 'fork-rename': forkRenameTour };
+  const fixtureTours = { fixture, 'fixture-broken': brokenFixture };
+  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab or fork-rename; see --help');
+  const isLab = Object.hasOwn(labTours, name);
+  const tour = isLab ? labTours[name](JSON.parse(await readFile(resolve(values.manifest || join(root, 'lab/seed-manifest.json')), 'utf8'))) : fixtureTours[name];
   let server;
   let url = values.url || process.env.PROOF_URL;
   const controller = new AbortController();
   const abort = () => controller.abort(new Error('Recording interrupted'));
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
   try {
-    if (!url && name !== 'lab') {
+    if (!url && !isLab) {
       const html = await readFile(new URL('fixtures/index.html', import.meta.url));
       server = createServer((request, response) => { response.writeHead(200, { 'Content-Type': 'text/html' }); response.end(html); });
       await new Promise(done => server.listen(0, '127.0.0.1', done));
