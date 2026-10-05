@@ -58,7 +58,7 @@ Work follows [docs/workflow.md](docs/workflow.md) ([ADR 0002](docs/adr/0002-work
 5. Decisions go into `docs/adr/`, findings from outside the code into `CONTEXT.md`, settled entries leave `CONTEXT.md`, all in the same pull request. The squash merge closes the issue, which takes it off the roadmap.
 6. Before the hand-over, check the whole description against the current code, CI result and proof, then mark the pull request ready. The user merges (squash only).
 
-Without asking, agents may: create and push branches other than `main`, open and update draft pull requests in `eysenfalk/PiChamber`, create issues, place and reorder roadmap items and add ideas to the roadmap issue (`node scripts/workflow/roadmap-sync.mjs`, docs/workflow.md), and add `Proposed` decision records.
+Without asking, agents may: create and push branches other than `main`, open and update draft pull requests in `eysenfalk/PiChamber`, create issues, including ideas, place and reorder roadmap items (`node scripts/workflow/roadmap-sync.mjs`, docs/workflow.md), and add `Proposed` decision records.
 Only with approval: implement a plan, mark a pull request ready or merge it, push to `main`, rewrite pushed history, tags and releases, repository settings, close issues, and anything in an upstream repository.
 
 ## Correctness Invariants
@@ -91,12 +91,13 @@ skill matching the character of the change before editing; multiple skills may
 apply, including companion skills required by another skill. Read every
 task-required reference named by those skills. Skills are canonical for their
 detailed workflows and checklists. Treating this table as optional advice is a
-process violation.
+process violation. In omp sessions, `.omp/skill-flow.yml` enforces a path-based subset of this table and must be kept in sync with it.
 
 | Trigger | Required skill |
 |---|---|
 | Any source, dependency, export, build-config, generated-asset, package-contract, or module-ownership change | `pichamber-change-discipline` |
 | Visual proof, lab tours, recordings or proof publishing | `pichamber-verify` |
+| Hunting unknown bugs: QA, chaos or exploratory testing, "try to break it", or checking a change's assumptions against the real environment | `chaos-qa` |
 | CLI commands, prompts, terminal output, non-TTY, `--quiet`, or `--json` behavior | `clack-cli-patterns` |
 | Shared UI data access, Pi API, `RuntimeAPIs`, runtime fetch/auth/URLs, bridges/proxies, runtime switching, or server API routes | `ui-api-decoupling` |
 | Electron main/preload, IPC, native UI, updater, deep links, SSH/tunnels, packaging, or child processes | `desktop-shell` |

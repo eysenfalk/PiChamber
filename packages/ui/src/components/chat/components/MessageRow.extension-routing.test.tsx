@@ -62,7 +62,9 @@ describe('MessageRow extension routing (ungrouped)', () => {
     expect(markup).toContain('data-extension-ui="ext-fallback-1"');
     expect(markup).toContain('my-extension');
     expect(markup).toContain('Status update');
-    expect(markup).toContain('&quot;count&quot;: 3');
+    // Generic extension content starts as one collapsed row.
+    expect(markup).toContain('data-extension-disclosure="collapsed"');
+    expect(markup).not.toContain('&quot;count&quot;: 3');
 
     expect(chatMessageRenderCount).toBe(0);
     expect(chatMessageRenderedIds).toEqual([]);

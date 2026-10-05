@@ -50,6 +50,7 @@ import { withCrossProcessLock } from '../../server/cross-process-lock.js';
 import {
   findPiSessionJsonlById,
   getPiSessionDirectory,
+  createPiSessionListCache,
   listPiSessionJsonlDirectory,
   validatePiSessionJsonlDirectory,
   validatePiSessionJsonlFile,
@@ -173,9 +174,11 @@ export function createSessionDaemon({
   idleTimeoutMs = 5 * 60 * 1_000,
   subagentHoldCapMs = 6 * 60 * 60 * 1_000,
   sendOperationTtlMs = 10 * 60 * 1_000,
+  sessionListCache = createPiSessionListCache(),
   listSessions = ({ cwd: sessionCwd, agentDir: sessionAgentDir = agentDir }) => listPiSessionJsonlDirectory({
     cwd: sessionCwd,
     agentDir: sessionAgentDir,
+    cache: sessionListCache,
   }),
   createSettingsManager = ({ cwd: settingsCwd, agentDir: settingsAgentDir = agentDir, projectTrusted }) => SettingsManager.create(
     settingsCwd,
@@ -317,6 +320,9 @@ export function createSessionDaemon({
   };
   const toolInputBySession = new Map();
   const latestUserMessageIds = new Map();
+  // Owner of the next assistant message: the latest user prompt or displayed
+  // custom message (`pi.sendMessage`) of the run, whichever came last.
+  const latestTurnHeadIds = new Map();
   const retryStateBySession = new Map();
   const compactionStateBySession = new Map();
   const activeRunStartedAt = new Map();
@@ -1572,7 +1578,10 @@ export function createSessionDaemon({
         endedAt: Date.parse(entry.timestamp),
       });
     }
-    let latestUserMessageId;
+    // The user prompt or displayed custom message that owns the assistant
+    // entries after it. Extension entries (`appendEntry`) and context-only
+    // custom messages (`display: false`) never own a turn.
+    let latestTurnHeadId;
     return entries.flatMap((entry) => {
       // Extension-authored content: custom entries (`appendEntry`) and custom
       // messages (`sendMessage`) both surface as extension-role items so the
@@ -1594,6 +1603,7 @@ export function createSessionDaemon({
         if (typeof entry.customType !== 'string' || entry.customType.length === 0 || typeof entry.id !== 'string') return [];
         if (entry.display === false) return [];
         const timestamp = Date.parse(entry.timestamp);
+        latestTurnHeadId = entry.id;
         const text = typeof entry.content === 'string'
           ? entry.content
           : Array.isArray(entry.content)
@@ -1651,7 +1661,7 @@ export function createSessionDaemon({
 
         let text = rawText.replace(/(\r?\n)*\s*\[Attachment\s+.+?\s+is available at\s+[^\]]+\]/gi, '');
         text = redactAttachmentPaths(text).trim();
-        latestUserMessageId = entry.id;
+        latestTurnHeadId = entry.id;
         return [{
           message: { id: entry.id, sessionId: session.sessionId, directory: targetDir, role: 'user', text, createdAt },
           parts: userParts,
@@ -1704,7 +1714,7 @@ export function createSessionDaemon({
       return [{
         message: {
           id: entry.id, sessionId: session.sessionId, directory: targetDir, role: 'assistant', text, thinking, createdAt,
-          ...(latestUserMessageId ? { parentId: latestUserMessageId } : {}),
+          ...(latestTurnHeadId ? { parentId: latestTurnHeadId } : {}),
           model: { providerId: entry.message.provider, modelId: entry.message.model },
           ...(isPiThinkingLevel(entry.message.thinkingLevel) ? { thinkingLevel: entry.message.thinkingLevel } : {}),
           ...(entry.message.errorMessage ? { error: { code: 'ASSISTANT_ERROR', message: redactAttachmentPaths(entry.message.errorMessage) } } : {}),
@@ -3427,6 +3437,7 @@ export function createSessionDaemon({
       queueSizesBySession.delete(sessionId);
       queueShrinkBySession.delete(sessionId);
       latestUserMessageIds.delete(sessionId);
+      latestTurnHeadIds.delete(sessionId);
       latestAssistantMessageIds.delete(sessionId);
       toolInputBySession.delete(sessionId);
       clearToolTimingsForSession(sessionId);
@@ -3459,6 +3470,7 @@ export function createSessionDaemon({
           const messageId = `user-${sessionId}-${sequence + 1}`;
           messageEntryAliases.retain({ cwd: directory, sessionId, syntheticMessageId: messageId, message: event.message });
           latestUserMessageIds.set(sessionId, messageId);
+          latestTurnHeadIds.set(sessionId, messageId);
           publish('assistant.message.start', {
             messageId,
             role: 'user',
@@ -3485,7 +3497,7 @@ export function createSessionDaemon({
           publish('assistant.message.start', {
             messageId,
             role: 'assistant',
-            ...(latestUserMessageIds.get(sessionId) ? { parentId: latestUserMessageIds.get(sessionId) } : {}),
+            ...(latestTurnHeadIds.get(sessionId) ? { parentId: latestTurnHeadIds.get(sessionId) } : {}),
             startedAt,
             ...(event.message.provider && event.message.model ? { model: { providerId: event.message.provider, modelId: event.message.model } } : {}),
           }, sessionId, directory);
@@ -3537,7 +3549,8 @@ export function createSessionDaemon({
           streamingMessageIds.delete(sessionId);
           clearStreamingRedactionBuffers(sessionId);
         } else if (event.message?.role === 'custom') {
-          publishExtensionCustomMessage(sessionId, event.message, directory);
+          const customMessageId = publishExtensionCustomMessage(sessionId, event.message, directory);
+          if (customMessageId) latestTurnHeadIds.set(sessionId, customMessageId);
         }
         break;
       }
@@ -3691,6 +3704,7 @@ export function createSessionDaemon({
         activeRunStartedAt.delete(sessionId);
         settledSendGenerationBySession.set(sessionId, sendGenerationBySession.get(sessionId) ?? 0);
         latestUserMessageIds.delete(sessionId);
+        latestTurnHeadIds.delete(sessionId);
         latestAssistantMessageIds.delete(sessionId);
         toolInputBySession.delete(sessionId);
         clearToolTimingsForSession(sessionId, { keepCompleted: true });
@@ -4398,6 +4412,7 @@ export function createSessionDaemon({
       queueSizesBySession.clear();
       queueShrinkBySession.clear();
       latestUserMessageIds.clear();
+      latestTurnHeadIds.clear();
       latestAssistantMessageIds.clear();
       for (const client of clients) client.destroy();
       clients.clear();

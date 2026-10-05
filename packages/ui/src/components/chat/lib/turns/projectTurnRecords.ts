@@ -1,4 +1,5 @@
 import { isHiddenUserMessage } from '../../message/hiddenUserMessage';
+import { collectExtensionTurnHeadIds } from './extensionTurnHeads';
 import { projectTurnActivity } from './projectTurnActivity';
 import { projectTurnIndexes } from './projectTurnIndexes';
 import { projectTurnDiffStats, projectTurnSummary } from './projectTurnSummary';
@@ -231,10 +232,12 @@ export const projectTurnRecords = (
     const groupedMessageIds = new Set<string>();
 
     const mergeHiddenUserTurns = effectiveOptions.mergeHiddenUserTurns;
+    const extensionTurnHeadIds = collectExtensionTurnHeadIds(messages);
 
     messages.forEach((message, index) => {
         const role = resolveMessageRole(message);
-        if (role !== 'user') {
+        const isExtensionTurnHead = role === 'extension' && extensionTurnHeadIds.has(message.info.id);
+        if (role !== 'user' && !isExtensionTurnHead) {
             return;
         }
 
@@ -242,6 +245,7 @@ export const projectTurnRecords = (
         if (
             mergeHiddenUserTurns
             && previousTurn
+            && !isExtensionTurnHead
             && isHiddenUserMessage(message)
         ) {
             turnByUserId.set(message.info.id, previousTurn);

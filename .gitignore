@@ -73,3 +73,6 @@ artifacts/
 
 # Local proof recorder output
 .proof/
+
+# pi-fabric per-checkout runtime state (MCP cache, mesh state); other .pi/ content stays visible
+.pi/fabric/

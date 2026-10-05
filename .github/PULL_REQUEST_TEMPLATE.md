@@ -10,7 +10,7 @@
 
 ## Acceptance criteria
 
-<!-- A checklist. Each item is an observable result plus the proof that shows it (test, recording or screenshots, CI job). Check an item off ("- [x]") as soon as it is done and proven; open items are allowed only while the pull request is a draft. -->
+<!-- A checklist. Each item is an observable result plus the proof that shows it (test, recording or screenshots, CI job). Check an item off ("- [x]") as soon as it is done and proven; open items are allowed only while the pull request is a draft. Work that can only happen after the merge (for example publishing a release) is not a criterion: put it in Approach and give it its own issue. -->
 
 ## Approach
 

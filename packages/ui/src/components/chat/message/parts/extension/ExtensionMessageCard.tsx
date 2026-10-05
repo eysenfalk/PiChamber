@@ -3,6 +3,7 @@ import * as React from 'react';
 import { getPiSessionStore } from '@/apps/pi-session-store';
 import { buildCommandPromptText } from '@/lib/pi/command-triggers';
 import { parseExtensionChatItem } from '@/lib/pi/extension-ui';
+import { parseSupervisorReply, parseSupervisorRequest } from '@/lib/pi/supervisor-ui';
 import type { ExtensionUiAction } from '@/lib/pi/extension-ui';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,8 @@ import { Icon } from '@/components/icon/Icon';
 import { iconSpriteData } from '@/components/icon/sprite';
 import type { IconName } from '@/components/icon/icons';
 import { MarkdownRenderer } from '../../../MarkdownRenderer';
+import { ExtensionDisclosureRow } from './ExtensionDisclosureRow';
+import { SupervisorReplyRow, SupervisorRequestRow } from './SupervisorMessageRow';
 
 interface ExtensionMessageCardProps {
     sessionId?: string;
@@ -19,6 +22,8 @@ interface ExtensionMessageCardProps {
     data?: unknown;
     details?: unknown;
     className?: string;
+    /** Start the disclosure of collapsible rows (supervisor reply, generic fallback) expanded. */
+    defaultExpanded?: boolean;
 }
 
 const toneClasses: Record<string, string> = {
@@ -181,26 +186,71 @@ export const ExtensionMessageCard: React.FC<ExtensionMessageCardProps> = ({
     data,
     details,
     className,
+    defaultExpanded = false,
 }) => {
     const parsed = React.useMemo(
         () => parseExtensionChatItem({ customType, data, details, text }),
         [customType, data, details, text],
     );
+    const supervisorRequest = React.useMemo(
+        () => parseSupervisorRequest({ customType, text, details }),
+        [customType, text, details],
+    );
+    const supervisorReply = React.useMemo(
+        () => parseSupervisorReply({ customType, data }),
+        [customType, data],
+    );
 
-    const title = parsed.kind === 'ui' ? parsed.descriptor.title : parsed.title;
-    const actions = parsed.kind === 'ui' ? parsed.descriptor.actions : undefined;
-    const component = parsed.kind === 'ui' ? parsed.descriptor.component : undefined;
+    if (supervisorRequest) {
+        return (
+            <SupervisorRequestRow
+                messageId={messageId}
+                request={supervisorRequest}
+                defaultDetailsExpanded={defaultExpanded}
+                className={className}
+            />
+        );
+    }
+    if (supervisorReply) {
+        return (
+            <SupervisorReplyRow
+                messageId={messageId}
+                reply={supervisorReply}
+                defaultExpanded={defaultExpanded}
+                className={className}
+            />
+        );
+    }
+
+    if (parsed.kind === 'fallback') {
+        // Extension content without a PiChamber GUI descriptor starts as one
+        // collapsed row; expanding shows the preformatted payload so nothing is lost.
+        const firstTextLine = text?.split('\n').map((line) => line.trim()).find((line) => line.length > 0);
+        return (
+            <ExtensionDisclosureRow
+                messageId={messageId}
+                icon="plug-2"
+                label={`Extension message ${parsed.title}`}
+                defaultExpanded={defaultExpanded}
+                className={className}
+                summary={(
+                    <>
+                        <span className="font-medium text-foreground">{parsed.title}</span>
+                        {firstTextLine !== undefined && <span>: {firstTextLine}</span>}
+                    </>
+                )}
+            >
+                <pre className="max-h-64 overflow-auto rounded-md border border-border/40 bg-muted/40 p-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+                    {parsed.body}
+                </pre>
+            </ExtensionDisclosureRow>
+        );
+    }
+
+    const { title, actions, component } = parsed.descriptor;
 
     const body = () => {
-        if (!component) {
-            // Generic fallback: extension-authored content without a PiChamber
-            // GUI descriptor renders as preformatted text so nothing is lost.
-            return (
-                <pre className="max-h-64 overflow-auto rounded-md border border-border/40 bg-muted/40 p-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
-                    {parsed.kind === 'fallback' ? parsed.body : ''}
-                </pre>
-            );
-        }
+        if (!component) return null;
         switch (component.component) {
             case 'markdown':
                 return (

@@ -83,3 +83,23 @@ export function labTour(manifest) {
         ...projects.map(project => ({ text: label(project.name) })), { text: short.title }] },
   ] });
 }
+
+/** Issue #51: a forked session whose rename lies 600 KiB before the end of its file, listed by a freshly started daemon. */
+export function forkRenameTour(manifest) {
+  const fork = manifest?.sessions?.find(session => session.role === 'fork');
+  const project = manifest?.projects?.find(candidate => candidate.name === fork?.project);
+  if (!fork || !nonempty(fork.title) || !project) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  return validateTour({ name: 'fork-rename', steps: [
+    { caption: `A freshly started daemon lists the renamed fork as "${fork.title}". The rename lies 600 KiB before the end of the session file.`,
+      viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'wait', text: fork.title }],
+      evidence: [{ text: label }, { text: fork.title }] },
+    { caption: 'Opening the fork keeps its renamed title.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: fork.title }, { type: 'wait', ms: 1000 }], evidence: [{ text: fork.title }] },
+    { caption: 'The hosted mobile sessions drawer shows the same name.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
+        { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', text: fork.title }],
+      evidence: [{ text: fork.title }] },
+  ] });
+}

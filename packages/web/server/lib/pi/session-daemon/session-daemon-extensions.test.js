@@ -432,6 +432,60 @@ describe('Pi session daemon extension bridging', () => {
     expect(items[1].message).toMatchObject({ id: 'cm-1', customType: 'my-extension', text: 'inline note', details: { answer: 42 } });
   });
 
+  it('owns an assistant entry to the latest user or displayed custom message in the projected session', async () => {
+    const baseTimestamp = '2026-01-01T00:00:00.000Z';
+    const assistant = (id, text) => ({
+      type: 'message',
+      id,
+      timestamp: baseTimestamp,
+      message: { role: 'assistant', content: [{ type: 'text', text }], provider: 'test', model: 'test-model', timestamp: Date.parse(baseTimestamp) },
+    });
+    const { client, session } = await startWithExtensibleSession({
+      entries: [
+        { type: 'message', id: 'u1', timestamp: baseTimestamp, message: { role: 'user', content: 'start a worker', timestamp: Date.parse(baseTimestamp) } },
+        assistant('a1', 'launched'),
+        { type: 'custom_message', id: 'cm-1', customType: 'subagent_supervisor_request', content: 'Needs a decision', display: true, details: { reason: 'decision' }, timestamp: baseTimestamp },
+        assistant('a2', 'deciding'),
+        { type: 'custom', id: 'e-1', customType: 'subagent_supervisor_reply', data: { message: 'go' }, timestamp: baseTimestamp },
+        assistant('a3', 'sent the reply'),
+        { type: 'message', id: 'u2', timestamp: baseTimestamp, message: { role: 'user', content: 'thanks', timestamp: Date.parse(baseTimestamp) } },
+        assistant('a4', 'welcome'),
+        { type: 'custom_message', id: 'cm-hidden', customType: 'context-only', content: 'invisible', display: false, timestamp: baseTimestamp },
+        assistant('a5', 'still the second prompt'),
+      ],
+    });
+
+    const opened = await client.request('sessions.open', { sessionId: session.sessionId });
+    const parents = Object.fromEntries(opened.result.messages
+      .filter((item) => item.message.role === 'assistant')
+      .map((item) => [item.message.id, item.message.parentId]));
+    expect(parents).toEqual({ a1: 'u1', a2: 'cm-1', a3: 'cm-1', a4: 'u2', a5: 'u2' });
+  });
+
+  it('publishes a live assistant start owned by the displayed custom message that triggered it', async () => {
+    const { client, session } = await startWithExtensibleSession();
+    session.emit({ type: 'message_start', message: { role: 'user', content: 'start a worker', timestamp: Date.now() } });
+    const userStart = await client.next((message) => message.event === 'assistant.message.start' && message.payload?.role === 'user');
+
+    session.emit({ type: 'message_start', message: { role: 'assistant', content: [], provider: 'test', model: 'test-model', timestamp: Date.now() } });
+    const first = await client.next((message) => message.event === 'assistant.message.start' && message.payload?.role === 'assistant');
+    expect(first.payload.parentId).toBe(userStart.payload.messageId);
+    session.emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'launched' }], provider: 'test', model: 'test-model', timestamp: Date.now() } });
+
+    // Context-only custom messages are not user-visible and never head a turn.
+    session.emit({ type: 'message_end', message: { role: 'custom', customType: 'context-only', content: 'invisible', display: false, timestamp: Date.now() } });
+    session.emit({ type: 'message_start', message: { role: 'assistant', content: [], provider: 'test', model: 'test-model', timestamp: Date.now() } });
+    const second = await client.next((message) => message.event === 'assistant.message.start' && message.sequence > first.sequence);
+    expect(second.payload.parentId).toBe(userStart.payload.messageId);
+    session.emit({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'again' }], provider: 'test', model: 'test-model', timestamp: Date.now() } });
+
+    session.emit({ type: 'message_end', message: { role: 'custom', customType: 'subagent_supervisor_request', content: 'Needs a decision', display: true, details: { reason: 'decision' }, timestamp: Date.now() } });
+    const request = await client.next((message) => message.event === 'extension.message' && message.payload?.customType === 'subagent_supervisor_request');
+    session.emit({ type: 'message_start', message: { role: 'assistant', content: [], provider: 'test', model: 'test-model', timestamp: Date.now() } });
+    const third = await client.next((message) => message.event === 'assistant.message.start' && message.sequence > request.sequence);
+    expect(third.payload.parentId).toBe(request.payload.id);
+  });
+
   it('cancels pending dialogs when the owning runtime is disposed at idle timeout', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-ext-idle-'));
     const projectDir = join(root, 'project');

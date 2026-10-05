@@ -339,3 +339,48 @@ describe('projectTurnRecords', () => {
         expect(turn?.activityParts.find((activity) => activity.messageId === 'a2')).toBe(undefined);
     });
 });
+
+describe('extension messages that head a turn', () => {
+    const extension = (id: string, createdAt: number): ChatMessageEntry => ({
+        info: { id, role: 'extension', customType: 'subagent_supervisor_request', time: { created: createdAt } } as unknown as Message,
+        parts: [] as Part[],
+    });
+
+    test('an extension message named as parent by an assistant starts its own turn in message order', () => {
+        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+        const first = createMessageEntry({ id: 'a1', role: 'assistant', parentID: 'u1', createdAt: 2 });
+        const request = extension('ext1', 3);
+        const reply = createMessageEntry({ id: 'a2', role: 'assistant', parentID: 'ext1', createdAt: 4 });
+
+        const projection = projectTurnRecords([user, first, request, reply]);
+
+        expect(projection.turns.map((turn) => turn.turnId)).toEqual(['u1', 'ext1']);
+        expect(projection.turns[1]?.userMessage).toBe(request);
+        expect(projection.turns[1]?.assistantMessageIds).toEqual(['a2']);
+        expect(projection.indexes.messageToTurnId.get('a2')).toBe('ext1');
+        expect(projection.ungroupedMessageIds.has('ext1')).toBe(false);
+        expect(projection.lastTurnId).toBe('ext1');
+    });
+
+    test('an extension message no assistant names stays an ungrouped row', () => {
+        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+        const assistant = createMessageEntry({ id: 'a1', role: 'assistant', parentID: 'u1', createdAt: 2 });
+        const note = extension('ext1', 3);
+
+        const projection = projectTurnRecords([user, assistant, note]);
+
+        expect(projection.turns.map((turn) => turn.turnId)).toEqual(['u1']);
+        expect(projection.ungroupedMessageIds.has('ext1')).toBe(true);
+    });
+
+    test('assistant messages keep their user parent when no extension message is involved', () => {
+        const user = createMessageEntry({ id: 'u1', role: 'user', createdAt: 1 });
+        const assistant = createMessageEntry({ id: 'a1', role: 'assistant', parentID: 'u1', createdAt: 2 });
+
+        const projection = projectTurnRecords([user, assistant]);
+
+        expect(projection.turns).toHaveLength(1);
+        expect(projection.turns[0]?.assistantMessageIds).toEqual(['a1']);
+    });
+});
+

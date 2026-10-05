@@ -12,6 +12,7 @@ import { useOlderHistoryDemand } from './hooks/useOlderHistoryDemand';
 import { applyCompactionOverlay } from './lib/turns/applyCompactionOverlay';
 import { applyRetryOverlay } from './lib/turns/applyRetryOverlay';
 import { buildLiveStreamingEntry, type StreamingTailEntry } from './lib/turns/streamingTailEntry';
+import { collectUngroupedAfterTailTurn } from './lib/turns/tailTurnUngrouped';
 import { revealTurnAssistantMessage } from './lib/turns/turnAssistantReveal';
 import { getNormalizedMessageForDisplay, hasCompactionPart } from './lib/messageDisplayNormalization';
 import { FadeInDisabledProvider } from './message/FadeInOnReveal';
@@ -40,6 +41,7 @@ import {
 const MESSAGE_LIST_VIRTUALIZE_THRESHOLD = 5;
 const EMPTY_STATIC_ENTRY_MESSAGES: ChatMessageEntry[] = [];
 const EMPTY_UNGROUPED_MESSAGE_IDS = new Set<string>();
+const EMPTY_TRAILING_UNGROUPED_ENTRIES: StreamingTailEntry[] = [];
 const TIMELINE_CACHE_LIMIT = 16;
 
 const sameKeys = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => {
@@ -829,6 +831,12 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     const hasUngroupedStaticEntries = projection.ungroupedMessageIds.size > 0;
     const staticEntryMessages = hasUngroupedStaticEntries ? displayMessages : EMPTY_STATIC_ENTRY_MESSAGES;
     const staticEntryUngroupedIds = hasUngroupedStaticEntries ? projection.ungroupedMessageIds : EMPTY_UNGROUPED_MESSAGE_IDS;
+    // Ungrouped rows inside the last turn render below it, with the live tail.
+    const tailTurnHeadId = streamingTurn?.userMessage.info.id;
+    const tailTurnUngroupedIds = React.useMemo(
+        () => collectUngroupedAfterTailTurn(staticEntryMessages, staticEntryUngroupedIds, tailTurnHeadId),
+        [staticEntryMessages, staticEntryUngroupedIds, tailTurnHeadId],
+    );
     const staticRenderEntries = React.useMemo<RenderEntry[]>(() => streamPerfMeasure('ui.message_list.render_entries_ms', () => {
         const turnEntries = staticTurns.map((turn) => ({
             kind: 'turn' as const,
@@ -854,7 +862,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                 return;
             }
 
-            if (!staticEntryUngroupedIds.has(message.info.id)) {
+            if (!staticEntryUngroupedIds.has(message.info.id) || tailTurnUngroupedIds.has(message.info.id)) {
                 return;
             }
 
@@ -868,7 +876,25 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
         });
 
         return orderedEntries;
-    }), [projection.lastTurnId, staticEntryMessages, staticEntryUngroupedIds, staticTurns]);
+    }), [projection.lastTurnId, staticEntryMessages, staticEntryUngroupedIds, staticTurns, tailTurnUngroupedIds]);
+
+    const trailingUngroupedEntries = React.useMemo<StreamingTailEntry[]>(() => {
+        if (tailTurnUngroupedIds.size === 0) {
+            return EMPTY_TRAILING_UNGROUPED_ENTRIES;
+        }
+        const entries: StreamingTailEntry[] = [];
+        staticEntryMessages.forEach((message, index) => {
+            if (!tailTurnUngroupedIds.has(message.info.id)) return;
+            entries.push({
+                kind: 'ungrouped',
+                key: `msg:${message.info.id}`,
+                message,
+                previousMessage: index > 0 ? staticEntryMessages[index - 1] : undefined,
+                nextMessage: index < staticEntryMessages.length - 1 ? staticEntryMessages[index + 1] : undefined,
+            });
+        });
+        return entries;
+    }, [staticEntryMessages, tailTurnUngroupedIds]);
 
     const trailingStreamingEntry = React.useMemo<StreamingTailEntry | undefined>(() => {
         if (streamingTurn) {
@@ -1001,8 +1027,11 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     }, []);
 
     const allEntries = React.useMemo(() => {
-        return trailingStreamingEntry ? [...historyEntries, trailingStreamingEntry] : historyEntries;
-    }, [historyEntries, trailingStreamingEntry]);
+        if (!trailingStreamingEntry) return historyEntries;
+        return trailingStreamingEntry.kind === 'turn' && trailingUngroupedEntries.length > 0
+            ? [...historyEntries, trailingStreamingEntry, ...trailingUngroupedEntries]
+            : [...historyEntries, trailingStreamingEntry];
+    }, [historyEntries, trailingStreamingEntry, trailingUngroupedEntries]);
 
     const stableHistoryContentChange = useStableEvent((reason?: ContentChangeReason) => {
         onMessageContentChange(reason);
@@ -1417,6 +1446,24 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                                 activeStreamingPhase={activeStreamingPhase}
                                                 />
                         ) : null}
+                        {trailingStreamingEntry?.kind === 'turn' ? trailingUngroupedEntries.map((ungroupedEntry) => (
+                            <StreamingTailContent
+                                key={ungroupedEntry.key}
+                                entry={ungroupedEntry}
+                                sessionId={sessionKey ?? null}
+                                directory={directory}
+                                onMessageContentChange={stableTailContentChange}
+                                getAnimationHandlers={stableGetAnimationHandlers}
+                                scrollToBottom={stableScrollToBottom}
+                                sessionIsWorking={sessionIsWorking}
+                                sessionAwaitingRecovery={sessionAwaitingRecovery}
+                                awaitingPromptEcho={awaitingPromptEcho}
+                                shouldAnimateUserMessage={shouldAnimateUserMessage}
+                                onUserAnimationConsumed={onUserAnimationConsumed}
+                                activeStreamingMessageId={activeStreamingMessageId}
+                                activeStreamingPhase={activeStreamingPhase}
+                            />
+                        )) : null}
                     </div>
                 </FadeInDisabledProvider>
 

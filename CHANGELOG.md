@@ -4,7 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-10-04
+
+Pi 1.0.2, GitHub pull requests and issues, and reconnect and performance work since 1.0.3. Releases 1.0.4 and 1.0.5 were Android-only prereleases.
+
+- **Pi 1.0.2 (#76).** The server and session daemon run on Pi SDK 1.0.2 instead of 0.99.2, matching current Pi installations and extensions built for Pi 1.0. No session, settings or model data migration is needed.
 - **Git identity profiles removed.** PiChamber no longer manages commit-author profiles: the profiles settings UI, the clone-time identity picker, and the silent default auto-apply are gone, along with the server profile storage, credential discovery, and the config-writing routes. Commits, pushes, and clones now use solely the user's own git configuration and credentials. The Git header shows a read-only `Committing as Name <email>` line resolved from git config, which PiChamber never writes. Any previously saved profiles file and any git config previously written into repositories are left untouched; set authorship with plain git (`git config user.email …`).
+- **GitHub pull requests and issues inside PiChamber.** Pull request and issue surfaces with review, files, checks, triage and start-session actions, wired into the context panel, sidebar, mobile and composer, backed by a `gh` CLI server module; pull request creation in the Git view is redesigned. GitHub HTML is sanitized and framing markers in untrusted agent context are neutralized.
+- **Faster startup and lighter polling.** Startup vendors are bundled in one chunk with lazy Shiki, GitHub surfaces, code-block languages and icon sprites; hashed assets are cached immutably; models.dev metadata loads after first paint; Git, worktree and session catalog polling are deduplicated.
+- **Reconnect and live status fixes.** Accepted sends settle after missed lifecycle events or daemon restarts, a reconnecting turn renders instead of a bare chevron, unopened sessions show live status from ordered listings, and a user-selected session survives in-flight focus changes.
+- **Subagents and pi-fabric rendered natively (#31, #43).** pi-subagents async status renders as a native card, extension surfaces collapse, sessions with running subagents stay loaded, supervisor messages are compact and correctly ordered, and pi-fabric runs show as live tool cards.
+- **Unsolicited assistant turns render live (#38)** in the open session, and renamed session names stay in the list of large sessions (#54).
+- **Local dev AppImage (#36, #53).** `bun run electron:build:dev` writes to one stable path and installs to `~/AppImages/pichamber.appimage`.
+- **Smaller fixes.** Mermaid diagrams are pinch-zoomable on touch, the composer clears after resending a reverted message, the git header is unified across layouts, mobile workspace tabs are compact, and status-error surfaces are readable.
 
 ## [1.0.3] - 2026-09-21
 

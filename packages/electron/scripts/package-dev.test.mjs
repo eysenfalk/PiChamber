@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { DEV_APPIMAGE_NAME, installDevAppImage, resolveDevOutputDir } from './package-dev.mjs';
+import { DEV_APPIMAGE_NAME, USER_INSTALL_ENV, copyAppImage, installDevAppImage, resolveDevOutputDir, resolveUserInstallPath } from './package-dev.mjs';
 
 const identity = { GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, env: { ...process.env, ...identity }, stdio: 'ignore' });
@@ -61,4 +61,54 @@ test('a build without exactly one AppImage leaves the previous file untouched', 
   fs.writeFileSync(path.join(buildDir, 'b.AppImage'), 'b');
   assert.throws(() => installDevAppImage(buildDir, outputDir), /found 2/);
   assert.equal(fs.readFileSync(target, 'utf8'), 'old build');
+});
+
+test('the launcher copy defaults to ~/AppImages, follows the variable and can be switched off', () => {
+  const home = '/home/someone';
+  assert.equal(resolveUserInstallPath({}, home), '/home/someone/AppImages/pichamber.appimage');
+  assert.equal(resolveUserInstallPath({ [USER_INSTALL_ENV]: '~/Apps/pc.AppImage' }, home), '/home/someone/Apps/pc.AppImage');
+  assert.equal(resolveUserInstallPath({ [USER_INSTALL_ENV]: '/opt/pc.AppImage' }, home), '/opt/pc.AppImage');
+  assert.equal(resolveUserInstallPath({ [USER_INSTALL_ENV]: '' }, home), null);
+  assert.equal(resolveUserInstallPath({ [USER_INSTALL_ENV]: '  ' }, home), null);
+});
+
+test('the launcher copy replaces the target atomically, keeps the dev image and a running inode', (t) => {
+  const dir = temp(t);
+  const source = path.join(dir, DEV_APPIMAGE_NAME);
+  fs.writeFileSync(source, 'new build');
+  const target = path.join(dir, 'AppImages', 'pichamber.appimage');
+  fs.mkdirSync(path.dirname(target));
+  fs.writeFileSync(target, 'old build');
+  const running = fs.openSync(target, 'r');
+  t.after(() => fs.closeSync(running));
+
+  assert.equal(copyAppImage(source, target), target);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new build');
+  assert.equal(fs.statSync(target).mode & 0o777, 0o755);
+  assert.equal(fs.readFileSync(source, 'utf8'), 'new build');
+  assert.equal(fs.readFileSync(running, 'utf8'), 'old build');
+  assert.deepEqual(fs.readdirSync(path.dirname(target)), ['pichamber.appimage']);
+});
+
+test('the launcher copy creates a missing target directory', (t) => {
+  const dir = temp(t);
+  const source = path.join(dir, DEV_APPIMAGE_NAME);
+  fs.writeFileSync(source, 'new build');
+  const target = path.join(dir, 'missing', 'AppImages', 'pichamber.appimage');
+  copyAppImage(source, target);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'new build');
+});
+
+test('a failed launcher copy throws and leaves no temporary file', (t) => {
+  const dir = temp(t);
+  const source = path.join(dir, DEV_APPIMAGE_NAME);
+  fs.writeFileSync(source, 'new build');
+  const parent = path.join(dir, 'AppImages');
+  const target = path.join(parent, 'pichamber.appimage');
+  fs.mkdirSync(target, { recursive: true });
+  fs.writeFileSync(path.join(target, 'keep'), 'x');
+
+  assert.throws(() => copyAppImage(source, target));
+  assert.deepEqual(fs.readdirSync(parent), ['pichamber.appimage']);
+  assert.equal(fs.readFileSync(path.join(target, 'keep'), 'utf8'), 'x');
 });
