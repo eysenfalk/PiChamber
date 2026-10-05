@@ -1,8 +1,7 @@
 # 0007. Ideas as records of their own, kept as issues of the tracker
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-05
-- Waits for: the owner confirming the record in the pull request for #84
 
 ## Context
 

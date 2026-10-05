@@ -12,7 +12,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0004](0004-proof-lab.md) | Proof lab in rootless podman with synthetic SDK sessions | Accepted |
 | [0005](0005-proof-attached-to-pull-requests.md) | Proof recorded in the lab and attached to the pull request | Accepted |
 | [0006](0006-intent-as-the-primitive.md) | Intent as the primitive: work organized by accepted intents, not by sessions | Proposed |
-| [0007](0007-ideas-as-issues.md) | Ideas as records of their own, kept as issues of the tracker | Proposed |
+| [0007](0007-ideas-as-issues.md) | Ideas as records of their own, kept as issues of the tracker | Accepted |
 
 ## Rules
 
