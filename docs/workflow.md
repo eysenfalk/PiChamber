@@ -88,6 +88,8 @@ The user approves the plan before code is written. Changing the plan later means
 
 **Acceptance criteria are a living checklist.** Each criterion is an observable result plus the proof that shows it. Whoever implements checks a box off (`- [x]`) in the description as soon as that criterion is done and proven, not at the end, and adds new boxes when the plan grows. The `pull-request` check allows open boxes only while the pull request is a draft.
 
+**What happens after the merge is not a criterion.** Every criterion must be provable before the merge, because the pull request leaves draft only with every box checked. Work that can only follow the merge, such as publishing a release from the merge commit, is a step in Approach and gets its own issue: the squash merge closes the issue the pull request names, so that issue cannot track it.
+
 ### 5. Implementation
 
 - Follow [AGENTS.md](../AGENTS.md): load the matching project skills and read the nearest `README.md` and `DOCUMENTATION.md` before editing.
