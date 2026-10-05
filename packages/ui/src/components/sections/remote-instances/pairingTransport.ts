@@ -9,7 +9,7 @@ export interface PairingTransportOptions {
   tailscaleUrl: string | null;
 }
 
-export interface PairingTransportRequest {
+interface PairingTransportRequest {
   serverUrl: string;
   fallbackServerUrl?: string;
 }
