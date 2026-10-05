@@ -103,3 +103,26 @@ export function forkRenameTour(manifest) {
       evidence: [{ text: fork.title }] },
   ] });
 }
+
+/** Issue #46: the create-device dialog on a server without Tailscale (the lab pod has none) keeps the home network as default. */
+export function addDeviceTour() {
+  // Desktop opens Settings from the URL; hosted mobile ignores `?settings=` and goes through the drawer.
+  const open = {
+    desktop: [{ type: 'navigate', path: '?settings=remote-instances' }, { type: 'wait', text: 'Add a device' }, { type: 'click', text: 'Add a device' }],
+    mobile: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
+      { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: '[data-mobile-sessions-drawer]' },
+      { type: 'wait', ms: 800 }, { type: 'click', selector: 'button[aria-label="Settings"]' },
+      { type: 'wait', text: 'Manage instances & pair devices' }, { type: 'click', text: 'Manage instances & pair devices' },
+      { type: 'wait', text: 'Add a device' }, { type: 'click', text: 'Add a device' }],
+  };
+  const dialog = theme => [
+    { selector: (theme === 'dark' ? 'html.dark ' : '') + '[role="radio"][aria-label="Home network only"][aria-checked="true"]' },
+    { selector: '[role="radio"][aria-label="Tailscale (recommended)"][aria-checked="false"]:disabled' },
+    { text: 'Not available. Start Tailscale on this computer and allow network access to PiChamber.' },
+  ];
+  const step = (viewport, theme) => ({
+    caption: `Without Tailscale on the server, Add a device selects Home network only and greys out Tailscale (${viewport}, ${theme}).`,
+    viewport, theme, actions: [...open[viewport], { type: 'wait', text: 'Where will you use this device?' }], evidence: dialog(theme),
+  });
+  return validateTour({ name: 'add-device', steps: [step('desktop', 'light'), step('desktop', 'dark'), step('mobile', 'light'), step('mobile', 'dark')] });
+}

@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Radio } from '@/components/ui/radio';
 import { Icon } from "@/components/icon/Icon";
 import { cn } from '@/lib/utils';
+import type { AddDeviceTransport, PairingTransportOptions } from './pairingTransport';
 
 export interface AddDeviceDialogProps {
   open: boolean;
@@ -20,11 +21,11 @@ export interface AddDeviceDialogProps {
   remoteClientLabel: string;
   onRemoteClientLabelChange: (val: string) => void;
   remoteClientError: string | null;
-  addDeviceTransport: 'local' | 'lan' | 'relay';
-  onAddDeviceTransportChange: (transport: 'local' | 'lan' | 'relay') => void;
+  addDeviceTransport: AddDeviceTransport;
+  onAddDeviceTransportChange: (transport: AddDeviceTransport) => void;
   addDeviceFallback: boolean;
   onAddDeviceFallbackChange: (fallback: boolean) => void;
-  transportOptions: { localUrl: string | null; lanUrl: string | null; relayAvailable: boolean } | null;
+  transportOptions: PairingTransportOptions | null;
   addDeviceCreating: boolean;
   onCreatePairingLink: () => void;
   pairingQrDataUrl: string | null;
@@ -83,10 +84,12 @@ export const AddDeviceDialog: React.FC<AddDeviceDialogProps> = ({
               <div role="radiogroup" aria-label={"Where will you use this device?"} className="space-y-1.5">
                 {[
                   {
-                    key: 'relay' as const,
-                    label: "Anywhere",
-                    hint: "Works at home and away. Away traffic goes through PiChamber Private Relay — an end-to-end encrypted tunnel. No setup needed.",
-                    available: Boolean(transportOptions?.relayAvailable),
+                    key: 'tailscale' as const,
+                    label: "Tailscale (recommended)",
+                    hint: transportOptions && !transportOptions.tailscaleUrl
+                      ? "Not available. Start Tailscale on this computer and allow network access to PiChamber."
+                      : "Works at home and away on your tailnet. Tailscale encrypts the connection.",
+                    available: Boolean(transportOptions?.tailscaleUrl),
                   },
                   {
                     key: 'lan' as const,
@@ -128,27 +131,15 @@ export const AddDeviceDialog: React.FC<AddDeviceDialogProps> = ({
                   );
                 })}
               </div>
-              {addDeviceTransport === 'lan' ? (
+              {addDeviceTransport === 'tailscale' && transportOptions?.lanUrl ? (
                 <label className="flex w-fit cursor-pointer items-center gap-2 pt-1">
                   <Checkbox
                     checked={addDeviceFallback}
                     onChange={onAddDeviceFallbackChange}
-                    ariaLabel={"Also allow the encrypted relay when away from home"}
+                    ariaLabel={"Also try your home Wi-Fi when Tailscale is off"}
                   />
                   <span className="typography-meta text-muted-foreground">
-                    {"Also allow the encrypted relay when away from home"}
-                  </span>
-                </label>
-              ) : null}
-              {addDeviceTransport === 'relay' && transportOptions?.lanUrl ? (
-                <label className="flex w-fit cursor-pointer items-center gap-2 pt-1">
-                  <Checkbox
-                    checked={addDeviceFallback}
-                    onChange={onAddDeviceFallbackChange}
-                    ariaLabel={"Prefer the direct home connection when available"}
-                  />
-                  <span className="typography-meta text-muted-foreground">
-                    {"Prefer the direct home connection when available"}
+                    {"Also try your home Wi-Fi when Tailscale is off"}
                   </span>
                 </label>
               ) : null}

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -63,5 +63,15 @@ describe('tours.mjs format', () => {
     expect(tour.steps.at(-1).evidence).toEqual([{ text: 'Renamed fork' }]);
     expect(() => forkRenameTour({ projects: [], sessions: [{ project: 'lab-one', title: 'Renamed fork', role: 'fork' }] })).toThrow('Invalid lab seed manifest');
     expect(() => forkRenameTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
+    const tour = addDeviceTour();
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/dark', 'mobile/light', 'mobile/dark']);
+    for (const step of tour.steps) {
+      expect(step.actions[0]).toEqual({ type: 'navigate', path: step.viewport === 'desktop' ? '?settings=remote-instances' : 'mobile.html' });
+      expect(step.actions.at(-2)).toEqual({ type: 'click', text: 'Add a device' });
+      expect(step.evidence).toContainEqual({ selector: '[role="radio"][aria-label="Tailscale (recommended)"][aria-checked="false"]:disabled' });
+      expect(step.evidence[0].selector.startsWith(step.theme === 'dark' ? 'html.dark ' : '[role="radio"]')).toBe(true);
+    }
   });
 });
