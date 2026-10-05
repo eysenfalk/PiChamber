@@ -91,7 +91,7 @@ skill matching the character of the change before editing; multiple skills may
 apply, including companion skills required by another skill. Read every
 task-required reference named by those skills. Skills are canonical for their
 detailed workflows and checklists. Treating this table as optional advice is a
-process violation.
+process violation. In omp sessions, `.omp/skill-flow.yml` enforces a path-based subset of this table and must be kept in sync with it.
 
 | Trigger | Required skill |
 |---|---|
