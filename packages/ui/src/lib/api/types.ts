@@ -1336,10 +1336,8 @@ export interface ClientAuthAPI {
     fallbackServerUrl?: string;
     // Per-link transport choice. `includeRelay: true` adds the relay candidate
     // and enables the relay host on demand; `false` omits it; omitted keeps the
-    // legacy "relay only if already enabled" behavior. `includeDirect: false`
-    // produces a relay-only link (no direct candidate).
+    // legacy "relay only if already enabled" behavior.
     includeRelay?: boolean;
-    includeDirect?: boolean;
   }): Promise<PairingSessionCreateResult>;
   purgeRevokedClients(): Promise<RemoteClientPurgeRevokedResult>;
   revokeClient(id: string): Promise<RemoteClientRevokeResult>;

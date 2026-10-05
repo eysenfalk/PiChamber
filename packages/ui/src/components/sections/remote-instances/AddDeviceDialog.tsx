@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Radio } from '@/components/ui/radio';
 import { Icon } from "@/components/icon/Icon";
 import { cn } from '@/lib/utils';
-import type { AddDeviceTransport, PairingTransportOptions } from './useDevicePairingState';
+import type { AddDeviceTransport, PairingTransportOptions } from './pairingTransport';
 
 export interface AddDeviceDialogProps {
   open: boolean;

@@ -611,17 +611,13 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
   //   true  → add the relay candidate, enabling the relay host on demand;
   //   false → direct only, never relay;
   //   undefined → legacy: advertise relay only if it is already enabled.
-  // `includeDirect === false` produces a relay-only link (no direct candidate).
   // `fallbackServerUrl` adds a second direct candidate the client tries after
   // the preferred one (e.g. the home Wi-Fi URL behind a Tailscale URL).
-  const pairingServerCandidates = async (req, { preferredServerUrl, fallbackServerUrl, includeRelay, includeDirect = true } = {}) => {
-    const candidates = [];
-    if (includeDirect) {
-      candidates.push(...buildDirectPairingCandidates({
-        primaryUrl: normalizeCandidateUrl(preferredServerUrl) || requestOrigin(req),
-        fallbackUrl: fallbackServerUrl,
-      }));
-    }
+  const pairingServerCandidates = async (req, { preferredServerUrl, fallbackServerUrl, includeRelay } = {}) => {
+    const candidates = buildDirectPairingCandidates({
+      primaryUrl: normalizeCandidateUrl(preferredServerUrl) || requestOrigin(req),
+      fallbackUrl: fallbackServerUrl,
+    });
     // The client races candidates and falls back to relay only if the direct URL
     // is unreachable (relay carries a higher priority number).
     if (includeRelay !== false) {
@@ -861,7 +857,6 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
         preferredServerUrl: req.body?.serverUrl,
         fallbackServerUrl: req.body?.fallbackServerUrl,
         includeRelay: typeof req.body?.includeRelay === 'boolean' ? req.body.includeRelay : undefined,
-        includeDirect: req.body?.includeDirect !== false,
       });
       const usesRelay = candidates.some((candidate) => candidate.type === 'relay');
       const result = await clientPairingRuntime.createPairingSession({

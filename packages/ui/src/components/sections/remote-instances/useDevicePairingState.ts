@@ -16,14 +16,12 @@ import {
   isLoopbackUrl,
   resolvePairingServerUrl,
 } from './remoteInstanceHelpers';
-
-export type AddDeviceTransport = 'tailscale' | 'lan' | 'local';
-
-export interface PairingTransportOptions {
-  localUrl: string | null;
-  lanUrl: string | null;
-  tailscaleUrl: string | null;
-}
+import {
+  buildPairingTransportRequest,
+  defaultAddDeviceTransport,
+  type AddDeviceTransport,
+  type PairingTransportOptions,
+} from './pairingTransport';
 
 export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
   const [remoteClients, setRemoteClients] = React.useState<RemoteClientRecord[]>([]);
@@ -148,7 +146,7 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
     setAddDeviceOpen(true);
     const opts = await resolveTransportOptions();
     setTransportOptions(opts);
-    setAddDeviceTransport(opts.tailscaleUrl ? 'tailscale' : opts.lanUrl ? 'lan' : 'local');
+    setAddDeviceTransport(defaultAddDeviceTransport(opts));
   }, [resolveTransportOptions]);
 
   const createPairingLink = React.useCallback(async () => {
@@ -157,26 +155,16 @@ export function useDevicePairingState(clientAuth: ClientAuthAPI | undefined) {
     setAddDeviceCreating(true);
     try {
       const label = remoteClientLabel.trim() || undefined;
-      const serverUrl = {
-        tailscale: transportOptions.tailscaleUrl,
-        lan: transportOptions.lanUrl,
-        local: transportOptions.localUrl,
-      }[addDeviceTransport];
-      // Never fall back to the request origin: the desktop UI reaches its server
-      // over loopback, which another device cannot scan.
-      if (!serverUrl) {
+      const transport = buildPairingTransportRequest(transportOptions, addDeviceTransport, addDeviceFallback);
+      if (!transport) {
         setRemoteClientError('This connection type is not available right now.');
         return;
       }
-      const fallbackServerUrl = addDeviceTransport === 'tailscale' && addDeviceFallback
-        ? transportOptions.lanUrl ?? undefined
-        : undefined;
       // PiChamber Private Relay is disabled in this fork; links are direct only.
       const { pairing, server } = await clientAuth.createPairingSession({
         label,
         allowedClientKinds: ['mobile', 'desktop'],
-        serverUrl,
-        fallbackServerUrl,
+        ...transport,
         includeRelay: false,
       });
       const payload = buildPairingConnectionPayload({
