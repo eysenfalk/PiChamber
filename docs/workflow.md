@@ -17,8 +17,8 @@ How work moves from an idea to `main` in this repository, who does what, and wha
 | [AGENTS.md](../AGENTS.md) and `.agents/skills/` | Always-on rules and routing; detailed workflows per kind of change | by hand |
 | [docs/adr](adr/README.md) | One record per decision: context with evidence and sources, decision, consequences, when to revisit | by hand, in the pull request that makes the decision; superseded, not rewritten |
 | [CONTEXT.md](../CONTEXT.md) | **Live context:** open findings and questions, each with source, date and what settles it | by hand; entries are added in the pull request that learns them and removed in the one that settles them |
-| [Roadmap issue #24](https://github.com/eysenfalk/PiChamber/issues/24) | The order of upcoming work as its ordered sub-issues, a generated order list and graph, and ideas as one line each | sub-issues and ideas: people and agents; list and graph: `scripts/workflow/roadmap-sync.mjs` |
-| GitHub issues | Roadmap items (label `roadmap`) and bugs: problem, requirements, acceptance | people and agents |
+| [Roadmap issue #24](https://github.com/eysenfalk/PiChamber/issues/24) | The order of upcoming work as its ordered sub-issues, and a generated order list and graph | sub-issues: people and agents; list and graph: `scripts/workflow/roadmap-sync.mjs` |
+| GitHub issues | Ideas, roadmap items (label `roadmap`) and bugs | people and agents |
 | Pull request | The plan (how), its proof, the review and the CI result | agent drafts, user approves |
 | Git history on `main` | One squash commit per pull request, containing its title and full description | automatic |
 
@@ -41,7 +41,7 @@ There is no archive of plans and no hand-maintained catalogue. A fact is written
 
 | # | Step | Who | How |
 |---|---|---|---|
-| 1 | Write the idea down | anyone | one line under Ideas in the roadmap issue |
+| 1 | Write the idea down | anyone | an issue in the tracker, without the label `roadmap` |
 | 2 | Make it a roadmap item | people and agents | an issue labeled `roadmap`, placed in the roadmap issue; before work starts it has problem, requirements, acceptance |
 | 3 | Branch and draft pull request | agent | branch named after the issue; draft pull request from the template; the description is the plan |
 | 4 | Approve the plan | a person | in the pull request or in chat; nothing is implemented before |
@@ -53,11 +53,11 @@ There is no archive of plans and no hand-maintained catalogue. A fact is written
 
 ### 1. Idea
 
-Ideas cost nothing to write down and nothing to throw away. They are one line each under **Ideas** in the roadmap issue, not issues, so the issue list holds only work that is planned. An idea becomes an issue when it is about to be worked on.
+Ideas cost nothing to write down and nothing to throw away ([ADR 0007](adr/0007-ideas-as-issues.md)). An idea is an issue in the tracker of `workflow.json`, or a Markdown file in `tracker.dir` for a local tracker. It says what could be done and where it came from: an issue, a note, a voice note, a conversation or a session. An open issue without the label `roadmap` is an idea, unless it is a bug that needs doing now. There may be hundreds; the roadmap, not the issue list, says what is planned. An idea is closed when it is done, duplicated or no longer wanted.
 
 ### 2. Roadmap item
 
-Planned work is an issue labeled `roadmap` and a sub-issue of the roadmap issue ([ADR 0003](adr/0003-roadmap-in-issues.md)). Its place among the sub-issues is its place in the order of work; the first three open ones are **Next**. A roadmap item may start as a title; before work on it starts, it says what is wrong or missing and how we will know it is done. It does not say how to build it.
+Planned work is an issue labeled `roadmap` and a sub-issue of the roadmap issue ([ADR 0003](adr/0003-roadmap-in-issues.md)); an idea becomes a roadmap item by getting both. Its place among the sub-issues is its place in the order of work; the first three open ones are **Next**. A roadmap item may start as a title; before work on it starts, it says what is wrong or missing and how we will know it is done. It does not say how to build it.
 
 People reorder items by dragging them in the sub-issue list of the roadmap issue. People and agents can also use the command, which regenerates the order list and graph afterwards:
 
@@ -68,7 +68,7 @@ node scripts/workflow/roadmap-sync.mjs move 12 --before 7      # or --after 7, o
 node scripts/workflow/roadmap-sync.mjs sync                    # regenerate the order list and graph
 ```
 
-Dependencies are "blocked by" relations set on the issue in GitHub; the graph draws them. The order list and graph between the markers in the roadmap issue are generated and overwritten; ideas and other text outside them are kept. Bugs that need doing now can be issues without the label.
+Dependencies are "blocked by" relations set on the issue in GitHub; the graph draws them. The order list and graph between the markers in the roadmap issue are generated and overwritten; text outside them is kept. Bugs that need doing now can be issues without the label.
 
 ### 3. Branch and draft pull request
 
