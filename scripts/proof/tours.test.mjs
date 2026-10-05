@@ -68,7 +68,8 @@ describe('tours.mjs format', () => {
     const tour = addDeviceTour();
     expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/dark', 'mobile/light', 'mobile/dark']);
     for (const step of tour.steps) {
-      expect(step.actions[0]).toEqual({ type: 'navigate', path: '?settings=remote-instances' });
+      expect(step.actions[0]).toEqual({ type: 'navigate', path: step.viewport === 'desktop' ? '?settings=remote-instances' : 'mobile.html' });
+      expect(step.actions.at(-2)).toEqual({ type: 'click', text: 'Add a device' });
       expect(step.evidence).toContainEqual({ selector: '[role="radio"][aria-label="Tailscale (recommended)"][aria-checked="false"]:disabled' });
       expect(step.evidence[0].selector.startsWith(step.theme === 'dark' ? 'html.dark ' : '[role="radio"]')).toBe(true);
     }
