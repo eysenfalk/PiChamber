@@ -94,6 +94,7 @@ describe('Pi session daemon supervisor', () => {
       protocolVersion: 1,
       capabilities: expect.arrayContaining(['projects.list', 'projects.select', 'sessions.list', 'sessions.create', 'sessions.open', 'sessions.rename', 'sessions.delete', 'sessions.tree', 'sessions.navigate', 'sessions.fork', 'sessions.clone', 'sessions.prompt', 'sessions.steer', 'sessions.followUp', 'sessions.abort', 'sessions.setModel', 'sessions.setThinking', 'sessions.compact', 'providers.list', 'providers.config.get', 'providers.models.set', 'providers.status', 'providers.login', 'providers.login.respond', 'providers.login.status', 'providers.logout', 'settings.get', 'settings.set', 'resources.list', 'resources.update', 'resources.prompts.create', 'resources.prompts.update', 'resources.prompts.delete', 'events.streamEpoch']),
       streamEpoch: expect.stringMatching(/^[0-9a-f]{32}$/),
+      build: { id: 'unknown' },
     });
     await expect(supervisor.request('sessions.list')).resolves.toMatchObject({ sessions: expect.any(Array) });
 
@@ -432,6 +433,50 @@ describe('Pi session daemon supervisor', () => {
     } finally {
       await first.stop().catch(() => {});
       await upgraded.stop().catch(() => {});
+    }
+  }, 60_000);
+
+  it('replaces a daemon from another build of the same package version and reports both build stamps', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-supervisor-same-version-'));
+    const cwd = join(root, 'project');
+    const agentDir = join(root, 'agent');
+    await Promise.all([mkdir(cwd), mkdir(agentDir)]);
+    const env = {
+      ...process.env,
+      PI_OFFLINE: '1',
+      PICHAMBER_DATA_DIR: join(root, 'data'),
+      PICHAMBER_PI_AGENT_DIR: agentDir,
+      XDG_RUNTIME_DIR: join(root, 'runtime'),
+    };
+    const departedServerProcess = {
+      pid: 987_654_321,
+      execPath: process.execPath,
+      versions: process.versions,
+      kill(pid, signal) {
+        return process.kill(pid, signal);
+      },
+    };
+    const firstBuiltAt = '2026-10-04T08:00:00.000Z';
+    const secondBuiltAt = '2026-10-04T08:05:00.000Z';
+    const first = createPiSessionDaemonSupervisor({
+      env, cwd, port: 3000, version: '1.0.3', buildId: 'abc1234', builtAt: firstBuiltAt, processLike: departedServerProcess,
+    });
+    const rebuilt = createPiSessionDaemonSupervisor({
+      env, cwd, port: 3000, version: '1.0.3', buildId: 'def5678-dirty', builtAt: secondBuiltAt,
+    });
+    try {
+      await first.start();
+      await expect(first.health()).resolves.toMatchObject({ state: 'ready', build: { id: 'abc1234', builtAt: firstBuiltAt } });
+      const firstState = JSON.parse(await readFile(first.paths.stateFile, 'utf8'));
+      await expect(rebuilt.start()).resolves.toMatchObject({ state: 'ready', reused: false });
+      await waitForExit(firstState.pid);
+      const rebuiltState = JSON.parse(await readFile(rebuilt.paths.stateFile, 'utf8'));
+      expect(rebuiltState.pid).not.toBe(firstState.pid);
+      expect(rebuiltState.buildId).toBe('def5678-dirty');
+      await expect(rebuilt.health()).resolves.toMatchObject({ state: 'ready', build: { id: 'def5678-dirty', builtAt: secondBuiltAt } });
+    } finally {
+      await first.stop().catch(() => {});
+      await rebuilt.stop().catch(() => {});
     }
   }, 60_000);
 

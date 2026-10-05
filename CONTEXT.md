@@ -12,6 +12,16 @@ Live context: what we know but have not settled yet. Every entry names its sourc
 
 An RPC host receives the async status snapshot as widget `subagent-async`, line 0: `PI_SUBAGENT_ASYNC_JSON:` followed by JSON with `kind` `pi-subagents.async-status-snapshot` and `version` 1, capped at 32 KiB serialized. Hosts must not render the widget `subagent-inspect`; it carries on demand inspect replies. Before #30 the bridge and the public route projection cut every widget line at 2000 characters, which broke any larger snapshot; they now keep the `subagent-async` line 0 whole up to the cap. A new version, kind or node state makes the card show "Subagent status unavailable" until its parser learns it.
 
+## Runtime
+
+### The daemon was keyed to the package version, so a same-version rebuild kept the old daemon running
+
+- Source: `packages/web/server/lib/pi/session-daemon/supervisor.js` reused a daemon when `state.buildId === paths.buildId`, and the server passed the package version as that ID; PR #40 (issue #39)
+- Date: 2026-10-04
+- Settled by: PR #40 merging (the build ID replaces the package version) and the live AppImage replacement run recorded in its description
+
+A same-version AppImage replacement is only picked up when the relaunch uses `$APPIMAGE`, because `process.execPath` points into the old mount.
+
 ## Upstream
 
 ### The fork's workflow files differ from upstream

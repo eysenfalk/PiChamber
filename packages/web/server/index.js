@@ -40,6 +40,8 @@ import { createTunnelAuth } from './lib/server/tunnel-auth.js';
 import { createUiAuth } from './lib/ui-auth/ui-auth.js';
 import { assertCurrentRuntimeSupported as defaultAssertCurrentRuntimeSupported } from './lib/server/runtime-requirements.js';
 import { resolveStaticCacheControl } from './lib/static-cache-control.js';
+import { resolveServerBuild } from './lib/build-info.js';
+import { createHostRestart } from './lib/pi/host-restart.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,6 +139,11 @@ export async function startWebUiServer(options = {}) {
     bindHost: host,
   });
   const serverStartedAt = new Date().toISOString();
+  const serverBuild = resolveServerBuild({
+    distDir: resolveDistPath(),
+    cwd: path.resolve(__dirname, '..'),
+    startedAt: serverStartedAt,
+  });
   const dataPath = (name) => path.join(PICHAMBER_DATA_DIR, name);
   const remoteClientAuthRuntime = createRemoteClientAuthRuntime({ fsPromises: fs.promises, path, crypto: await import('node:crypto'), storePath: dataPath('remote-clients.json') });
   // Live credential revocation (#9): tracks authenticated SSE/terminal/dictation
@@ -205,6 +212,11 @@ export async function startWebUiServer(options = {}) {
     serverPlatform: process.platform,
     serverDistribution: detectLinuxDistribution(),
     serverStartedAt,
+    serverBuild,
+    getDaemonBuild: async () => {
+      const health = await piSessionDaemonRuntime?.health();
+      return health?.state === 'ready' ? health.build ?? null : null;
+    },
     gracefulShutdown,
     getHealthSnapshot: () => ({ pi: { state: 'ready' }, apiOnly }),
     getServerPort: () => {
@@ -234,6 +246,13 @@ export async function startWebUiServer(options = {}) {
   const piRuntimeRoutes = registerPiRuntimeRoutes(app, {
     getPiSessionDaemonRuntime: () => piSessionDaemonRuntime,
     uiSettingsStore,
+    restartHost: createHostRestart({
+      getSupervisor: () => piSessionDaemonRuntime,
+      // The desktop app brings its own server back by relaunching itself;
+      // a CLI server relies on its process manager (see host-restart.js).
+      restartProcess: options.restartProcess,
+      exitProcess: () => gracefulShutdown({ exitProcess: true }),
+    }),
   });
   registerNotificationRoutes(app, { uiAuthController, delivery: notificationDelivery });
   // Cloudflare Tunnel external access (manual token + quick modes).
@@ -267,7 +286,10 @@ export async function startWebUiServer(options = {}) {
   piSessionDaemonRuntime = createPiSessionDaemonSupervisor({
     dataDir: PICHAMBER_DATA_DIR,
     port: typeof resolvedPort === 'number' ? resolvedPort : port,
-    version: PICHAMBER_VERSION,
+    // The build ID, not the package version, identifies the daemon's code: a
+    // rebuild of the same version must replace the running daemon.
+    buildId: serverBuild.id,
+    builtAt: serverBuild.builtAt,
   });
   if (typeof resolvedPort === 'number') {
     process.send?.({

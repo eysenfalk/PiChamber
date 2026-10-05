@@ -74,6 +74,11 @@ export const registerServerStatusRoutes = (app, dependencies) => {
     serverPlatform = 'unknown',
     serverDistribution = null,
     serverStartedAt,
+    // Build stamp of the running server ({ id, builtAt, kind }) and an async
+    // reader for the session daemon's stamp ({ id, builtAt? } or null). Both
+    // are shown in Settings › About so a stale daemon or UI is visible.
+    serverBuild = null,
+    getDaemonBuild = async () => null,
     gracefulShutdown,
     getHealthSnapshot,
     // Port this PiChamber instance serves on and the tunnel public URL (if
@@ -371,9 +376,17 @@ export const registerServerStatusRoutes = (app, dependencies) => {
     }
   });
 
-  app.get('/api/system/info', (_req, res) => {
+  app.get('/api/system/info', async (_req, res) => {
+    let daemonBuild = null;
+    try {
+      daemonBuild = await getDaemonBuild();
+    } catch {
+      // An unavailable daemon is reported as null, never as a failed info call.
+    }
     res.json({
       pichamberVersion,
+      serverBuild,
+      daemonBuild,
       runtime: runtimeName,
       deploymentKind,
       serverPlatform,

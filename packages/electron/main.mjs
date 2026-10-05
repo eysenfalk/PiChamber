@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import updaterPkg from 'electron-updater';
 import { createTrayController } from './tray.mjs';
+import { createDesktopRestartProcess } from './desktop-restart.mjs';
 import {
   resolveDesktopHostRuntimeConfig,
   resolveStartupUrlProbePlan,
@@ -1540,6 +1541,10 @@ const spawnLocalServer = async () => {
     attachSignals: false,
     exitOnShutdown: false,
     apiOnly: false,
+    // "Restart PiChamber" in Settings: the server stops its daemon, then the
+    // app relaunches itself (from $APPIMAGE through a helper outside the mount
+    // when set) and exits.
+    restartProcess: createDesktopRestartProcess({ app, prepareForQuit, spawnProcess: spawn }),
     onDesktopNotification: (payload) => maybeShowNativeNotification(payload),
     getIsWindowFocused: isAnyWindowFocused,
     getDesktopRuntimeConfig: () => ({

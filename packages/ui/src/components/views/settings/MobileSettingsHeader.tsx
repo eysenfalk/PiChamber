@@ -3,6 +3,7 @@ import { cn } from '@/lib/utils';
 import { Icon } from '@/components/icon/Icon';
 import type { SettingsPageMeta, SettingsPageSlug } from '@/lib/settings/metadata';
 import type { MobileStage } from './settingsViewHelpers';
+import { RuntimeControlButtons } from './RuntimeControls';
 
 interface MobileSettingsHeaderProps {
   mobileStage: MobileStage;
@@ -80,6 +81,8 @@ export const MobileSettingsHeader: React.FC<MobileSettingsHeaderProps> = ({
             <Icon name="list-unordered" className="h-5 w-5" />
           </button>
         )}
+
+        {mobileStage === 'nav' ? <RuntimeControlButtons buttonClassName="h-9 w-9" /> : null}
 
         {mobileStage === 'nav' ? (
           <button
