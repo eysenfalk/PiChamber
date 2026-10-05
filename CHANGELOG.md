@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-10-05
+
+Pairing over Tailscale since 1.0.6.
+
+- **Pair devices over Tailscale first (#46, #47).** When the server is on a tailnet, **Add a device** preselects **Tailscale (recommended)** and the QR code points at the server's Tailscale address, so the phone connects at home and away. **Also try your home Wi-Fi when Tailscale is off** adds the LAN address as a second candidate; the mobile app tries both on every connect, the desktop app only while pairing. Without Tailscale, **Home network only** is preselected and Tailscale is greyed out. Tailscale is detected on Linux (`tailscale0`), Windows and macOS (`utun` with a 100.64.0.0/10 address).
+
 ## [1.0.6] - 2026-10-04
 
 Pi 1.0.2, GitHub pull requests and issues, and reconnect and performance work since 1.0.3. Releases 1.0.4 and 1.0.5 were Android-only prereleases.
