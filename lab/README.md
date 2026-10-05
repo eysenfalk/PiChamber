@@ -9,6 +9,7 @@ lab/run up                  # prints http://127.0.0.1:3111
 lab/run status
 lab/run record lab           # captioned screenshots and H.264 video in .proof/lab/
 lab/run record fork-rename   # renamed large fork listed by a fresh daemon, in .proof/fork-rename/
+lab/run record add-device    # Add a device dialog without Tailscale, in .proof/add-device/
 lab/run down                # removes pod, internal network and lab state volume
 ```
 
