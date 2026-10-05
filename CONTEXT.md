@@ -12,6 +12,14 @@ Live context: what we know but have not settled yet. Every entry names its sourc
 
 An RPC host receives the async status snapshot as widget `subagent-async`, line 0: `PI_SUBAGENT_ASYNC_JSON:` followed by JSON with `kind` `pi-subagents.async-status-snapshot` and `version` 1, capped at 32 KiB serialized. Hosts must not render the widget `subagent-inspect`; it carries on demand inspect replies. Before #30 the bridge and the public route projection cut every widget line at 2000 characters, which broke any larger snapshot; they now keep the `subagent-async` line 0 whole up to the cap. A new version, kind or node state makes the card show "Subagent status unavailable" until its parser learns it.
 
+### Intent checkpoints rely on Pi extension behavior that is not proven yet
+
+- Source: Pi 1.0.2 `docs/extensions.md` (`pi.appendEntry()`, `turn_end`) and `docs/session-format.md` (forks); `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md` (blocking extension dialogs); ADR 0006
+- Date: 2026-10-05
+- Settled by: the prototype in #70
+
+Two things ADR 0006 assumes are untested. A blocking dialog opened from `turn_end` must stop the session cleanly, also while the agent wants to continue; the record now blocks only on hard changes, but those still need it. A fork at an entry must keep the `appendEntry` entries on its path, so a fork carries the checkpoints, rejections and confirmed relations up to its fork point; Pi 1.0.2 documents the parent link of a fork but not whether custom entries are copied.
+
 ## Release
 
 ### Releases of the fork are built locally, not by release.yml
