@@ -24,7 +24,9 @@ from the compose directory.
   The QR code points at the server's Tailscale address, so the device connects
   at home and away as long as both run Tailscale. Tick **Also try your home
   Wi-Fi when Tailscale is off** to add the home network address as a second
-  address the device tries.
+  address. The mobile app keeps both and tries Tailscale first, then Wi-Fi,
+  each time it connects. The desktop app tries both only while pairing and
+  keeps the address that worked.
 - **Home network only** points at the server's Wi-Fi or LAN address and works
   only on that network. It is selected when Tailscale is not running.
 - **This computer only** is for apps on the same machine.
