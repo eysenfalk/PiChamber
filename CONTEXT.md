@@ -30,6 +30,16 @@ Two things ADR 0006 assumes are untested. A blocking dialog opened from `turn_en
 
 `CONTRIBUTING.md` describes releases by `release.yml` on a `vX.Y.Z` tag, building every desktop platform, Docker and the signed Android app from GitHub secrets. The fork has no Actions secrets and no successful `release.yml` run. Every release so far was built on the owner's machine: the APK signed with the local release key in `~/.config/pichamber/`, the AppImage with `bun run electron:build`, uploaded with `gh release create`. Their tags (`v1.0.3-android.1` to `v1.0.5-android.5`, `v1.0.6-build.6`) do not match the workflow's version pattern, so the triggered `release.yml` stops in `create-release` without building or publishing anything.
 
+## Networking
+
+### The owner's LAN address is not reachable from the phone, the Tailscale address is
+
+- Source: session `01a0f83f` (2026-10-01): pairing over `http://192.168.178.95:39603` failed from the Android app while `http://100.120.83.24:39603` worked, ufw inactive; #46
+- Date: 2026-10-01
+- Settled by: finding the cause on the owner's network (router client isolation, a guest Wi-Fi or a host firewall) and documenting it in `connect-devices.mdx`
+
+Pairing now defaults to Tailscale with an optional Wi-Fi fallback (#46), which avoids the problem but does not explain it. On a tested emulator the same LAN address and port were reachable over TCP (2026-10-05), so the server binds and listens correctly; the block sits between phone and host.
+
 ## Upstream
 
 ### The fork's workflow files differ from upstream
