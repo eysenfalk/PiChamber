@@ -8,6 +8,8 @@ import { Icon } from '@/components/icon/Icon';
 import { toast } from '@/components/ui';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/useUIStore';
+import { parsePermissionStatus } from '@/lib/pi/permissions';
+import { PermissionsControls } from './PermissionsControls';
 import { SubagentStatusWidget } from './SubagentStatusWidget';
 
 /**
@@ -108,6 +110,9 @@ export const ExtensionStatusPill: React.FC<{
         </span>
         <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto overflow-y-hidden overscroll-x-contain scrollbar-hidden touch-pan-x" data-no-drawer-swipe="true">
           {statuses.map(([key, text]) => {
+            if (key === 'permissions' && activeSessionId && parsePermissionStatus(text)) {
+              return <PermissionsControls key={`${key}:${activeSessionId}`} sessionId={activeSessionId} text={text} />;
+            }
             const color = extractAnsiTruecolor(text);
             return (
               <span
