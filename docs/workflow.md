@@ -1,6 +1,6 @@
 # Workflow
 
-How work moves from an idea to `main` in this repository, who does what, and what is automated. It applies to people and agents alike. [AGENTS.md](../AGENTS.md) carries the short version, and [ADR 0002](adr/0002-workflow-from-jira-connector.md) says where this workflow comes from.
+How work moves from an idea to `dev` and from there to `main` in this repository, who does what, and what is automated. It applies to people and agents alike. [AGENTS.md](../AGENTS.md) carries the short version, and [ADR 0002](adr/0002-workflow-from-jira-connector.md) says where this workflow comes from.
 
 ## Principles
 
@@ -20,7 +20,8 @@ How work moves from an idea to `main` in this repository, who does what, and wha
 | [Roadmap issue #24](https://github.com/eysenfalk/PiChamber/issues/24) | The order of upcoming work as its ordered sub-issues, and a generated order list and graph | sub-issues: people and agents; list and graph: `scripts/workflow/roadmap-sync.mjs` |
 | GitHub issues | Ideas, roadmap items (label `roadmap`) and bugs | people and agents |
 | Pull request | The plan (how), its proof, the review and the CI result | agent drafts, user approves |
-| Git history on `main` | One squash commit per pull request, containing its title and full description | automatic |
+| Git history on `dev` | One squash commit per pull request, containing its title and full description | automatic |
+| `main` | Only stable states: a commit of `dev` the owner promoted by fast-forward ([ADR 0008](adr/0008-dev-integration-branch.md)) | the owner |
 
 There is no archive of plans and no hand-maintained catalogue. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests through the lab, is a separate roadmap item after #11.
 
@@ -39,6 +40,8 @@ There is no archive of plans and no hand-maintained catalogue. A fact is written
 
 ## From idea to `main`
 
+Work is merged into `dev`, the default branch. `main` only moves when the owner promotes a stable state of `dev` (step 10).
+
 | # | Step | Who | How |
 |---|---|---|---|
 | 1 | Write the idea down | anyone | an issue in the tracker, without the label `roadmap` |
@@ -50,6 +53,7 @@ There is no archive of plans and no hand-maintained catalogue. A fact is written
 | 7 | Review | a person, supported by a review agent | the description, the proof, the diff, the CI result |
 | 8 | Merge | a person | squash merge; it closes the issue, which leaves the roadmap |
 | 9 | Gardening | everyone | repeated corrections become tests or lint rules; outdated issues are closed |
+| 10 | Promote | the owner | fast-forward `main` to a stable commit of `dev`; releases are tagged there |
 
 ### 1. Idea
 
@@ -74,10 +78,10 @@ Dependencies are "blocked by" relations set on the issue in GitHub; the graph dr
 
 ```bash
 git fetch origin
-git switch -c 12-short-name origin/main
+git switch -c 12-short-name origin/dev
 git commit --allow-empty -m "Plan: <what changes> (#12)"   # GitHub needs a commit to open a pull request
 git push -u origin 12-short-name
-gh pr create --draft --base main --title "<what changes>" --body-file <plan.md>
+gh pr create --draft --base dev --title "<what changes>" --body-file <plan.md>
 ```
 
 Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions. It should describe one pull request that solves one problem, with roughly 100 to 600 lines to review (lock files and generated assets do not count). Larger work is split into several pull requests and roadmap items.
@@ -122,7 +126,18 @@ The reviewer reads the description first, then watches the proof, then reads the
 
 ### 8. Merge
 
-The repository allows only squash merges, and the squash commit is the pull request title and description, so `git log` on `main` holds every plan. A ruleset keeps the history on `main` linear and blocks the merge until `checks` and `pull-request` are green on a branch that is up to date with `main`.
+The repository allows only squash merges, and the squash commit is the pull request title and description, so `git log` on `dev` holds every plan. A ruleset keeps the history on `dev` linear and blocks the merge until `checks` and `pull-request` are green on a branch that is up to date with `dev`. Because every pull request is tested against the newest `dev`, parallel agents cannot merge each other into a broken state.
+
+### 10. Promote
+
+When the owner calls a state of `dev` stable, `main` is fast-forwarded to it:
+
+```bash
+git fetch origin
+git push origin <commit>:main    # fast-forward only; force pushes to main are blocked
+```
+
+`main` is therefore always an ancestor of `dev`, and a promoted state is the same commit on both. Releases are tagged on `main` ([CONTRIBUTING.md](../CONTRIBUTING.md#release-process)). Promoting is pushing to `main` and needs the owner.
 
 ### 9. Gardening
 
@@ -147,4 +162,4 @@ Agents copy what they find. Whatever is in the code becomes the pattern. So:
 
 ## Repository settings
 
-Set on `eysenfalk/PiChamber` on 2026-10-02: only squash merges, squash commit title and message from the pull request, and the ruleset `main: linear history`. The ruleset keeps `main` linear and requires the `checks` and `pull-request` jobs on a branch that is up to date with `main`, the GitHub equivalent of a fast-forward merge.
+Set on `eysenfalk/PiChamber` on 2026-10-02: only squash merges, squash commit title and message from the pull request. Since 2026-10-12 ([ADR 0008](adr/0008-dev-integration-branch.md)) `dev` is the default branch. The ruleset `default branch: linear history and checks` keeps `dev` linear and requires the `checks` and `pull-request` jobs on a branch that is up to date with `dev`, the GitHub equivalent of a fast-forward merge. The ruleset `main: stable, fast-forward only` keeps `main` linear and blocks force pushes and deletion.
