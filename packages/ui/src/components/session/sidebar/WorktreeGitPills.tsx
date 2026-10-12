@@ -7,7 +7,8 @@ import {
   usePrVisualSummary,
   type PrVisualSummary,
 } from '@/stores/useGitHubPrStatusStore';
-import { buildWorktreePills, type WorktreePill, type WorktreeStatusRecord } from './worktreePills';
+import type { AutoFetchRepositoryState } from './autoFetchScheduler';
+import { buildWorktreePills, formatAutoFetchNote, type WorktreePill, type WorktreeStatusRecord } from './worktreePills';
 
 const ATTENTION_LABEL: Record<NonNullable<Extract<WorktreePill, { kind: 'attention' }>['reason']>, string> = {
   merge: 'Merge in progress',
@@ -46,7 +47,12 @@ const checkedOutBranch = (record: WorktreeStatusRecord | undefined): string | nu
   return current && current !== 'HEAD' ? current : null;
 };
 
-const Pill: React.FC<{ pill: WorktreePill; fetchedAt: number | null; error: string | null }> = ({ pill, fetchedAt, error }) => {
+const Pill: React.FC<{
+  pill: WorktreePill;
+  fetchedAt: number | null;
+  error: string | null;
+  autoFetch: AutoFetchRepositoryState | undefined;
+}> = ({ pill, fetchedAt, error, autoFetch }) => {
   switch (pill.kind) {
     case 'attention': {
       const label = ATTENTION_LABEL[pill.reason];
@@ -68,11 +74,11 @@ const Pill: React.FC<{ pill: WorktreePill; fetchedAt: number | null; error: stri
         </span>
       );
     case 'ahead': {
-      const label = `${pill.count} ${pill.count === 1 ? 'commit' : 'commits'} to push${formatCheckedAt(fetchedAt)}`;
+      const label = `${pill.count} ${pill.count === 1 ? 'commit' : 'commits'} to push${formatCheckedAt(fetchedAt)}${formatAutoFetchNote(autoFetch)}`;
       return <span aria-label={label} title={label}>{`↑${pill.count}`}</span>;
     }
     case 'behind': {
-      const label = `${pill.count} ${pill.count === 1 ? 'commit' : 'commits'} to pull${formatCheckedAt(fetchedAt)}`;
+      const label = `${pill.count} ${pill.count === 1 ? 'commit' : 'commits'} to pull${formatCheckedAt(fetchedAt)}${formatAutoFetchNote(autoFetch)}`;
       return <span aria-label={label} title={label}>{`↓${pill.count}`}</span>;
     }
     case 'no-upstream':
@@ -106,6 +112,8 @@ type Props = {
   /** The branch the worktree list reported; the light status fills in when it is missing (the root checkout). */
   branch: string | null;
   record: WorktreeStatusRecord | undefined;
+  /** Auto fetch state of this worktree's repository; undefined while Auto fetch is off or has not run. */
+  autoFetch?: AutoFetchRepositoryState;
   className?: string;
 };
 
@@ -114,7 +122,7 @@ type Props = {
  * keeps its pull request status loaded, so this is the only sidebar place that
  * asks for pull requests.
  */
-export const WorktreeGitPills: React.FC<Props> = React.memo(({ directory, branch, record, className }) => {
+export const WorktreeGitPills: React.FC<Props> = React.memo(({ directory, branch, record, autoFetch, className }) => {
   const resolvedBranch = branch?.trim() || checkedOutBranch(record);
   useEnsureGitHubPrStatus(directory, resolvedBranch);
   const prKey = React.useMemo(() => getGitHubPrStatusKey(directory, resolvedBranch), [directory, resolvedBranch]);
@@ -123,7 +131,7 @@ export const WorktreeGitPills: React.FC<Props> = React.memo(({ directory, branch
   if (pills.length === 0) return null;
   return (
     <span className={cn('flex shrink-0 items-center gap-1 typography-micro tabular-nums text-muted-foreground', className)}>
-      {pills.map((pill) => <Pill key={pill.kind} pill={pill} fetchedAt={fetchedAt} error={error} />)}
+      {pills.map((pill) => <Pill key={pill.kind} pill={pill} fetchedAt={fetchedAt} error={error} autoFetch={autoFetch} />)}
     </span>
   );
 });

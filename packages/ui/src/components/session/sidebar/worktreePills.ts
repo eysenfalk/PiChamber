@@ -1,5 +1,6 @@
 import type { GitStatus } from '@/lib/api/types';
 import type { PrVisualSummary } from '@/stores/useGitHubPrStatusStore';
+import type { AutoFetchRepositoryState } from './autoFetchScheduler';
 import type { WorktreeStatusEntry } from './worktreeStatusScheduler';
 
 /**
@@ -78,6 +79,21 @@ export const buildWorktreePills = (
 
   pills.push(...pullRequestPill(pr));
   return { pills, fetchedAt: record.fetchedAt, error: null };
+};
+
+/**
+ * The Auto fetch part of the ahead and behind tooltips: a failure (so the owner
+ * learns why the numbers may be stale), else when the repository was last
+ * fetched. Empty while Auto fetch has not run for the repository.
+ */
+export const formatAutoFetchNote = (
+  autoFetch: AutoFetchRepositoryState | undefined,
+  formatTime: (at: number) => string = (at) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+): string => {
+  if (!autoFetch) return '';
+  if (autoFetch.lastError) return ` · Auto fetch failed: ${autoFetch.lastError}`;
+  if (autoFetch.lastFetchedAt === null) return '';
+  return ` · Last fetch ${formatTime(autoFetch.lastFetchedAt)}`;
 };
 
 type ProjectDirtyRollup = {

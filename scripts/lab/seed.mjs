@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { mkdir, readFile, writeFile, utimes, rm, readdir, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -61,6 +62,26 @@ function commitFile(cwd, file, content, message) {
   git(cwd, ['commit', '--quiet', '-m', message]);
 }
 
+/** The local bare remote of a project's remote-ahead worktree; a sibling of the project, discarded on a reseed. */
+export const remotePath = (root, project) => join(root, 'projects', `${project}-remote.git`);
+
+// The worktree pushes its branch to a local bare remote and tracks it; then a second clone adds one
+// commit to the remote branch. The worktree's remote-tracking ref stays behind until it fetches.
+function seedRemoteAhead(root, project, worktreePath, branch) {
+  const remote = remotePath(root, project);
+  git(root, ['init', '--bare', '--quiet', '--initial-branch=main', remote]);
+  git(worktreePath, ['remote', 'add', 'origin', remote]);
+  git(worktreePath, ['push', '--quiet', '--set-upstream', 'origin', branch]);
+  const clone = mkdtempSync(join(tmpdir(), 'pichamber-seed-remote-'));
+  try {
+    git(root, ['clone', '--quiet', '--branch', branch, remote, clone]);
+    commitFile(clone, 'remote-change.md', 'A commit made on the remote.\n', 'Remote change');
+    git(clone, ['push', '--quiet', 'origin', branch]);
+  } finally {
+    rmSync(clone, { recursive: true, force: true });
+  }
+}
+
 // Put the worktrees into the states the sidebar git pills show (slice 5 of #95).
 function seedWorktreeGitStates(root, projects) {
   const stated = SEED_MANIFEST.worktrees.filter((worktree) => worktree.git);
@@ -69,6 +90,10 @@ function seedWorktreeGitStates(root, projects) {
   }
   for (const worktree of stated) {
     const path = join(root, 'projects', `${worktree.project}-worktrees`, worktree.name);
+    if (worktree.git === 'remote-ahead') {
+      seedRemoteAhead(root, worktree.project, path, worktree.name);
+      continue;
+    }
     git(path, ['branch', '--quiet', '--set-upstream-to=main']);
     if (worktree.git === 'dirty') {
       writeFileSync(join(path, 'README.md'), '# Work in progress\n');
@@ -120,6 +145,7 @@ export async function seedLab(root, now = Date.now()) {
   for (const fixture of SEED_MANIFEST.projects) {
     await rm(join(root, 'projects', fixture.name), { recursive: true, force: true });
     await rm(join(root, 'projects', `${fixture.name}-worktrees`), { recursive: true, force: true });
+    await rm(remotePath(root, fixture.name), { recursive: true, force: true });
   }
   for (const fixture of SEED_MANIFEST.sessions) {
     if (fixture.folder) await rm(join(root, 'folders', fixture.folder), { recursive: true, force: true });

@@ -354,6 +354,8 @@ export const materializeAuthoritativeUiSettings = (
     recentEfforts: defaults.recentEfforts,
     diffLayoutPreference: defaults.diffLayoutPreference,
     gitChangesViewMode: defaults.gitChangesViewMode,
+    gitAutoFetchEnabled: defaults.gitAutoFetchEnabled,
+    gitAutoFetchIntervalMinutes: defaults.gitAutoFetchIntervalMinutes,
     filesViewShowGitignored: false,
     ...settings,
   };

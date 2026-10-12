@@ -18,6 +18,7 @@
   "worktrees": [
     { "project": "lab-alpha", "name": "sidebar-tree", "git": "dirty" },
     { "project": "lab-alpha", "name": "quick-find", "git": "ahead-behind" },
-    { "project": "lab-alpha", "name": "rebase-stop", "git": "rebase" }
+    { "project": "lab-alpha", "name": "rebase-stop", "git": "rebase" },
+    { "project": "lab-alpha", "name": "fetch-me", "git": "remote-ahead" }
   ]
 }
