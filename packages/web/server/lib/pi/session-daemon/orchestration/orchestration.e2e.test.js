@@ -170,6 +170,7 @@ describe('orchestration end-to-end through the real SDK', () => {
     // system prompt; the worker never sees spawn or stop, nor the instructions.
     expect(parentTurn.tools).toEqual(expect.arrayContaining(all));
     expect(parentTurn.hasInstructions).toBe(true);
+    expect(parentTurn.lastText).toBe('ORCHESTRATE one worker');
     expect(workerTurn.tools).toEqual(expect.arrayContaining(workerAllowed));
     expect(workerTurn.tools).not.toContain(qualifiedToolName('session_spawn'));
     expect(workerTurn.tools).not.toContain(qualifiedToolName('session_stop'));
@@ -181,6 +182,16 @@ describe('orchestration end-to-end through the real SDK', () => {
     const workerOpened = await client.request('sessions.open', { sessionId: workerId });
     expect(workerOpened.kind).toBe('response');
     expect(workerOpened.result.session.directory).toBe(workerDir);
+
+    // The IPC path the MCP route uses acts as the given session and sees the
+    // live catalog, role defaults, the limit and the host.
+    const capabilities = await client.request('orchestration.call', { sessionId: parentId, tool: 'orchestration_capabilities', args: {} });
+    expect(capabilities.result.value).toMatchObject({ workerLimit: 4, canSpawn: true });
+    expect(capabilities.result.value.models).toContainEqual(expect.objectContaining({ providerId: 'faux', modelId: 'faux-1' }));
+    expect(capabilities.result.value.roles.review).toMatchObject({ modelId: 'gpt-6.1-sol', thinking: 'high' });
+    expect(capabilities.result.value.host).toEqual(expect.objectContaining({ cpuCount: expect.any(Number), memory: expect.objectContaining({ freeBytes: expect.any(Number) }) }));
+    const workerSpawn = await client.request('orchestration.call', { sessionId: workerId, tool: 'session_spawn', args: { cwd: workerDir, task: 'nested' } });
+    expect(workerSpawn.result.error).toMatchObject({ code: expect.stringMatching(/^ORCHESTRATION_/) });
 
     await client.close();
   }, 120_000);

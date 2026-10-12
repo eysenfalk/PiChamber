@@ -164,6 +164,48 @@ describe('orchestration service', () => {
     });
   });
 
+  it('spawns in wait mode without ever cancelling the worker', async () => {
+    const { service, deps, settle } = createHarness();
+    await expect(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', mode: 'wait', timeoutMs: 10 }))
+      .resolves.toMatchObject({ sessionId: 'worker-1', state: 'busy', timedOut: true });
+    expect(deps.abortSession).not.toHaveBeenCalled();
+
+    const waiting = service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two', mode: 'wait', timeoutMs: 5_000 });
+    await vi.waitFor(() => expect(deps.sendInput).toHaveBeenCalledTimes(2));
+    await settle('worker-2', 'second done');
+    await expect(waiting).resolves.toMatchObject({ sessionId: 'worker-2', state: 'idle', timedOut: false, lastReply: 'second done' });
+  });
+
+  it('lets an explicit model and thinking override the role and reports the unfiltered catalog', async () => {
+    const { service, deps } = createHarness();
+    const spawned = await service.call('orch', 'session_spawn', {
+      cwd: '/work/a',
+      task: 'one',
+      role: 'small',
+      model: { modelId: 'gpt-6.1-sol' },
+      thinking: 'max',
+    });
+    expect(spawned.model).toEqual({ providerId: 'openai-codex', modelId: 'gpt-6.1-sol' });
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({ thinking: 'max' }));
+
+    const capabilities = await service.call('orch', 'orchestration_capabilities');
+    expect(capabilities.models.map((model) => model.modelId)).toEqual(['claude-opus-5-5', 'claude-sonnet-5-5', 'gpt-6.1-sol']);
+    expect(capabilities.roles.review).toEqual(ROLES.review);
+  });
+
+  it('sends to any session and forwards clientRequestId as the idempotent operation id', async () => {
+    const { service, deps, runtimes } = createHarness();
+    runtimes.set('owner-session', createRuntime({ sessionId: 'owner-session' }));
+    deps.sendInput.mockResolvedValueOnce({ accepted: true }).mockResolvedValueOnce({ accepted: true, deduplicated: true });
+
+    await expect(service.call('orch', 'session_send', { sessionId: 'owner-session', text: 'hi', delivery: 'steer', clientRequestId: 'send-1' }))
+      .resolves.toMatchObject({ sessionId: 'owner-session', accepted: true });
+    await expect(service.call('orch', 'session_send', { sessionId: 'owner-session', text: 'hi', delivery: 'steer', clientRequestId: 'send-1' }))
+      .resolves.toMatchObject({ deduplicated: true });
+    expect(deps.sendInput).toHaveBeenNthCalledWith(1, { sessionId: 'owner-session', text: 'hi', delivery: 'steer', operationId: 'send-1' });
+    expect(deps.sendInput).toHaveBeenNthCalledWith(2, { sessionId: 'owner-session', text: 'hi', delivery: 'steer', operationId: 'send-1' });
+  });
+
   it('caps waits at the adapter limit', async () => {
     const { service } = createHarness();
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
