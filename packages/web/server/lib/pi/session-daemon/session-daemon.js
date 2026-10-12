@@ -33,6 +33,7 @@ import {
   SESSION_DAEMON_MESSAGE_PAGE_TARGET_BYTES,
   SESSION_DAEMON_PROTOCOL_VERSION as PROTOCOL_VERSION,
 } from './ipc-protocol.js';
+import { advertiseHostExtensionRunner } from './host-extension-runners.js';
 import { createMessageEntryAliases } from './message-entry-aliases.js';
 import { projectNestedToolCalls } from './nested-tool-calls.js';
 import { createSessionReplayLog } from './session-replay.js';
@@ -79,6 +80,8 @@ if (!globalThis.__PICHAMBER__) {
 if (!process.env.PICHAMBER) {
   try { process.env.PICHAMBER = '1'; } catch {}
 }
+
+advertiseHostExtensionRunner();
 
 // Extensions that spawn the pi CLI as a child process (subagent runners,
 // task delegators) locate it through `process.argv[1]`. Inside this detached
