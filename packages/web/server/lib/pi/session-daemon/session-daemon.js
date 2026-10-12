@@ -1250,6 +1250,12 @@ export function createSessionDaemon({
           cwd: targetDir,
           name: entry.session.sessionManager?.getSessionName?.() || entry.session.title || undefined,
           messageCount: entry.session.messages?.length || 0,
+          // Pi writes the JSONL only with the first message, so the parent of a
+          // just created session (an orchestration worker) comes from its
+          // in-memory header.
+          ...(typeof entry.session.sessionManager?.getHeader?.()?.parentSession === 'string'
+            ? { parentSessionPath: entry.session.sessionManager.getHeader().parentSession }
+            : {}),
           created: new Date(),
           modified: new Date(),
         });

@@ -1,4 +1,5 @@
 import React from 'react';
+import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { NumberInput } from '@/components/ui/number-input';
 import {
@@ -48,6 +49,11 @@ const ROLES: ReadonlyArray<{ role: PiOrchestrationRole; label: string; info: str
   { role: 'small', label: "Small tasks", info: "Short mechanical work such as searching, renaming, summarizing or classifying." },
   { role: 'review', label: "Review", info: "Checks finished work of another worker." },
 ];
+
+// Wide enough for the longest default label, such as "claude-sonnet-5-5 (default)" and "Extra high"; the thinking select wraps below on narrow panes.
+const ROLE_CLUSTER_CLASS = 'max-w-[29rem] flex flex-wrap items-center gap-2';
+const ROLE_MODEL_PICKER_CLASS = 'w-[18.5rem] max-w-full';
+const ROLE_THINKING_TRIGGER_CLASS = 'w-36';
 
 type Snapshot = Pick<PiSettingsSnapshot, 'pichamber' | 'orchestration'>;
 
@@ -149,8 +155,9 @@ export const OrchestrationSettings: React.FC = () => {
               : levels;
             return (
               <SettingsFieldRow key={role} label={label} info={info}>
-                <div className={`${SETTINGS_CONTROL_CLUSTER_CLASS} flex flex-wrap items-center gap-2`}>
+                <div className={cn(SETTINGS_CONTROL_CLUSTER_CLASS, ROLE_CLUSTER_CLASS)}>
                   <SettingsModelPicker
+                    className={ROLE_MODEL_PICKER_CLASS}
                     value={override?.providerId ? { providerId: override.providerId, modelId: override.modelId } : null}
                     noneLabel={override ? override.modelId : `${effective.modelId} (default)`}
                     ariaLabel={`${label} model`}
@@ -174,7 +181,7 @@ export const OrchestrationSettings: React.FC = () => {
                         });
                       }}
                     >
-                      <SelectTrigger size={SETTINGS_SELECT_SIZE} className="w-32" aria-label={`${label} thinking`}>
+                      <SelectTrigger size={SETTINGS_SELECT_SIZE} className={ROLE_THINKING_TRIGGER_CLASS} aria-label={`${label} thinking`}>
                         <SelectValue>
                           {(value) => (value ? PI_THINKING_LEVEL_LABELS[value as PiThinkingLevel] ?? (value as string) : "Model default")}
                         </SelectValue>

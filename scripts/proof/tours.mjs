@@ -206,11 +206,15 @@ export function orchestrationTour(manifest) {
   const say = value => [{ type: 'type', selector: composer, value }, { type: 'press', key: 'Enter' }];
   const item = title => `[role="treeitem"][aria-label="${title}"]`;
   const card = '[data-orchestration-result]';
-  const settings = ['sessions.orchestration-worker-limit', 'sessions.orchestration-roles'].map(id => `[data-settings-item="${id}"]`);
+  const limit = '[data-settings-item="sessions.orchestration-worker-limit"]';
+  const picker = role => `[aria-label="${role} model"]`;
   return validateTour({ name: 'orchestration', steps: [
     { caption: 'Settings, Sessions: the worker limit and the model and thinking level of each worker role.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'navigate', path: '?settings=sessions' }, { type: 'wait', selector: settings[1] }, { type: 'scroll', selector: settings[0] }],
-      evidence: [...settings.map(selector => ({ selector })), { text: 'Worker roles' }] },
+      actions: [{ type: 'navigate', path: '?settings=sessions' }, { type: 'wait', selector: picker('Review') }, { type: 'scroll', selector: limit }],
+      evidence: [{ selector: limit }, { text: 'Worker roles' }, { selector: picker('Orchestrate') }] },
+    { caption: 'Further down: the four task levels, research, small tasks and review.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'scroll', selector: picker('Research') }],
+      evidence: ['Task, easy', 'Task, extreme', 'Small tasks', 'Review'].map(role => ({ selector: picker(role) })) },
     { caption: `The orchestrator asks for a worker. session_spawn starts "${worker}" in ${label}, and the orchestrator turn ends at once.`, viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
         { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
@@ -236,7 +240,8 @@ export function orchestrationTour(manifest) {
     { caption: 'The hosted mobile drawer nests the worker under the orchestrator too.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: `[data-mobile-sessions-drawer] ${item(worker)}` }],
-      evidence: [{ selector: `[data-mobile-sessions-drawer] ${item(orchestrator.title)}` }, { selector: `[data-mobile-sessions-drawer] ${item(worker)}` }] },
+      // The narrow drawer truncates the orchestrator title, so the nesting is proven by the worker's tree level: project 1, worktree 2, orchestrator 3.
+      evidence: [{ selector: `[data-mobile-sessions-drawer] ${item(worker)}[aria-level="4"]` }] },
   ] });
 }
 

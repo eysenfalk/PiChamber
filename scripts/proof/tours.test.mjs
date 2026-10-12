@@ -72,7 +72,8 @@ describe('tours.mjs format', () => {
     const tour = orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
     expect(tour.name).toBe('orchestration');
     expect(tour.steps[0].actions[0]).toEqual({ type: 'navigate', path: '?settings=sessions' });
-    expect(tour.steps[1].actions).toContainEqual({ type: 'click', selector: '[data-tree-node="w:/one"]' });
+    expect(tour.steps[1].evidence).toContainEqual({ selector: '[aria-label="Review model"]' });
+    expect(tour.steps[2].actions).toContainEqual({ type: 'click', selector: '[data-tree-node="w:/one"]' });
     const typed = tour.steps.flatMap(step => step.actions).filter(action => action.type === 'type').map(action => action.value);
     expect(typed).toEqual(['ORCHESTRATE', 'STATUS?', 'GO']);
     const evidence = tour.steps.flatMap(step => step.evidence);

@@ -108,8 +108,9 @@ class FakeRuntime {
     await this.rebindSession?.(session);
   }
 
-  async newSession({ setup } = {}) {
+  async newSession({ setup, parentSession } = {}) {
     const session = new FakeSession('pi-session-new');
+    if (parentSession) session.sessionManager.getHeader = () => ({ timestamp: '2026-01-01T00:00:00.000Z', parentSession });
     await setup?.(session.sessionManager);
     this.session = session;
     await this.rebindSession?.(session);
@@ -1181,6 +1182,37 @@ describe('Pi session daemon spike', () => {
     await expect(delta).resolves.toMatchObject({
       payload: { sessionId: 'pi-session-2', contentIndex: 0, delta: 'current' },
     });
+    await client.close();
+  });
+
+  it('lists the parent of a live session whose file Pi has not written yet', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-live-parent-'));
+    const endpoint = testDaemonEndpoint(root);
+    const parentFile = join(root, 'parent.jsonl');
+    await writeFile(parentFile, `{"type":"session","id":"pi-session-parent","cwd":"${root}"}\n`);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      createRuntime: async () => new FakeRuntime({ cwd: root, session: new FakeSession('pi-session-1') }),
+      listSessions: async () => [{
+        path: parentFile,
+        id: 'pi-session-parent',
+        cwd: root,
+        created: new Date('2026-01-01T00:00:00.000Z'),
+        modified: new Date('2026-01-01T00:00:01.000Z'),
+      }],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    // An orchestration worker is listed before its first message reaches
+    // disk; the sidebar nests it only if the live row names its parent.
+    await expect(client.request('sessions.create', { cwd: root, parentId: 'pi-session-parent' }))
+      .resolves.toMatchObject({ result: { session: { id: 'pi-session-new' } } });
+    const listed = await client.request('sessions.list', { directory: root });
+    expect(listed.result.sessions.find((item) => item.session.id === 'pi-session-new')?.session.parentId).toBe('pi-session-parent');
     await client.close();
   });
 
