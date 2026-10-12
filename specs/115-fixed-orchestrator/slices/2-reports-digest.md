@@ -25,9 +25,9 @@ worker_report {
 
 Validation by kind: `done` needs `evidence` with at least one item and either `pullRequest` or `noPullRequest`; `ready` needs `pullRequest`; `question` and `blocked` need `audience`. A rejected report changes nothing.
 
-`question` and `blocked` create `question: { id, kind, audience, summary, at }` in the record, replacing an older one. It closes only when the worker sends its next report (any kind), or when the orchestrator calls `session_send { ..., resolves: '<id>' }` (new optional field). A UI prompt from the owner or an unrelated `session_send` leave it open; the digest shows `lastInputAt` so the orchestrator sees that someone wrote.
+`question` and `blocked` create `question: { id, kind, audience, summary, at }` in the record. It closes only through a matching `resolves`: a worker report with `resolves: '<id>'`, or `session_send { ..., resolves: '<id>' }` from the orchestrator (new optional field). Any other report, a UI prompt from the owner or an unrelated `session_send` leave it open; the digest shows `lastInputAt` so the orchestrator sees that someone wrote. A worker has at most one open question: a new `question` or `blocked` while one is open is refused with `ORCHESTRATION_QUESTION_OPEN`, unless it names the open one in `resolves`, which then replaces it.
 
-`done` moves the worker to `done` (slice 1 transitions). `ready` and `done` store `pullRequest` with the repository of the worker's cwd.
+`done` stores the report; the worker becomes `done` when the run that made the report settles, so its slot stays taken while that run may still call tools (slice 1). `ready` and `done` store `pullRequest` with the repository of the worker's cwd.
 
 Snapshot at every settle of a registered worker, written by the service: `snapshot: { at, lastProgressAt, lastError: { message, at } | null, usage: { input, output, cacheRead, cacheWrite, cost } }`. `usage` is the session total at that settle, computed from the runtime that just settled.
 
@@ -37,9 +37,10 @@ New tool, orchestrator only:
 orchestration_digest { sessionIds?: string[] } → {
   at,
   limit: { workerLimit, used },
+  operations: [{ opId, kind, state, step, error, since }],   // operations in `reserved` or `failed`, e.g. a start that failed before it had a worker
   workers: [{
     sessionId, title, role, issue, branch, worktree, pullRequest,
-    lifecycle, lifecycleSince,            // registry state and since
+    lifecycle, lifecycleSince,            // registry state ('starting', 'active', 'done', ...) and since
     live, liveSince,                      // 'busy' | 'retry' | 'waiting_input' | 'idle' | 'dormant', null if unknown
     lastProgressAt,                       // live when resident, else snapshot; null if never seen
     lastInputAt,
@@ -57,7 +58,7 @@ The worker preamble (slice 1) tells workers to report through `worker_report`; `
 
 ## What the owner sees
 
-Tests: four faux workers with long transcripts, the digest's JSON under 10 % of their combined `session_read` output; `done` without evidence refused; an unrelated `session_send` and a UI prompt leave the question open, a report and `resolves` close it; digest after disposal and after a daemon restart shows snapshot values with their time and `live: 'dormant'` without activating a runtime; a retry shows `live: 'retry'`; an open dialog shows `waiting_input`; usage during a run is `settled` plus `currentRun` without double counting after the settle.
+Tests: four faux workers with long transcripts, the digest's JSON under 10 % of their combined `session_read` output; `done` without evidence refused; an unrelated `session_send`, a UI prompt and a progress report leave the question open, a second question is refused, a report or `session_send` with the matching `resolves` closes it; a `done` report keeps the worker `active` until its run settles; digest after disposal and after a daemon restart shows snapshot values with their time and `live: 'dormant'` without activating a runtime; a retry shows `live: 'retry'`; an open dialog shows `waiting_input`; usage during a run is `settled` plus `currentRun` without double counting after the settle.
 
 ## Gates
 

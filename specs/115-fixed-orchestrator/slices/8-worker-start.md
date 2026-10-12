@@ -15,20 +15,19 @@ worker_start { clientRequestId, issue: { repo, number }, role, branchName, title
   → { sessionId, branch, worktree, state }
 ```
 
-`orchestration/worker-start.js` uses slice 1's operation, kind `start`, keyed by `(orchestratorId, clientRequestId)`. The first `update` reserves the slot (limit and gate) and records the intent. Each step records itself in `steps` before and after it runs:
+`orchestration/worker-start.js` uses slice 1's operation, kind `start`, found through `requestKeys` by `(orchestratorId, clientRequestId)`. The first `update` reserves the slot (limit and gate) and records the intent. Each step records itself in `steps` before and after it runs, and each write checks that the operation still belongs to the caller (slice 1):
 
 1. `branch`: `git branch <branchName> origin/dev` in the caller's repository, after `git fetch origin dev`; refused if the branch exists and was not created by this operation.
 2. `worktree`: `git worktree add` through `packages/web/server/lib/git/service.js` at the worktree root (setting `orchestration.worktreeRoot`, default next to the caller's worktree), path unique by branch name.
-3. `session`: create the session with cwd = that worktree and the operation id in its lineage entry, the brief with the worker preamble.
-4. `registered`: the worker record exists, the operation is `created`.
+3. `session`, `prompted`, `durable`: slice 1's steps, with cwd = that worktree and the brief with the worker preamble. The worker is `starting` until its JSONL exists; if a restart finds it absent, the operation returns to step `session` and keeps branch, worktree and slot.
 
-A retry with the same key resumes at the first unfinished step; a step whose effect already exists is adopted only if it matches the recorded intent (a session is found by the unique worktree cwd and the operation id in its lineage). A failed step sets the operation `failed` and emits `start_failed` with the step and what exists.
+A retry with the same key resumes at the first unfinished step; a step whose effect already exists is adopted only if it matches the recorded intent (a session is found by the unique worktree cwd and the operation id in its lineage). A failed step sets the operation `failed`, keeps `error: { step, message, at }` and emits `start_failed` to the operation (`emit({ opId }, ...)`, slice 3), because before step `session` there is no worker to name. The digest lists it under `operations` (slice 2) until it is retried or abandoned.
 
-`worker_abandon { clientRequestId }` removes in reverse order only what `steps` says this operation created, each removal through `cleanup-guard.js` (slice 9 ships the guard; this slice adds its no pull request rule first), and releases the reservation.
+`worker_abandon { clientRequestId }` removes in reverse order only what `steps` says this operation created, each removal through `cleanup-guard.js`, and releases the reservation. This slice creates the guard with its no pull request rule; slice 9 adds the merged rules. A missing pull request in the registry means unknown, not absent (R2-B3). This slice accepts one proof that no pull request can be open for the branch: `git ls-remote --exit-code origin refs/heads/<branch>` exits 2, so the branch was never pushed or is gone, and a pull request needs its head branch on the remote. The branch is then removed only with no commits beyond `origin/dev` and a clean worktree. A pushed branch, or any other `ls-remote` result, refuses the branch removal with the reason (`ORCHESTRATION_GUARD_UNKNOWN_PR`); the worktree and session follow the same rule, and the worker stays for `worker_cleanup` in slice 9, which can ask GitHub.
 
 ## What the owner sees
 
-Tests with a temp git repository and a bare remote: success; failure injected after each step, then retry, gives one branch, one worktree and one session; restart between steps; abandon after each step removes only created artifacts and refuses a branch with commits beyond `origin/dev`. Lab recording: the orchestrator starts a worker for an issue with one call.
+Tests with a temp git repository and a bare remote: success; failure injected after each step, then retry, gives one branch, one worktree and one session; restart between steps; abandon after each step removes only created artifacts and refuses a branch with commits beyond `origin/dev`; a branch pushed without extra commits and with an open draft pull request that was never reported is refused; an `ls-remote` that fails (unreachable remote) is refused; a failure before step `session` shows `start_failed` to the orchestrator and an entry in the digest's `operations`; a crash after `session` before the first assistant message, then restart and retry, gives one durable session in the same worktree. Lab recording: the orchestrator starts a worker for an issue with one call.
 
 ## Gates
 

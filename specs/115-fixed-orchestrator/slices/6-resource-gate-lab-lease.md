@@ -15,16 +15,18 @@ Gate in the spawn reservation of slice 1: after the limit check, read `/proc/loa
 Lab lease in `lab/run`, under the `flock` it already takes:
 
 - File `${XDG_RUNTIME_DIR}/pichamber-lab.lease`, one JSON line `{ checkout, pid, since, expiresAt }`. `checkout` is the repository root that ran `up`, the same value as the pod label `io.pichamber.lab.checkout`.
-- `up` writes the lease, or refuses with `Lab leased by <checkout> since <since> until <expiresAt>` when a valid lease names another checkout. `up` again from the holder renews it.
+- `up` refuses with `Lab leased by <checkout> since <since> until <expiresAt>` when a valid lease names another checkout. It writes the lease only after the pod is up and its limits are verified; a failed `up` runs the existing cleanup and leaves no lease, so lease and pod never name different holders. `up` again from the holder renews it.
 - `record` and `down` from another checkout are refused the same way, before any container is created or removed. `down` from the holder removes the lease.
-- A lease expires after `PICHAMBER_LAB_LEASE_SECONDS` (default 7200) from its last `up` or `record`. An expired lease or a lease whose pod no longer exists is free.
+- A lease expires after `PICHAMBER_LAB_LEASE_SECONDS` (default 7200) from its last `up` or `record`. A lease whose pod no longer exists is free.
+- Handoff after expiry, all under the same `flock`: `up` or `down` from another checkout first removes the expired holder's pod, network and volume with the existing cleanup, checking the pod label against the lease's `checkout` instead of the caller's. If that removal fails, the command refuses, the expired lease stays and `status` shows it with the failure; nothing is started. Only after the old pod is gone does `up` continue as above. `record` from another checkout stays refused, because there is no pod of its own to record.
+- A pod without a lease (from before this slice, or after `lease break`) keeps today's rule: only its checkout label may touch it.
 - `lab/run status` prints the holder. `lab/run lease break` removes the lease, for the owner.
 
 The daemon only reads the lease file for the digest (`lab: { checkout, since, expiresAt } | null`). It holds no lease and adds no tools. The worker preamble and the skill say: run `lab/run` only from your own worktree; a refusal names who holds it; report `blocked` instead of breaking it.
 
 ## What the owner sees
 
-`lab-rules.test.mjs` cases with a fake `podman` and a temp runtime dir: acquire, refusal from a second checkout for `up`, `record` and `down`, renew by the holder, release on `down`, expiry, a stale lease without a pod, `lease break`. Gate tests with injected host numbers. The lab container has no podman and mounts the checkout read-only, so the refusal cannot be recorded inside the lab. Proof instead: a host terminal transcript, quoted in the pull request, where `lab/run up` from a second worktree is refused with the first one's checkout and succeeds after the first runs `down`; plus a lab recording of the digest showing the holder from a lease file the tour writes into the lab's own runtime dir.
+`lab-rules.test.mjs` cases with a fake `podman` and a temp runtime dir: acquire, refusal from a second checkout for `up`, `record` and `down`, renew by the holder, release on `down`, expiry with the old pod still running followed by `up` from a second checkout (old pod removed, new lease), the same with a failing removal (refused, old lease kept), `up` failing after the pod started (rollback, no lease), a stale lease without a pod, a pod without a lease, `lease break`. Gate tests with injected host numbers. The lab container has no podman and mounts the checkout read-only, so the refusal cannot be recorded inside the lab. Proof instead: a host terminal transcript, quoted in the pull request, where `lab/run up` from a second worktree is refused with the first one's checkout and succeeds after the first runs `down`; plus a lab recording of the digest showing the holder from a lease file the tour writes into the lab's own runtime dir.
 
 ## Gates
 
