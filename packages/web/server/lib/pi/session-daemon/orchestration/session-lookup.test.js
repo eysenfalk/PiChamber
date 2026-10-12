@@ -61,7 +61,11 @@ describe('persisted session lookup by start operation', () => {
     await expect(lookup(sessions)).resolves.toMatchObject({ sessionId: 'broken' });
   });
 
-  it('fails instead of answering "not found" when a session cannot be read', async () => {
-    await expect(lookup([{ id: 'dir', path: tmpdir() }])).rejects.toMatchObject({ code: 'EISDIR' });
+  it('fails instead of answering "not found" when a session cannot be read, after checking the others', async () => {
+    await expect(lookup([{ id: 'dir', path: tmpdir() }])).rejects.toMatchObject({ code: 'SESSION_LOOKUP_FAILED', incomplete: true });
+    const [target] = await sessionsIn({
+      target: jsonl({ type: 'session' }, { type: 'custom', customType: LINEAGE, data: { opId: 'op_1' } }),
+    });
+    await expect(lookup([{ id: 'dir', path: tmpdir() }, target])).resolves.toMatchObject({ sessionId: 'target' });
   });
 });

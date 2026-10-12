@@ -36,9 +36,10 @@ const lineageOpIdOf = async (file, lineageType) => {
 
 /**
  * The persisted session whose lineage names `opId`, or undefined after every
- * session of `cwd` was read. A failed read, or a session whose prefix holds
- * an entry that cannot be parsed, throws SESSION_LOOKUP_FAILED (incomplete)
- * when no session matched, so the caller cannot take it for a negative answer.
+ * session of `cwd` was read. A session file removed since the listing is
+ * skipped. A failed read, or a prefix entry that cannot be parsed, does not
+ * stop the scan; when no session matched it throws SESSION_LOOKUP_FAILED
+ * (incomplete), so the caller cannot take it for a negative answer.
  */
 export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions, lineageType }) => {
   const sessions = await listSessions({ cwd });
@@ -50,8 +51,9 @@ export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions,
       found = await lineageOpIdOf(session.path, lineageType);
     } catch (error) {
       // Removed between listing and reading: not this operation's session.
-      if (error?.code === 'ENOENT') continue;
-      throw error;
+      // Any other failure may hide it, but must not stop the other files.
+      if (error?.code !== 'ENOENT') unreadable.push(session.id);
+      continue;
     }
     if (found === opId) return { sessionId: session.id, cwd, sessionFile: session.path };
     if (found === UNREADABLE) unreadable.push(session.id);
