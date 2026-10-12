@@ -29,6 +29,7 @@ Alternatives considered:
 - A new agent starts a pull request of the feature from the spec's "Next agent prompt" without the conversation.
 - Reviewers see changes to the ladder in the diff.
 - The deletion is a step of the last slice; forgetting it leaves a stale plan, which the review of that pull request has to catch.
+- First use: #95 shipped in seven pull requests (#100, #105, #109, #111, #114, #121 and the quick create pull request), and the last one moved the lasting reasons into `packages/ui/src/components/session/sidebar/DOCUMENTATION.md` and deleted `specs/95-workspace-tree/`.
 
 ## Revisit when
 

@@ -27,12 +27,15 @@ export function validateTour(tour) {
       const schemas = {
         navigate: ['type', 'path'], click: ['type', 'selector', 'text', 'button'], type: ['type', 'selector', 'value'],
         press: ['type', 'key'], drag: ['type', 'from', 'to'],
+        hover: ['type', 'selector', 'text'], 'long-press': ['type', 'selector', 'text'],
         scroll: ['type', 'selector', 'x', 'y'], wait: ['type', 'ms', 'selector', 'text'],
         'set-theme': ['type', 'theme'], 'set-viewport': ['type', 'viewport'],
       };
       if (!Object.hasOwn(schemas, action.type) || !keys(action, schemas[action.type])) fail();
       if (action.type === 'navigate' && (typeof action.path !== 'string' || (/^[a-z]+:/i.test(action.path) || action.path.startsWith('//')))) fail();
       if (action.type === 'click' && (!target(action) || ![undefined, 'right'].includes(action.button))) fail();
+      if ((action.type === 'hover' || action.type === 'long-press') && !target(action)) fail();
+      if (action.type === 'long-press' && !VIEWPORTS[step.viewport]?.mobile) fail();
       if (action.type === 'press' && (typeof action.key !== 'string' || !Object.hasOwn(KEYS, action.key))) fail();
       if (action.type === 'drag' && ![action.from, action.to].every(end => end && typeof end === 'object' && keys(end, ['selector', 'text']) && target(end))) fail();
       if (action.type === 'type' && (!nonempty(action.selector) || typeof action.value !== 'string')) fail();
@@ -154,6 +157,13 @@ export function sidebarTreeTour(manifest) {
   const fetchMe = gitRow('remote-ahead');
   const fetched = pill(fetchMe, '1 commit to pull*');
   const autoFetch = '[data-settings-item="git.auto-fetch"]';
+  // Quick create (slice 7): the `+` shows on hover over the row's count slot, as a sibling of the row button.
+  const plus = rowSelector => `${rowSelector} ~ button[aria-label^="New session in"]`;
+  const composerFocused = { selector: '[data-chat-input="true"] .cm-content:focus' };
+  // `target` is the directory chip the new draft shows; the composer may already have focus from an earlier step.
+  const quickCreate = (rowSelector, target) => [{ type: 'hover', selector: rowSelector }, { type: 'wait', ms: 200 }, { type: 'click', selector: plus(rowSelector) },
+    ...(target ? [{ type: 'wait', text: target }] : []), { type: 'wait', selector: composerFocused.selector }];
+  const flat = projectNode(others[0]);
   return validateTour({ name: 'sidebar-tree', steps: [
     { caption: 'One tree instead of two areas: Chats on top, then projects. Nothing is expanded yet.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[role="tree"]' }, { type: 'wait', text: label }],
@@ -170,6 +180,12 @@ export function sidebarTreeTour(manifest) {
     { caption: 'Back in the tree, fetch-me shows ↓1: the commit pushed to its remote arrived without a manual fetch.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: main }, { type: 'wait', selector: fetched.selector }],
       evidence: [fetched, { text: long.title }] },
+    { caption: 'Hovering a row swaps its count for a +. The + on Chats starts a chat without a project folder and puts the cursor in the composer.', viewport: 'desktop', theme: 'light',
+      actions: quickCreate(row('chats')), evidence: [{ selector: plus(row('chats')) }, composerFocused] },
+    { caption: `The + on main starts a session in ${project.name} main.`, viewport: 'desktop', theme: 'light',
+      actions: quickCreate(main, project.name), evidence: [{ selector: plus(main) }, { text: project.name }, composerFocused] },
+    { caption: `${titleCase(others[0].name)} has one checkout, so its project row takes the + itself. The click also selects the row.`, viewport: 'desktop', theme: 'light',
+      actions: quickCreate(flat, others[0].name), evidence: [{ selector: plus(flat) }, { selector: `${flat}[aria-current="true"]` }, { text: others[0].name }, composerFocused] },
     { caption: 'Forks sit under their parent session, with a fork count.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
         { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],
@@ -220,6 +236,12 @@ export function sidebarTreeTour(manifest) {
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: 'Chats' }, { text: label }] },
     { caption: 'Mobile in light theme.', viewport: 'mobile', theme: 'light', actions: [],
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: label }] },
+    { caption: 'Touch has no hover, so the + is not there. A long press on Chats opens its menu with New session.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'long-press', selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { type: 'wait', text: 'New session' }],
+      evidence: [{ selector: '[role="menuitem"]' }, { text: 'New session' }] },
+    { caption: 'New session closes the drawer and opens an empty chat.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'click', text: 'New session' }, { type: 'wait', selector: '[data-chat-input="true"]' }],
+      evidence: [{ selector: '[data-chat-input="true"]' }] },
   ] });
 }
 
