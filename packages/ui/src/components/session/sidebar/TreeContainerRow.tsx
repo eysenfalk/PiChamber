@@ -1,0 +1,153 @@
+import React from 'react';
+import { AgentThinkingLoader } from '@/components/chat/AgentThinkingLoader';
+import { Icon } from '@/components/icon/Icon';
+import type { IconName } from '@/components/icon/icons';
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu';
+import { cn } from '@/lib/utils';
+import { SessionUnreadDot } from './SessionUnreadDot';
+import { TreeFolderRename } from './TreeFolderRename';
+import { nodeLabel } from './treeNodeLabel';
+import { useLongPressMenu } from './hooks/useLongPressMenu';
+import { sidebarRowLabelClass } from './utils';
+import type { TreeNode, TreeNodeKind, TreeRow } from './workspaceTree';
+
+const GUIDE_WIDTH_PX = 12;
+
+const KIND_ICON: Record<Exclude<TreeNodeKind, 'session'>, IconName> = {
+  chats: 'chat-3',
+  project: 'folder-3',
+  worktree: 'git-branch',
+  folder: 'folder',
+  more: 'more',
+  merged: 'git-merge',
+  other: 'folders',
+  otherFolder: 'folder',
+};
+
+export const TreeGuides: React.FC<{ row: TreeRow }> = ({ row }) => {
+  if (row.depth === 0) return null;
+  return (
+    <>
+      {Array.from({ length: row.depth }, (_, level) => {
+        const own = level === row.depth - 1;
+        const line = own ? (row.isLast ? 'half' : 'full') : row.guides[level + 1] ? 'full' : null;
+        return (
+          <span key={level} aria-hidden className="relative shrink-0 self-stretch" style={{ width: GUIDE_WIDTH_PX }}>
+            {line ? (
+              <span
+                className={cn('absolute left-1/2 w-px bg-border', line === 'full' ? 'inset-y-0' : 'top-0 h-1/2')}
+              />
+            ) : null}
+          </span>
+        );
+      })}
+    </>
+  );
+};
+
+const CountSlot: React.FC<{ node: TreeNode; expanded: boolean }> = ({ node, expanded }) => {
+  const showRunning = node.rollup.running && !expanded;
+  const showUnseen = !showRunning && node.rollup.unseen && !expanded;
+  return (
+    <span className="ml-1 flex h-6 min-w-6 shrink-0 items-center justify-end gap-1 typography-micro text-muted-foreground">
+      {showRunning ? (
+        <AgentThinkingLoader
+          variant="inline"
+          text={null}
+          animationType="spinner"
+          speedMs={80}
+          className="text-primary text-xs shrink-0"
+        />
+      ) : null}
+      {showUnseen ? <SessionUnreadDot label="Unread sessions" /> : null}
+      {node.kind !== 'more' && node.sessionCount > 0 ? <span className="tabular-nums">{node.sessionCount}</span> : null}
+    </span>
+  );
+};
+
+type ContainerRowProps = {
+  row: TreeRow;
+  selected: boolean;
+  onActivate: (row: TreeRow) => void;
+  onToggle: (row: TreeRow) => void;
+  menu?: React.ReactNode;
+  /** Set while the folder behind this row is being renamed; the row then shows an input instead of a label. */
+  rename?: { value: string; onChange: (value: string) => void; onSave: () => void; onCancel: () => void };
+  mobileVariant: boolean;
+};
+
+/** Container rows are not tab stops: the `treeitem` around them carries the roving focus. */
+export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant }) => {
+  const { node } = row;
+  const longPress = useLongPressMenu();
+  const expandable = node.kind !== 'more' && node.children.length > 0;
+  const label = nodeLabel(node);
+  const icon = node.kind === 'session' ? null : KIND_ICON[node.kind];
+
+  const body = (
+    <>
+      <TreeGuides row={row} />
+      {/* Pointer shortcut only: the row button carries aria-expanded and toggles on a second activation. */}
+      <span
+        aria-hidden="true"
+        data-tree-toggle={expandable ? '' : undefined}
+        onClick={expandable ? (event) => {
+          event.stopPropagation();
+          onToggle(row);
+        } : undefined}
+        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+      >
+        {expandable ? <Icon name={row.expanded ? 'arrow-down-s' : 'arrow-right-s'} className="h-3 w-3" /> : null}
+      </span>
+      {icon ? <Icon name={icon} className="size-3.5 shrink-0 text-muted-foreground" /> : null}
+      {rename ? (
+        <TreeFolderRename {...rename} />
+      ) : (
+        <>
+          <span className={cn(sidebarRowLabelClass(mobileVariant), 'flex-1 text-left', node.kind === 'more' && 'text-muted-foreground')}>
+            {label}
+          </span>
+          <CountSlot node={node} expanded={row.expanded} />
+        </>
+      )}
+    </>
+  );
+
+  const rowClass = cn(
+    'flex min-h-6 w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+    selected ? 'bg-interactive-selection' : 'hover:bg-interactive-hover',
+  );
+
+  if (rename) {
+    return <div className={rowClass}>{body}</div>;
+  }
+
+  const button = (
+    <button
+      type="button"
+      tabIndex={-1}
+      data-tree-node={row.key}
+      aria-expanded={expandable ? row.expanded : undefined}
+      aria-current={selected ? 'true' : undefined}
+      title={node.directory && node.directory !== '~' ? node.directory : undefined}
+      onClick={() => {
+        if (longPress.open) return;
+        onActivate(row);
+      }}
+      {...(menu ? longPress.touchHandlers : {})}
+      style={{ touchAction: 'manipulation' }}
+      className={rowClass}
+    />
+  );
+
+  if (!menu) {
+    return React.cloneElement(button, undefined, body);
+  }
+
+  return (
+    <ContextMenu open={longPress.open} onOpenChange={longPress.setOpen}>
+      <ContextMenuTrigger render={button}>{body}</ContextMenuTrigger>
+      <ContextMenuContent className="min-w-[160px]">{menu}</ContextMenuContent>
+    </ContextMenu>
+  );
+};

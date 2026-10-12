@@ -13,7 +13,7 @@ export type SecondaryMeta = {
   globalSession?: boolean;
 };
 
-export type SessionRenderContext = 'project' | 'recent' | 'tree';
+export type SessionRenderContext = 'tree';
 
 export type SessionNodeItemProps = {
   node: SessionNode;
@@ -22,7 +22,6 @@ export type SessionNodeItemProps = {
   projectId?: string | null;
   archivedBucket?: boolean;
   pinnedSessionIds: Set<string>;
-  expandedParents: Set<string>;
   hasSessionSearchQuery: boolean;
   normalizedSessionSearchQuery: string;
   editingId: string | null;
@@ -31,7 +30,6 @@ export type SessionNodeItemProps = {
   setEditTitle: (value: string) => void;
   handleSaveEdit: (titleOverride?: string) => void;
   handleCancelEdit: () => void;
-  toggleParent: (expansionKey: string) => void;
   handleSessionSelect: (sessionId: string, sessionDirectory: string | null) => void;
   handleSessionDoubleClick: (sessionId: string, sessionTitle: string) => void;
   togglePinnedSession: (target: SessionPinnedTarget) => void;
@@ -64,7 +62,7 @@ export type SessionNodeItemProps = {
     renderExtras?: SessionNodeRenderExtras,
   ) => React.ReactNode;
   secondaryMeta?: SecondaryMeta | null;
-  /** `tree`: one 24 px row in the workspace tree, which renders guides, chevron and forks itself. */
+  /** `tree`: one 24 px row in the workspace tree, which renders guides, chevron and forks itself. The only context. */
   renderContext?: SessionRenderContext;
   subtreeContainsEditing: Set<string>;
   menuOpenSessionId: string | null;

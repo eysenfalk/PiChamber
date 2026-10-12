@@ -7,7 +7,9 @@ import { createSessionOwnershipIndex } from './sessionOwnership';
 import {
   buildWorkspaceTree,
   defaultExpanded,
+  folderScopesByProject,
   formatTreeAsText,
+  sessionsByProject,
   visibleRows,
   type NodeKey,
   type SessionActivity,
@@ -279,5 +281,42 @@ describe('defaultExpanded', () => {
     expect([...defaultExpanded(tree, 'reload-fork-1')]).toEqual(['s:reload', 'w:/wt/39-reload-restart', 'p:pichamber']);
     expect(render(tree, defaultExpanded(tree, 'note'))).toContain('▾ notes  1\n  note');
     expect(defaultExpanded(tree, null).size).toBe(0);
+  });
+});
+
+describe('folderScopesByProject', () => {
+  test('lists the root of a flat project and each worktree of a split project, in tree order', () => {
+    const tree = buildWorkspaceTree(world());
+    const scopes = folderScopesByProject(tree);
+    expect(scopes.get('notes')).toEqual([{ scopeKey: '/src/notes', directory: '/src/notes' }]);
+    expect(scopes.get('pichamber')?.map((scope) => scope.scopeKey)).toEqual([
+      '/src/PiChamber',
+      '/wt/39-reload-restart',
+      '/wt/45-permissions',
+    ]);
+  });
+
+  test('skips Chats and folder nodes', () => {
+    const tree = buildWorkspaceTree(world());
+    expect([...folderScopesByProject(tree).keys()].sort()).toEqual(['notes', 'pichamber']);
+  });
+});
+
+describe('sessionsByProject', () => {
+  test('collects sessions below a project in tree order, forks and cut-off sessions included', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) => session(`n${index + 1}`, '/src/notes', index + 1));
+    sessions.push(session('n1-fork', '/src/notes', 0.5, { parentID: 'n1' }));
+    const tree = buildWorkspaceTree(world({ sessions }));
+    const notes = sessionsByProject(tree).get('notes') ?? [];
+    expect(notes.map((entry) => entry.id).sort()).toEqual(['n1', 'n1-fork', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7']);
+    expect(notes.every((entry) => entry.directory === '/src/notes')).toBe(true);
+  });
+
+  test('leaves out Chats and Other folders', () => {
+    const tree = buildWorkspaceTree(world());
+    const ids = [...sessionsByProject(tree).values()].flat().map((entry) => entry.id);
+    expect(ids).not.toContain('chat-a');
+    expect(ids).not.toContain('scratch');
+    expect(ids).toContain('perm');
   });
 });

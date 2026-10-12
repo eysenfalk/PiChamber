@@ -94,6 +94,46 @@ describe('useSessionFoldersStore folder assignments', () => {
     expect(storageSetCount).toBe(0);
   });
 
+  test('moveFolder reparents a folder and makes it top level again', () => {
+    const store = useSessionFoldersStore.getState();
+    const scope = '/workspace/project';
+    const outer = store.createFolder(scope, 'Outer');
+    const inner = store.createFolder(scope, 'Inner');
+
+    expect(store.moveFolder(scope, inner.id, outer.id)).toBe(true);
+    expect(useSessionFoldersStore.getState().getFoldersForScope(scope).find((folder) => folder.id === inner.id)?.parentId).toBe(outer.id);
+
+    expect(useSessionFoldersStore.getState().moveFolder(scope, inner.id, null)).toBe(true);
+    expect(useSessionFoldersStore.getState().getFoldersForScope(scope).find((folder) => folder.id === inner.id)?.parentId).toBeNull();
+  });
+
+  test('moveFolder refuses cycles, unknown folders and unknown parents', () => {
+    const store = useSessionFoldersStore.getState();
+    const scope = '/workspace/project';
+    const a = store.createFolder(scope, 'A');
+    const b = store.createFolder(scope, 'B', a.id);
+    const c = store.createFolder(scope, 'C', b.id);
+    const before = useSessionFoldersStore.getState().foldersMap;
+
+    expect(store.moveFolder(scope, a.id, a.id)).toBe(false);
+    expect(store.moveFolder(scope, a.id, c.id)).toBe(false);
+    expect(store.moveFolder(scope, 'missing', null)).toBe(false);
+    expect(store.moveFolder(scope, a.id, 'missing')).toBe(false);
+    expect(store.moveFolder('/workspace/other', a.id, null)).toBe(false);
+    expect(useSessionFoldersStore.getState().foldersMap).toBe(before);
+  });
+
+  test('moveFolder to the current parent keeps the foldersMap reference', () => {
+    const store = useSessionFoldersStore.getState();
+    const scope = '/workspace/project';
+    const outer = store.createFolder(scope, 'Outer');
+    const inner = store.createFolder(scope, 'Inner', outer.id);
+    const before = useSessionFoldersStore.getState().foldersMap;
+
+    expect(store.moveFolder(scope, inner.id, outer.id)).toBe(true);
+    expect(useSessionFoldersStore.getState().foldersMap).toBe(before);
+  });
+
   test('restores independent folder snapshots across runtime switches', async () => {
     useSessionFoldersStore.getState().createFolder('/workspace/project', 'Runtime A');
     await waitForPersist();

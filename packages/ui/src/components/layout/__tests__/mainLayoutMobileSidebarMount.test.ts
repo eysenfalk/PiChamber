@@ -39,8 +39,8 @@ describe('MainLayout mobile SessionSidebar mount (issue #1695 regression guard)'
     });
 
     test('hidden sidebars disable render-only subscriptions and effects', () => {
-        expect(sessionSidebarSource).toContain('useGitAllBranches(isVisible)');
-        expect(sessionSidebarSource).toContain('useGitRepoStatusMap(isVisible ? normalizedProjectPaths : EMPTY_STRING_ARRAY)');
+        // The tree reads branches from worktree discovery, so the sidebar holds no Git subscription of its own.
+        expect(sessionSidebarSource).not.toContain('useGitAllBranches');
         expect(sessionSidebarSource).toContain('enabled: isVisible,\n    isSessionSearchOpen');
         expect(sessionSidebarSource).toContain('EMPTY_STRING_ARRAY');
     });

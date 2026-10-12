@@ -1,19 +1,14 @@
 /* eslint-disable */
 import React from 'react';
-import type { Session } from '@/lib/chat/types';
-import type { SessionGroup, SessionNode } from '../types';
-import { normalizePath } from '../utils';
+import type { ProjectSession } from '../workspaceTree';
 import type { MainTab } from '@/stores/useUIStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
-type ProjectSection = {
-  project: { id: string; normalizedPath: string };
-  groups: SessionGroup[];
-};
-
 type Args = {
-  projectSections: ProjectSection[];
+  projects: ReadonlyArray<{ id: string; normalizedPath: string }>;
+  /** Every session below each project, from the workspace tree. */
+  projectSessions: ReadonlyMap<string, ProjectSession[]>;
   activeProjectId: string | null;
   activeSessionByProject: Map<string, string>;
   setActiveSessionByProject: React.Dispatch<React.SetStateAction<Map<string, string>>>;
@@ -28,7 +23,8 @@ type Args = {
 
 export const useProjectSessionSelection = (args: Args): void => {
   const {
-    projectSections,
+    projects,
+    projectSessions,
     activeProjectId,
     activeSessionByProject,
     setActiveSessionByProject,
@@ -43,42 +39,14 @@ export const useProjectSessionSelection = (args: Args): void => {
 
   const projectSessionMeta = React.useMemo(() => {
     const metaByProject = new Map<string, Map<string, { directory: string | null }>>();
-    const firstSessionByProject = new Map<string, { id: string; directory: string | null }>();
-
-    const visitNodes = (
-      projectId: string,
-      projectRoot: string,
-      fallbackDirectory: string | null,
-      nodes: SessionNode[],
-    ) => {
-      if (!metaByProject.has(projectId)) {
-        metaByProject.set(projectId, new Map());
-      }
-      const projectMap = metaByProject.get(projectId)!;
-      nodes.forEach((node) => {
-        const sessionDirectory = normalizePath(
-          (node.session as Session & { directory?: string | null }).directory
-          ?? fallbackDirectory
-          ?? projectRoot,
-        );
-        projectMap.set(node.session.id, { directory: sessionDirectory });
-        if (!firstSessionByProject.has(projectId)) {
-          firstSessionByProject.set(projectId, { id: node.session.id, directory: sessionDirectory });
-        }
-        if (node.children.length > 0) {
-          visitNodes(projectId, projectRoot, sessionDirectory, node.children);
-        }
-      });
-    };
-
-    projectSections.forEach((section) => {
-      section.groups.forEach((group) => {
-        visitNodes(section.project.id, section.project.normalizedPath, group.directory, group.sessions);
-      });
+    const firstSessionByProject = new Map<string, ProjectSession>();
+    projectSessions.forEach((sessions, projectId) => {
+      if (sessions.length === 0) return;
+      metaByProject.set(projectId, new Map(sessions.map((session) => [session.id, { directory: session.directory }])));
+      firstSessionByProject.set(projectId, sessions[0]);
     });
-
     return { metaByProject, firstSessionByProject };
-  }, [projectSections]);
+  }, [projectSessions]);
 
   const previousActiveProjectRef = React.useRef<string | null>(null);
 
@@ -96,8 +64,8 @@ export const useProjectSessionSelection = (args: Args): void => {
       return;
     }
 
-    const section = projectSections.find((item) => item.project.id === activeProjectId);
-    if (!section) {
+    const project = projects.find((item) => item.id === activeProjectId);
+    if (!project) {
       return;
     }
     previousActiveProjectRef.current = activeProjectId;
@@ -135,8 +103,8 @@ export const useProjectSessionSelection = (args: Args): void => {
         setSessionSwitcherOpen(false);
       }
       openNewSessionDraft({
-        selectedProjectId: section.project.id,
-        directoryOverride: section.project.normalizedPath,
+        selectedProjectId: project.id,
+        directoryOverride: project.normalizedPath,
       });
       return;
     }
@@ -160,7 +128,7 @@ export const useProjectSessionSelection = (args: Args): void => {
     newSessionDraftOpen,
     mobileVariant,
     openNewSessionDraft,
-    projectSections,
+    projects,
     projectSessionMeta,
     setActiveMainTab,
     setSessionSwitcherOpen,

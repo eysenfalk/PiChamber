@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { KEYS, addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -115,10 +115,15 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await until(async () => network.quiet() &&
       await evaluate('document.readyState === "complete" && performance.now() - (window.__proofLastMutation || 0) >= 500'), 'page idle (500ms DOM and finite network quiet)');
   };
+  // Turning touch emulation off resets the pointer media queries to headless's "none", so only toggle it on a change.
+  let touch = false;
   const viewport = async name => {
     const size = VIEWPORTS[name];
     await send('Emulation.setDeviceMetricsOverride', { ...size, screenWidth: size.width, screenHeight: size.height, deviceScaleFactor: 1 });
-    await send('Emulation.setTouchEmulationEnabled', { enabled: size.mobile, maxTouchPoints: size.mobile ? 5 : 1 });
+    if (size.mobile !== touch) {
+      await send('Emulation.setTouchEmulationEnabled', { enabled: size.mobile, maxTouchPoints: size.mobile ? 5 : 1 });
+      touch = size.mobile;
+    }
   };
   const theme = async mode => {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: mode }] });
@@ -136,7 +141,10 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   try {
     signal?.throwIfAborted();
     const port = await runtime.reservePort();
-    browser = runtime.launchChrome({ chrome: runtime.resolveChrome(chrome), profileDir, port, headless: true });
+    browser = runtime.launchChrome({ chrome: runtime.resolveChrome(chrome), profileDir, port, headless: true,
+      // Headless Chromium reports no mouse (hover: none). Desktop steps get a fine, hovering pointer as on a desktop;
+      // mobile steps turn on touch emulation, which switches the media queries to coarse and no hover.
+      extraArgs: ['--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4'] });
     const target = await runtime.createPageTarget(port);
     client = runtime.createClient(target.webSocketDebuggerUrl);
     await client.connect();
@@ -180,13 +188,29 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
             (await evaluate(evidenceExpression([{ text: action.text }]))).ok, 'wait target');
         } else if (action.type === 'click' || action.type === 'type') {
           const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
-          await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
-          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+          const button = action.button ?? 'left';
+          await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button, clickCount: 1 });
+          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount: 1 });
           if (action.type === 'type') {
-            await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
-            await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
+            // A synthetic Ctrl+A is no editing command in Chromium; name the command so typing replaces the field.
+            await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2, commands: ['selectAll'] });
+            await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
             await send('Input.insertText', { text: action.value });
           }
+        } else if (action.type === 'press') {
+          const key = { key: action.key, code: action.key, windowsVirtualKeyCode: KEYS[action.key] };
+          await send('Input.dispatchKeyEvent', action.key === 'Enter' ? { type: 'keyDown', ...key, text: '\r' } : { type: 'rawKeyDown', ...key });
+          await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key });
+        } else if (action.type === 'drag') {
+          // Small pointer steps with the button held, so drag libraries pass their activation distance.
+          const from = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action.from) + ')');
+          const to = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action.to) + ')');
+          await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button: 'left', buttons: 1, clickCount: 1 });
+          for (let step = 1; step <= 12; step += 1) {
+            await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x + ((to.x - from.x) * step) / 12, y: from.y + ((to.y - from.y) * step) / 12, button: 'left', buttons: 1 });
+            await runtime.wait(30);
+          }
+          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...to, button: 'left', buttons: 0, clickCount: 1 });
         } else if (action.type === 'scroll') await evaluate('(() => { const element = document.querySelector(' + JSON.stringify(action.selector) + '); if (!element) throw new Error("Missing scroll target"); ' +
           (action.x === undefined && action.y === undefined ? 'element.scrollIntoView({block:"center", inline:"nearest"});' : 'element.scrollTo(' + JSON.stringify({ left: action.x ?? 0, top: action.y ?? 0, behavior: 'instant' }) + ');') + ' })()');
       }

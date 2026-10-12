@@ -1,31 +1,6 @@
-import type { SessionRenderContext } from './sessionNodeTypes';
-import type { Session } from '@/lib/chat/types';
 
 import { normalizePath } from '@/lib/pathNormalization';
 export { normalizePath };
-
-export const selectExpandedParentKeysForContext = (
-  previous: Set<string>,
-  expanded: ReadonlySet<string>,
-  context: SessionRenderContext,
-): Set<string> => {
-  const prefix = `${context}:`;
-  const next = new Set([...expanded].filter((key) => key.startsWith(prefix)));
-  if (previous.size === next.size && [...next].every((key) => previous.has(key))) {
-    return previous;
-  }
-  return next;
-};
-
-export const toggleExpandedParentKey = (
-  expanded: Set<string>,
-  key: string,
-): Set<string> => {
-  const next = new Set(expanded);
-  if (next.has(key)) next.delete(key);
-  else next.add(key);
-  return next;
-};
 
 const formatDateLabel = (value: string | number) => {
   const targetDate = new Date(value);
@@ -96,58 +71,6 @@ export const formatSessionCompactDateLabel = (updatedMs: number): string => {
     return `${Math.floor(diff / month)}mo`;
   }
   return `${Math.floor(diff / year)}y ago`;
-};
-
-export const isPathWithinProject = (directory?: string | null, projectPath?: string | null): boolean => {
-  const normalizedDirectory = normalizePath(directory);
-  const normalizedProjectPath = normalizePath(projectPath);
-  return isNormalizedPathWithinProject(normalizedDirectory, normalizedProjectPath);
-};
-
-const isNormalizedPathWithinProject = (normalizedDirectory: string | null, normalizedProjectPath: string | null): boolean => {
-  if (!normalizedDirectory || !normalizedProjectPath) return false;
-  if (normalizedDirectory === normalizedProjectPath) return true;
-  if (normalizedProjectPath === '/') return normalizedDirectory.startsWith('/');
-  return normalizedDirectory.startsWith(`${normalizedProjectPath}/`);
-};
-
-export const normalizeForBranchComparison = (value: string): string => {
-  return value
-    .toLowerCase()
-    .replace(/[-_]/g, '')
-    .trim();
-};
-
-export const isBranchDifferentFromLabel = (branch: string | null, label: string): boolean => {
-  if (!branch) return false;
-  return normalizeForBranchComparison(branch) !== normalizeForBranchComparison(label);
-};
-
-export const dedupeSessionsById = (sessions: Session[]): Session[] => {
-  const byId = new Map<string, Session>();
-  sessions.forEach((session) => {
-    byId.set(session.id, session);
-  });
-  return Array.from(byId.values());
-};
-
-export const getArchivedScopeKey = (projectRoot: string): string => `__archived__:${projectRoot}`;
-
-export const resolveArchivedFolderName = (session: Session, projectRoot: string | null): string => {
-  const sessionDirectory = normalizePath((session as Session & { directory?: string | null }).directory ?? null);
-  const projectWorktree = normalizePath((session as Session & { project?: { worktree?: string | null } | null }).project?.worktree ?? null);
-  const resolved = sessionDirectory ?? projectWorktree;
-  if (!resolved) {
-    return 'unassigned';
-  }
-  if (projectRoot && resolved === projectRoot) {
-    return 'project root';
-  }
-  const source = projectRoot && resolved.startsWith(`${projectRoot}/`)
-    ? resolved.slice(projectRoot.length + 1)
-    : resolved;
-  const segments = source.split('/').filter(Boolean);
-  return segments[segments.length - 1] ?? 'unassigned';
 };
 
 export const formatProjectLabel = (label: string): string => {

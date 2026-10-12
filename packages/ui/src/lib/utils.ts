@@ -96,31 +96,6 @@ const normalizePath = (value: string) => {
   return value.replace(/\/+$/, "");
 };
 
-export function formatPathForDisplay(path: string | null | undefined, homeDirectory?: string | null): string {
-  if (!path) {
-    return "";
-  }
-
-  const normalizedPath = normalizePath(path);
-  if (normalizedPath === "/") {
-    return "/";
-  }
-
-  const normalizedHome = homeDirectory ? normalizePath(homeDirectory) : undefined;
-
-  if (normalizedHome && normalizedHome !== "/") {
-    if (normalizedPath === normalizedHome) {
-      return "~";
-    }
-    if (normalizedPath.startsWith(`${normalizedHome}/`)) {
-      const relative = normalizedPath.slice(normalizedHome.length + 1);
-      return relative ? `~/${relative}` : "~";
-    }
-  }
-
-  return normalizedPath;
-}
-
 export function formatDirectoryName(path: string | null | undefined, homeDirectory?: string | null): string {
   if (!path) {
     return "/";
