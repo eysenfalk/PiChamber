@@ -2,6 +2,7 @@ import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { ContextMenuItem, ContextMenuSeparator } from '@/components/ui/context-menu';
 import type { GitWorktree } from '@/lib/api/types';
+import { canQuickCreate } from './quickCreate';
 import type { TreeNode } from './workspaceTree';
 
 /** What the tree needs to rename, create and delete session folders. State lives in the sidebar. */
@@ -20,6 +21,8 @@ type TreeNodeMenuActions = {
   folders: Pick<TreeFolderActions, 'onStartRename' | 'onDeleteFolder'>;
   /** Starts a new folder in the row's scope; on a folder row it becomes a subfolder. */
   onCreateFolder: (node: TreeNode) => void;
+  /** Starts a session in the row; the touch route to the hover `+`, and a keyboard route on every device. */
+  onNewSession: (node: TreeNode) => void;
   onOpenProjectEditDialog: (projectId: string) => void;
   onRemoveProject: (projectId: string) => void;
   onCloseWorktree: (projectId: string, worktree: GitWorktree) => void;
@@ -47,6 +50,12 @@ export const buildTreeNodeMenu = (node: TreeNode, actions: TreeNodeMenuActions):
       </>
     );
   }
+  const newSessionItem = canQuickCreate(node) ? (
+    <ContextMenuItem onClick={() => actions.onNewSession(node)}>
+      <Icon name="add" className="mr-2 h-3.5 w-3.5" />
+      <span>{'New session'}</span>
+    </ContextMenuItem>
+  ) : null;
   const newFolderItem = node.folderScopeKey ? (
     <ContextMenuItem onClick={() => actions.onCreateFolder(node)}>
       <Icon name="folder" className="mr-2 h-3.5 w-3.5" />
@@ -57,6 +66,7 @@ export const buildTreeNodeMenu = (node: TreeNode, actions: TreeNodeMenuActions):
     const projectId = node.projectId;
     return (
       <>
+        {newSessionItem}
         {newFolderItem}
         <ContextMenuItem onClick={() => actions.onOpenProjectEditDialog(projectId)}>
           <Icon name="edit" className="mr-2 h-3.5 w-3.5" />
@@ -75,8 +85,9 @@ export const buildTreeNodeMenu = (node: TreeNode, actions: TreeNodeMenuActions):
     const worktree = node.worktree;
     return (
       <>
+        {newSessionItem}
         {newFolderItem}
-        {newFolderItem ? <ContextMenuSeparator /> : null}
+        {newSessionItem || newFolderItem ? <ContextMenuSeparator /> : null}
         <ContextMenuItem
           title={node.rollup.running ? 'Stop the active session before closing this worktree.' : undefined}
           onClick={() => actions.onCloseWorktree(projectId, worktree)}
@@ -89,5 +100,11 @@ export const buildTreeNodeMenu = (node: TreeNode, actions: TreeNodeMenuActions):
     );
   }
   // The project root (main) cannot be closed, but takes folders like any worktree.
-  return newFolderItem ?? undefined;
+  if (!newSessionItem && !newFolderItem) return undefined;
+  return (
+    <>
+      {newSessionItem}
+      {newFolderItem}
+    </>
+  );
 };

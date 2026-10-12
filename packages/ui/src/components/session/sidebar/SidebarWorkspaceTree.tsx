@@ -4,6 +4,7 @@ import type { GitWorktree } from '@/lib/api/types';
 import { useDeviceInfo } from '@/lib/device';
 import { applyTreeDrop } from './applyTreeDrop';
 import { ContainerRow, TreeGuides } from './TreeContainerRow';
+import { canShowQuickCreateButton } from './quickCreate';
 import { nodeLabel } from './treeNodeLabel';
 import { TreeDndItem, TreeDndProvider, type TreeDragPayload } from './treeDnd';
 import type { TreeDropData } from './treeDrop';
@@ -296,6 +297,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   const menuFor = (node: TreeNode): React.ReactNode => buildTreeNodeMenu(node, {
     folders,
     onCreateFolder: createFolderIn,
+    onNewSession: onNewSessionIn,
     onOpenProjectEditDialog,
     onRemoveProject,
     onCloseWorktree,
@@ -314,6 +316,8 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
 
   // The design system strips focus rings globally; data-focus-ring="accent" is its opt-in.
   const treeItemClass = 'rounded-md';
+  // The treeitem is the hover and focus group of the row's quick create button.
+  const containerItemClass = 'group/row rounded-md';
 
   return (
     <TreeDndProvider
@@ -386,7 +390,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                 aria-level={row.depth + 1}
                 aria-expanded={row.node.children.length > 0 ? row.expanded : undefined}
                 aria-label={row.node.kind === 'folder' ? row.node.label : undefined}
-                className={treeItemClass}
+                className={containerItemClass}
               >
                 <ContainerRow
                   row={row}
@@ -398,6 +402,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                   mobileVariant={mobileVariant}
                   query={query}
                   git={gitFor(row)}
+                  onQuickCreate={canShowQuickCreateButton(row.node, { mobileVariant, hasTouchOnlyPointer }) ? onNewSessionIn : undefined}
                 />
               </div>
             </TreeDndItem>
