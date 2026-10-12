@@ -19,7 +19,7 @@ Limits:
 - Stop after: <draft pull request with the plan | implementation with proof | other>. Do not implement before the owner's approval reaches you through me, quoted.
 - Lab: <you may use lab/run | do not use lab/run>. Full builds and test runs: <go ahead | ask me first>.
 - Never push to main or dev, mark ready, merge, close issues, or touch other worktrees.
-- If the work proves harder or larger than this brief says, stop and report QUESTION instead of guessing.
+- If the work proves harder or larger than this brief says, or a bug will not give way, stop and report QUESTION instead of guessing.
 
 Owner decisions so far: <quoted, with date, or "none">
 
