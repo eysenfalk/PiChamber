@@ -42,6 +42,8 @@ type Props = {
   onOpenDirectoryDialog?: () => void;
   emptyState?: React.ReactNode;
   mobileVariant: boolean;
+  /** Normalized quick search; container labels highlight it. */
+  query?: string;
 };
 
 /** SessionNodeItem consumes the older SessionNode shape; build it once per tree node. */
@@ -113,6 +115,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   onOpenDirectoryDialog,
   emptyState,
   mobileVariant,
+  query = '',
 }) => {
   const { hasTouchOnlyPointer } = useDeviceInfo();
   const [revealedMore, setRevealedMore] = React.useState<ReadonlySet<NodeKey>>(() => new Set());
@@ -290,12 +293,14 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                   menu={menuFor(row.node)}
                   rename={renameFor(row.node)}
                   mobileVariant={mobileVariant}
+                  query={query}
                 />
               </div>
             </TreeDndItem>
           );
         })}
-        {onOpenDirectoryDialog ? (
+        {/* Search results are a view, not a place to add projects. */}
+        {onOpenDirectoryDialog && !query ? (
           <button
             type="button"
             onClick={onOpenDirectoryDialog}

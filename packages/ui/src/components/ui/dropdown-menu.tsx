@@ -204,6 +204,30 @@ function DropdownMenuRadioItem({
   )
 }
 
+function DropdownMenuCheckboxItem({
+  className,
+  children,
+  ...props
+}: React.ComponentProps<typeof BaseMenu.CheckboxItem>) {
+  return (
+    <BaseMenu.CheckboxItem
+      data-slot="dropdown-menu-checkbox-item"
+      className={cn(
+        "data-[highlighted]:bg-interactive-hover hover:bg-interactive-hover relative flex cursor-pointer items-center gap-2 rounded-lg py-1 pl-2 pr-8 typography-ui-label outline-hidden select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-3.5",
+        className
+      )}
+      {...props}
+    >
+      <span className="pointer-events-none absolute right-2 flex size-3.5 items-center justify-center text-primary">
+        <BaseMenu.CheckboxItemIndicator>
+          <Icon name="check" className="size-3" />
+        </BaseMenu.CheckboxItemIndicator>
+      </span>
+      {children}
+    </BaseMenu.CheckboxItem>
+  )
+}
+
 function DropdownMenuLabel({
   className,
   inset,
@@ -300,6 +324,7 @@ export {
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuItem,
+  DropdownMenuCheckboxItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,

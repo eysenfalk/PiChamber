@@ -53,6 +53,8 @@ export type DesktopSettings = {
   activeProjectId?: string;
   securityScopedBookmarks?: string[];
   pinnedDirectories?: string[];
+  /** Sidebar tree: project ids (and `chats`) the owner hid. Local to the runtime, like `projects`. */
+  hiddenProjectIds?: string[];
   showDeletionDialog?: boolean;
   nativeNotificationsEnabled?: boolean;
   notificationMode?: 'always' | 'hidden-only';

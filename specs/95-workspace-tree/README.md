@@ -4,11 +4,11 @@ Temporary spec for #95 ([ADR 0009](../../docs/adr/0009-spec-folder-for-multi-pr-
 
 ## Next agent prompt
 
-Status 2026-10-12: slices 1 (PR #100), 2 (PR #105) and 3 are merged into `dev`; the owner approved all slice plans on 2026-10-12, so each slice goes from plan to merge without a new approval round. Choices taken without asking are in [choices.md](choices.md).
+Status 2026-10-12: slices 1 (PR #100), 2 (PR #105), 3 (PR #109) and 4 are merged into `dev`; the owner approved all slice plans on 2026-10-12, so each slice goes from plan to merge without a new approval round. Choices taken without asking are in [choices.md](choices.md).
 
 You are picking up the sidebar workspace tree. Read this README, then the slice file of the next open slice, then `AGENTS.md` and every project skill the slice names. Work in one branch and one draft pull request per slice, based on `origin/dev`. Start a slice only after the previous one is merged into `dev`; slices are not stacked. Do not implement before the owner approved the pull request's plan.
 
-Next pickup: [slice 4, visibility filter and quick search](slices/4-filter-search.md). Its data layer (`useProjectVisibilityStore`, `hidden`/`query` in `buildWorkspaceTree`) is prepared on branch `97-sidebar-filter-search`; slice 5 and the server part of slice 6 have prepared branches too (`98-sidebar-git-pills`, `98-git-fetch-noninteractive`).
+Next pickup: [slice 5, Git pills and pull requests](slices/5-git-pills.md). Its data layer is prepared on branch `98-sidebar-git-pills` (rebase onto `dev` first); the server part of slice 6 is prepared on `98-git-fetch-noninteractive`.
 
 Blockers: none.
 
@@ -16,8 +16,8 @@ Global TODO:
 
 - [x] [1 Tree model](slices/1-tree-model.md) (#96, PR #100)
 - [x] [2 Tree in the sidebar](slices/2-tree-mounted.md) (#96, PR #105)
-- [x] [3 Parity and cleanup](slices/3-parity.md) (closes #96)
-- [ ] [4 Visibility filter and quick search](slices/4-filter-search.md) (closes #97)
+- [x] [3 Parity and cleanup](slices/3-parity.md) (closes #96, PR #109)
+- [x] [4 Visibility filter and quick search](slices/4-filter-search.md) (closes #97)
 - [ ] [5 Git pills and pull requests](slices/5-git-pills.md) (#98)
 - [ ] [6 Auto fetch](slices/6-auto-fetch.md) (closes #98)
 - [ ] [7 Quick create](slices/7-quick-create.md) (closes #99, deletes this folder)

@@ -4,6 +4,7 @@ import { Icon } from '@/components/icon/Icon';
 import type { IconName } from '@/components/icon/icons';
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { cn } from '@/lib/utils';
+import { renderHighlightedText } from './highlightedText';
 import { SessionUnreadDot } from './SessionUnreadDot';
 import { TreeFolderRename } from './TreeFolderRename';
 import { nodeLabel } from './treeNodeLabel';
@@ -78,10 +79,11 @@ type ContainerRowProps = {
   /** Set while the folder behind this row is being renamed; the row then shows an input instead of a label. */
   rename?: { value: string; onChange: (value: string) => void; onSave: () => void; onCancel: () => void };
   mobileVariant: boolean;
+  query?: string;
 };
 
 /** Container rows are not tab stops: the `treeitem` around them carries the roving focus. */
-export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant }) => {
+export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant, query = '' }) => {
   const { node } = row;
   const longPress = useLongPressMenu();
   const expandable = node.kind !== 'more' && node.children.length > 0;
@@ -109,8 +111,13 @@ export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onAct
       ) : (
         <>
           <span className={cn(sidebarRowLabelClass(mobileVariant), 'flex-1 text-left', node.kind === 'more' && 'text-muted-foreground')}>
-            {label}
+            {node.kind === 'more' || node.kind === 'merged' ? label : renderHighlightedText(label, query)}
           </span>
+          {node.hiddenMatch ? (
+            <span role="img" aria-label="Hidden from the sidebar" title="Hidden from the sidebar" className="inline-flex shrink-0 items-center text-muted-foreground">
+              <Icon name="eye-off" className="size-3" />
+            </span>
+          ) : null}
           <CountSlot node={node} expanded={row.expanded} />
         </>
       )}

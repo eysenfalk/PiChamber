@@ -115,9 +115,18 @@ export function sidebarTreeTour(manifest) {
   const project = manifest?.projects?.find(candidate => candidate.name === manifest?.worktrees?.[0]?.project);
   const find = role => sessions?.find(session => session.role === role && nonempty(session.title));
   const [long, fork, forkChild, chat] = ['long', 'fork', 'fork-child', 'chat'].map(find);
+  const others = manifest?.projects?.filter(candidate => candidate.name !== project?.name) ?? [];
+  const otherSession = others[0] && sessions?.find(session => session.project === others[0].name && nonempty(session.title));
   const worktrees = sessions?.filter(session => session.role === 'worktree' && session.project === project?.name && nonempty(session.worktree)) ?? [];
-  if (!project || !nonempty(project.path) || !long || !fork || !forkChild || !chat || worktrees.length < 2) throw new Error('Invalid lab seed manifest');
-  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  if (!project || !nonempty(project.path) || !long || !fork || !forkChild || !chat || worktrees.length < 2 || others.length < 2 || !others.every(other => nonempty(other.path)) || !otherSession) throw new Error('Invalid lab seed manifest');
+  const titleCase = name => name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const label = titleCase(project.name);
+  // Projects added by path get the id `path_` plus the base64url path.
+  const projectId = other => `path_${Buffer.from(other.path).toString('base64url')}`;
+  const projectNode = other => `[data-tree-node="p:${projectId(other)}"]`;
+  const visibilityItem = other => `[role="menuitemcheckbox"][data-visibility-id="${projectId(other)}"]`;
+  const search = 'input[aria-label="Search projects, branches and sessions"]';
+  const hiddenTree = '[role="tree"]' + others.map(other => `:not(:has(${projectNode(other)}))`).join('');
   const row = key => `[data-tree-node="${key}"]`;
   const main = row(`w:${project.path}`);
   const expand = [
@@ -155,6 +164,24 @@ export function sidebarTreeTour(manifest) {
     { caption: 'Chats holds sessions started without a project, in the home directory.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', text: 'Chats' }, { type: 'wait', text: chat.title }],
       evidence: [{ selector: `${row('chats')}[aria-expanded="true"]` }, { text: chat.title }] },
+    { caption: `The eye menu picks the shown projects. Unchecking ${others.map(other => titleCase(other.name)).join(' and ')} removes them from the tree.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'button[aria-label^="Shown projects"]' }, { type: 'wait', text: 'Show in sidebar' },
+        ...others.flatMap(other => [{ type: 'click', selector: visibilityItem(other) }, { type: 'wait', selector: `${visibilityItem(other)}[aria-checked="false"]` }])],
+      evidence: [{ text: 'Show in sidebar' }, ...others.map(other => ({ selector: `${visibilityItem(other)}[aria-checked="false"]` })),
+        { selector: `button[aria-label="Shown projects, ${others.length} hidden"]` }] },
+    { caption: 'The tree keeps Chats and the shown project only.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'press', key: 'Escape' }, { type: 'wait', selector: hiddenTree }],
+      evidence: [{ selector: hiddenTree }, { text: 'Chats' }, { text: label }] },
+    { caption: `Searching a branch name narrows the tree to that worktree and opens the path to it.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'button[aria-label="Search"]' }, { type: 'wait', selector: search },
+        { type: 'type', selector: search, value: worktrees[1].worktree }, { type: 'wait', text: '1 match' }],
+      evidence: [{ text: '1 match' }, { selector: `[role="treeitem"] mark` }, { text: worktrees[1].worktree }] },
+    { caption: `The search also finds sessions in hidden projects; the count line and the eye mark say the project is hidden.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'type', selector: search, value: otherSession.title }, { type: 'wait', selector: '[aria-label="Matches in 1 hidden project"]' }],
+      evidence: [{ selector: `${projectNode(others[0])} [aria-label="Hidden from the sidebar"]` }, { selector: '[aria-label="Matches in 1 hidden project"]' }, { text: otherSession.title }] },
+    { caption: 'Escape clears the search, a second Escape closes it, and the tree is back as it was.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'press', key: 'Escape' }, { type: 'press', key: 'Escape' }, { type: 'wait', selector: hiddenTree }],
+      evidence: [{ selector: hiddenTree }, { selector: `${folder}[aria-expanded="false"]` }, { text: chat.title }] },
     { caption: 'The same tree in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [role="tree"]' }, { text: chat.title }, { text: 'Reviews' }] },
     { caption: 'The hosted mobile drawer shows the same tree.', viewport: 'mobile', theme: 'dark',

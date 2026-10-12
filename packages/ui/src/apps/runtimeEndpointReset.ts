@@ -9,6 +9,7 @@ import { useGitStore } from '@/stores/useGitStore';
 import { useWorktreeStore } from '@/stores/useWorktreeStore';
 import { useWorktreeCreationStore } from '@/stores/useWorktreeCreationStore';
 import { useGitHubPrStatusStore } from '@/stores/useGitHubPrStatusStore';
+import { useProjectVisibilityStore } from '@/stores/useProjectVisibilityStore';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 import { useTerminalStore } from '@/stores/useTerminalStore';
@@ -63,6 +64,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
     lastDisconnectReason: null,
   });
   useProjectsStore.getState().resetForRuntimeSwitch();
+  useProjectVisibilityStore.getState().resetForRuntimeSwitch();
   // Global-list isolation is owned by PiSessionStore (`resetForRuntime` via
   // the runtime-endpoint subscription clears the catalog, generations, and
   // tombstones). No wrapper reset remains.
