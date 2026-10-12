@@ -14,7 +14,7 @@ import {
 } from '../package-manager.js';
 import { listPiCustomThemes } from './custom-themes.js';
 import { readUpdateJob } from '../update-job-store.js';
-import { createPiSettingsStore } from './settings-store.js';
+import { createPiSettingsStore, resolveOrchestrationSettings } from './settings-store.js';
 import { isPiThinkingLevel } from './thinking-levels.js';
 import { createPiSessionFoldersStore } from './session-folders-store.js';
 import {
@@ -1252,7 +1252,7 @@ export const registerPiRuntimeRoutes = (app, {
     try {
       const pi = projectPiSettings(await getDaemonRuntime(getPiSessionDaemonRuntime).request('settings.get'));
       const pichamber = await settingsStore.read();
-      res.json({ ...pi, pichamber });
+      res.json({ ...pi, pichamber, orchestration: resolveOrchestrationSettings(pichamber) });
     } catch (error) {
       writeDaemonError(res, error);
     }
@@ -1271,7 +1271,7 @@ export const registerPiRuntimeRoutes = (app, {
   app.put('/api/pi/settings/defaults', async (req, res) => {
     try {
       const pichamber = await settingsStore.update(req.body ?? {});
-      res.json({ pichamber });
+      res.json({ pichamber, orchestration: resolveOrchestrationSettings(pichamber) });
     } catch (error) {
       writeDaemonError(res, error);
     }

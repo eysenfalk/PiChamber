@@ -140,6 +140,33 @@ describe('buildWorkspaceTree', () => {
     ].join('\n'));
   });
 
+  test('nests workers under their parent across directories, including their own workers', () => {
+    const sessions = [
+      ...baseSessions,
+      session('worker-a', '/wt/45-permissions', 1, { parentID: 'main-1' }),
+      session('worker-a-review', '/tmp/scratch', 1.5, { parentID: 'worker-a' }),
+      session('worker-b', '/src/notes', 2.5, { parentID: 'chat-a' }),
+    ];
+    const tree = buildWorkspaceTree(world({ sessions }));
+    expect(render(tree, ['chats', 's:chat-a', 'p:pichamber', 'w:/src/PiChamber', 's:main-1', 's:worker-a'])).toBe([
+      '▾ Chats  3',
+      '  ▾ chat-a  ⑂1',
+      '    worker-b',
+      '  chat-b',
+      '▾ PiChamber  9',
+      '  ▾ main  4',
+      '    ▾ main-1  ⑂1',
+      '      ▾ worker-a  ⑂1',
+      '        worker-a-review',
+      '    main-2',
+      '  ▸ 39-reload-restart  4',
+      '  ▸ 45-permissions  1',
+      '▸ notes  1',
+      '▸ Other folders  1',
+    ].join('\n'));
+    expect(tree.placement.get('worker-a-review')).toBe('w:/src/PiChamber');
+  });
+
   test('keeps Chats first even when it is empty, and drops Other folders when nothing is ownerless', () => {
     const sessions = baseSessions.filter((entry) => !entry.directory?.startsWith('~') && entry.id !== 'scratch');
     const tree = buildWorkspaceTree(world({ sessions }));
@@ -252,8 +279,9 @@ describe('buildWorkspaceTree', () => {
           session('cycle-a', '/src/notes', 3, { parentID: 'cycle-b' }),
           session('cycle-b', '/src/notes', 4, { parentID: 'cycle-a' }),
           session('self', '/src/notes', 5, { parentID: 'self' }),
-          // A fork whose parent lives in another worktree stays in its own.
+          // A worker whose parent lives in another worktree follows its parent.
           session('cross', '/wt/45-permissions', 2, { parentID: 'main-1' }),
+          session('cross-chat', '/src/notes', 2, { parentID: 'chat-a' }),
           ...Array.from({ length: 9 }, (_, index) => session(`bulk${index}`, '/wt/45-permissions', 60 + index)),
         ],
         foldersByScope: {
