@@ -122,7 +122,7 @@ export const WorktreeGitPills: React.FC<Props> = React.memo(({ directory, branch
   const { pills, fetchedAt, error } = React.useMemo(() => buildWorktreePills(record, pr), [pr, record]);
   if (pills.length === 0) return null;
   return (
-    <span className={cn('flex shrink-0 items-center gap-1.5 typography-micro tabular-nums text-muted-foreground', className)}>
+    <span className={cn('flex shrink-0 items-center gap-1 typography-micro tabular-nums text-muted-foreground', className)}>
       {pills.map((pill) => <Pill key={pill.kind} pill={pill} fetchedAt={fetchedAt} error={error} />)}
     </span>
   );
