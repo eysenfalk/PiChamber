@@ -15,6 +15,7 @@ import { buildLiveStreamingEntry, type StreamingTailEntry } from './lib/turns/st
 import { collectUngroupedAfterTailTurn } from './lib/turns/tailTurnUngrouped';
 import { revealTurnAssistantMessage } from './lib/turns/turnAssistantReveal';
 import { getNormalizedMessageForDisplay, hasCompactionPart } from './lib/messageDisplayNormalization';
+import { isChatVisibleExtensionItem } from '@/lib/pi/extension-ui';
 import { FadeInDisabledProvider } from './message/FadeInOnReveal';
 import { hasPendingUserSendAnimation, consumePendingUserSendAnimation } from '@/lib/userSendAnimation';
 import { streamPerfCount, streamPerfMark, streamPerfMeasure } from '@/stores/utils/streamDebug';
@@ -40,6 +41,16 @@ import {
 
 const MESSAGE_LIST_VIRTUALIZE_THRESHOLD = 5;
 const EMPTY_STATIC_ENTRY_MESSAGES: ChatMessageEntry[] = [];
+
+const isChatVisibleMessage = (message: ChatMessageEntry): boolean => {
+    const info = message.info as { role?: string; customType?: string; text?: unknown; details?: unknown };
+    if (info.role !== 'extension') return true;
+    return isChatVisibleExtensionItem({
+        customType: info.customType,
+        text: typeof info.text === 'string' ? info.text : undefined,
+        details: info.details,
+    });
+};
 const EMPTY_UNGROUPED_MESSAGE_IDS = new Set<string>();
 const EMPTY_TRAILING_UNGROUPED_ENTRIES: StreamingTailEntry[] = [];
 const TIMELINE_CACHE_LIMIT = 16;
@@ -746,6 +757,9 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                     continue;
                 }
                 seenIds.add(messageId);
+            }
+            if (!isChatVisibleMessage(message)) {
+                continue;
             }
             dedupedMessages.push(getNormalizedMessageForDisplay(
                 typeof messageId === 'string' ? latestById.get(messageId) ?? message : message,

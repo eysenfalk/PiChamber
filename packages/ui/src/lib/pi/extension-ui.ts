@@ -21,6 +21,7 @@
  */
 
 import { normalizeCommandArgs } from './command-triggers';
+import { SUPERVISOR_REPLY_ENTRY_TYPE } from './supervisor-ui';
 
 export const PI_EXTENSION_UI_CUSTOM_TYPE = 'pichamber.ui';
 
@@ -242,6 +243,24 @@ const parseProps = (
 const truncateForFallback = (value: string, maxLength = 2_000): string => (
   value.length > maxLength ? `${value.slice(0, maxLength)}…` : value
 );
+
+/**
+ * Whether an extension item belongs in the chat transcript. Pi shows messages
+ * sent with `pi.sendMessage` (text or details) and keeps entries appended with
+ * `pi.appendEntry` (data only) as session state that it never displays.
+ * PiChamber shows an appended entry only when it has a renderer for it: the
+ * `pichamber.` UI namespace or a supervisor reply. Other entries, for example
+ * an extension persisting its own state, stay in the session history unseen.
+ */
+export const isChatVisibleExtensionItem = (input: {
+  customType?: string;
+  text?: string;
+  details?: unknown;
+}): boolean => {
+  if ((input.text?.length ?? 0) > 0 || input.details !== undefined) return true;
+  const customType = input.customType ?? '';
+  return customType.startsWith(PI_EXTENSION_UI_NAMESPACE) || customType === SUPERVISOR_REPLY_ENTRY_TYPE;
+};
 
 /**
  * Parse one extension-authored chat item into its renderable form.
