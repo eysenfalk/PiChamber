@@ -18,6 +18,8 @@ export const SEED_MANIFEST = {
     { project: 'lab-alpha', worktree: 'search-filter', title: 'Lab: project filter', role: 'worktree' },
     { title: 'Lab: quick chat', role: 'chat' },
     { folder: 'scratch', title: 'Lab: scratch notes', role: 'foreign' },
+    // Issue #107: an orchestrator on the scripted faux model (scripts/lab/faux-orchestration.mjs).
+    { project: 'lab-alpha', title: 'Lab: orchestrator', role: 'orchestrator' },
   ],
   // Linked worktrees of a project, checked out next to it as <project>-worktrees/<name>.
   worktrees: [

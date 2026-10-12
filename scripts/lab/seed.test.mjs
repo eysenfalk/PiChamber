@@ -48,6 +48,13 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(Buffer.byteLength(forkText) - renameAt).toBeGreaterThan(FORK_WORK_AFTER_RENAME_BYTES);
     expect(Buffer.byteLength(forkText)).toBeGreaterThan(512 * 1024);
     expect((await stat(long.path)).mtimeMs).toBeGreaterThan((await stat(seed.sessions.find((s) => s.project === 'lab-beta').path)).mtimeMs);
+    // Orchestration (#107): the orchestrator runs on the faux model the seeded extension registers.
+    const orchestrator = seed.sessions.find((s) => s.role === 'orchestrator');
+    const orchestratorModel = SessionManager.open(orchestrator.path).getEntries().find((e) => e.type === 'model_change');
+    expect([orchestratorModel.provider, orchestratorModel.modelId]).toEqual(['faux', 'faux-1']);
+    const extension = await readFile(join(root, 'pi-agent/extensions/faux-orchestration.js'), 'utf8');
+    expect(extension).toContain('pi.registerProvider(faux.provider)');
+    expect(extension).toContain(JSON.stringify(orchestrator.directory));
     // Sidebar tree fixtures: committed projects, linked worktrees, a fork chain, a home chat and a foreign folder.
     const alpha = seed.projects.find((p) => p.name === 'lab-alpha');
     const worktrees = spawnSync('git', ['-C', alpha.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout;

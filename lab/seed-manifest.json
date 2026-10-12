@@ -13,7 +13,8 @@
     { "project": "lab-alpha", "worktree": "sidebar-tree", "title": "Lab: tree row layout", "role": "worktree" },
     { "project": "lab-alpha", "worktree": "search-filter", "title": "Lab: project filter", "role": "worktree" },
     { "title": "Lab: quick chat", "role": "chat" },
-    { "folder": "scratch", "title": "Lab: scratch notes", "role": "foreign" }
+    { "folder": "scratch", "title": "Lab: scratch notes", "role": "foreign" },
+    { "project": "lab-alpha", "title": "Lab: orchestrator", "role": "orchestrator" }
   ],
   "worktrees": [
     { "project": "lab-alpha", "name": "sidebar-tree" },

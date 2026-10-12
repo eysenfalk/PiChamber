@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { KEYS, addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { KEYS, addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -277,7 +277,7 @@ async function main() {
   } });
   if (values.help) { console.log(usage); return; }
   const [name] = positionals;
-  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour };
+  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour };
   const fixtureTours = { fixture, 'fixture-broken': brokenFixture };
   if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device or sidebar-tree; see --help');
   const isLab = Object.hasOwn(labTours, name);
