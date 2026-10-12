@@ -167,12 +167,27 @@ describe('Pi settings sidecar', () => {
     const resolved = resolveOrchestrationSettings(stored);
     expect(resolved.workerLimit).toBe(2);
     expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'low' });
-    expect(resolved.roles.implementation).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
+    expect(resolved.roles.implement).toEqual({ modelId: 'claude-opus-5-5', thinking: 'xhigh' });
 
     // A role set to null returns to its default; null clears every override.
     await store.update({ orchestration: { roles: { small: null } } });
     expect((await store.read()).orchestration.roles).not.toHaveProperty('small');
     await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
+  });
+
+  it('defaults each role to the task-fitting model and thinking level, never off', () => {
+    expect(DEFAULT_ORCHESTRATION_SETTINGS.roles).toEqual({
+      plan: { modelId: 'claude-opus-5-5', thinking: 'high' },
+      implement: { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
+      task: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
+      research: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
+      small: { modelId: 'claude-haiku-5-5', thinking: 'low' },
+      review: { modelId: 'gpt-6.1-sol', thinking: 'high' },
+    });
+    // Claude 5.5 models reject thinking off; no default may ask for it.
+    for (const role of Object.values(DEFAULT_ORCHESTRATION_SETTINGS.roles)) {
+      expect(['off', 'minimal']).not.toContain(role.thinking);
+    }
   });
 
   it('rejects invalid orchestration settings without changing stored state', async () => {
@@ -185,6 +200,7 @@ describe('Pi settings sidecar', () => {
       { workerLimit: 17 },
       { workerLimit: 2.5 },
       { roles: { planner: { modelId: 'x' } } },
+      { roles: { implementation: { modelId: 'x' } } },
       { roles: { small: { modelId: '' } } },
       { roles: { small: { modelId: 'x', thinking: 'loud' } } },
       { roles: [] },

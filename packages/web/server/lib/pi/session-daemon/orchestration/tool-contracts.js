@@ -3,6 +3,8 @@
 // contracts; parameters are plain JSON Schema, which Pi's TypeBox validator and
 // MCP `tools/list` accept as is.
 
+import { ORCHESTRATION_ROLES } from '../../settings-store.js';
+
 export const ORCHESTRATION_NAMESPACE = 'mcp__pichamber';
 export const ORCHESTRATION_MCP_SERVER = 'pichamber';
 
@@ -44,7 +46,11 @@ export const ORCHESTRATION_TOOLS = [
         cwd: { type: 'string', minLength: 1, maxLength: 4096, description: 'Absolute working directory of the worker.' },
         task: { type: 'string', minLength: 1, maxLength: 60000, description: 'Complete task brief for the worker.' },
         title: { type: 'string', minLength: 1, maxLength: 256 },
-        role: { type: 'string', enum: ['implementation', 'research', 'small', 'review'] },
+        role: {
+          type: 'string',
+          enum: [...ORCHESTRATION_ROLES],
+          description: 'Model and thinking from the role defaults. plan: architecture, spec, plan, hard debugging. implement: multi-step change in a worktree, large refactor, longer than about 30 minutes. task: well-scoped everyday work such as a bug fix, small feature, docs or tests. research: codebase or web research with sources. small: short mechanical work such as search, rename, summary, classification. review: fresh review of a worker\'s changes.',
+        },
         model,
         thinking,
         mode: { type: 'string', enum: ['async', 'wait'] },

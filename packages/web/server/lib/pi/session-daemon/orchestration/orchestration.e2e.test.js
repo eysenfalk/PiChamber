@@ -189,6 +189,14 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(capabilities.result.value).toMatchObject({ workerLimit: 4, canSpawn: true });
     expect(capabilities.result.value.models).toContainEqual(expect.objectContaining({ providerId: 'faux', modelId: 'faux-1' }));
     expect(capabilities.result.value.roles.review).toMatchObject({ modelId: 'gpt-6.1-sol', thinking: 'high' });
+    // Against the pinned SDK catalog: Claude 5.5 always thinks (no off) and
+    // Opus takes xhigh, and every Claude role default is a level its model supports.
+    const catalog = capabilities.result.value.models;
+    const anthropic = (modelId) => catalog.find((model) => model.providerId === 'anthropic' && model.modelId === modelId);
+    expect(anthropic('claude-opus-5-5')?.thinkingLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    for (const role of Object.values(capabilities.result.value.roles).filter((entry) => entry.modelId.startsWith('claude-'))) {
+      expect(anthropic(role.modelId)?.thinkingLevels).toContain(role.thinking);
+    }
     expect(capabilities.result.value.host).toEqual(expect.objectContaining({ cpuCount: expect.any(Number), memory: expect.objectContaining({ freeBytes: expect.any(Number) }) }));
     const workerSpawn = await client.request('orchestration.call', { sessionId: workerId, tool: 'session_spawn', args: { cwd: workerDir, task: 'nested' } });
     expect(workerSpawn.result.error).toMatchObject({ code: expect.stringMatching(/^ORCHESTRATION_/) });

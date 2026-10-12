@@ -36,9 +36,11 @@ const MAX_WORKERS = 16;
 const ALL_THINKING_LEVELS = Object.keys(PI_THINKING_LEVEL_LABELS) as PiThinkingLevel[];
 
 const ROLES: ReadonlyArray<{ role: PiOrchestrationRole; label: string; info: string }> = [
-  { role: 'implementation', label: "Implementation", info: "Workers that change code." },
-  { role: 'research', label: "Research", info: "Workers that read code, documentation or the web and report back." },
-  { role: 'small', label: "Small tasks", info: "Short, narrow tasks where a cheap model is enough." },
+  { role: 'plan', label: "Plan", info: "Architecture, specs, plans and hard debugging." },
+  { role: 'implement', label: "Implement", info: "Multi-step changes in a worktree and large refactors that run longer than about 30 minutes." },
+  { role: 'task', label: "Task", info: "Well-scoped everyday work: a bug fix, a small feature, documentation or tests." },
+  { role: 'research', label: "Research", info: "Workers that read code, documentation or the web and report back with sources." },
+  { role: 'small', label: "Small tasks", info: "Short mechanical work such as searching, renaming, summarizing or classifying." },
   { role: 'review', label: "Review", info: "Workers that review the changes of another worker." },
 ];
 

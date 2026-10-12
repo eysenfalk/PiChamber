@@ -266,8 +266,8 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'sessions.orchestration-roles',
     page: 'sessions',
     title: "Worker roles",
-    description: "Model and thinking level for implementation, research, small task and review workers.",
-    keywords: ['orchestration', 'workers', 'roles', 'model', 'implementation', 'research', 'review', 'small', 'subagents'],
+    description: "Model and thinking level for plan, implement, task, research, small task and review workers.",
+    keywords: ['orchestration', 'workers', 'roles', 'model', 'plan', 'implement', 'task', 'research', 'review', 'small', 'effort', 'subagents'],
   },
   {
     id: 'sessions.thinking-defaults',

@@ -74,17 +74,21 @@ const normalizeRetryLimit = (value) => {
   return value;
 };
 
-const ORCHESTRATION_ROLES = Object.freeze(['implementation', 'research', 'small', 'review']);
+export const ORCHESTRATION_ROLES = Object.freeze(['plan', 'implement', 'task', 'research', 'small', 'review']);
 const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
 const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
 
 // Role defaults name only the model id: the provider that serves it is resolved
 // against the live catalog when a worker starts, so a default never pins a
-// provider the owner has not configured.
+// provider the owner has not configured. Thinking levels follow Anthropic's
+// recommended effort per model and task (Oct 2026); Claude 5.5 models always
+// think, so no default uses `off`. Review stays gpt-6.1-sol on high.
 export const DEFAULT_ORCHESTRATION_SETTINGS = Object.freeze({
   workerLimit: 4,
   roles: Object.freeze({
-    implementation: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    plan: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    implement: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'xhigh' }),
+    task: Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'medium' }),
     research: Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'medium' }),
     small: Object.freeze({ modelId: 'claude-haiku-5-5', thinking: 'low' }),
     review: Object.freeze({ modelId: 'gpt-6.1-sol', thinking: 'high' }),

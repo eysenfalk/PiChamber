@@ -3847,6 +3847,7 @@ export function createSessionDaemon({
       providerId: model.providerId,
       modelId: model.id,
       ...(model.label ? { label: model.label } : {}),
+      ...(model.thinkingLevels ? { thinkingLevels: model.thinkingLevels } : {}),
       available: provider.authenticated,
     }))),
     hostStatus: readHostStatus,

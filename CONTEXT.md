@@ -20,6 +20,14 @@ An RPC host receives the async status snapshot as widget `subagent-async`, line 
 
 The lab image carries no provider credentials, so a recording of agent behavior needs a scripted model. Pi's faux provider registers a model whose replies, including tool calls, come from a script; the orchestration daemon test drives a real runtime with it.
 
+### Pi maps thinking levels to Anthropic effort; Claude 5.5 always thinks
+
+- Source: Anthropic docs `choosing-a-model` and `build-with-claude/effort` ("Recommended effort levels", read by the orchestrator 2026-10-12); `@earendil-works/pi-ai` 1.1.0 `providers/data/anthropic.json` (`thinkingLevelMap`) and `api/anthropic-messages.js`, checked with a payload probe through `onPayload`
+- Date: 2026-10-12
+- Settled by: Pi changing the Claude 5.5 `thinkingLevelMap`, or new Claude models that need new role defaults
+
+For `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-haiku-5-5`, Pi supports `low`, `medium`, `high`, `xhigh` and `max`, and sends each one as the same Anthropic effort with adaptive thinking. `off` and `minimal` map to null: Pi and the daemon (`thinking-levels.js`) raise them to `low`, so thinking never turns off, which the API would reject with 400. The orchestration role defaults follow Anthropic's recommendation per task: Opus `high` for planning and `xhigh` for implementation work over about 30 minutes, Sonnet `medium` for well-scoped tasks and research, Haiku `low` for short mechanical work. Review stays `gpt-6.1-sol` on `high` by owner decision.
+
 ### Intent checkpoints rely on Pi extension behavior that is not proven yet
 
 - Source: Pi 1.0.2 `docs/extensions.md` (`pi.appendEntry()`, `turn_end`) and `docs/session-format.md` (forks); `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md` (blocking extension dialogs); ADR 0006

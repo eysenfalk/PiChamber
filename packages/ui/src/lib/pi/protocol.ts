@@ -533,7 +533,7 @@ export interface PiSettingsSnapshot {
   orchestration: PiOrchestrationSettings;
 }
 
-export type PiOrchestrationRole = 'implementation' | 'research' | 'small' | 'review';
+export type PiOrchestrationRole = 'plan' | 'implement' | 'task' | 'research' | 'small' | 'review';
 
 /** A role names a model id; the provider is resolved from the live catalog when it is omitted. */
 export interface PiOrchestrationRoleModel {
