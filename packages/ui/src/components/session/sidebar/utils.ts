@@ -1,3 +1,4 @@
+import type { SessionRenderContext } from './sessionNodeTypes';
 import type { Session } from '@/lib/chat/types';
 
 import { normalizePath } from '@/lib/pathNormalization';
@@ -6,7 +7,7 @@ export { normalizePath };
 export const selectExpandedParentKeysForContext = (
   previous: Set<string>,
   expanded: ReadonlySet<string>,
-  context: 'project' | 'recent',
+  context: SessionRenderContext,
 ): Set<string> => {
   const prefix = `${context}:`;
   const next = new Set([...expanded].filter((key) => key.startsWith(prefix)));

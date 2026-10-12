@@ -13,6 +13,8 @@ export type SecondaryMeta = {
   globalSession?: boolean;
 };
 
+export type SessionRenderContext = 'project' | 'recent' | 'tree';
+
 export type SessionNodeItemProps = {
   node: SessionNode;
   depth?: number;
@@ -58,11 +60,12 @@ export type SessionNodeItemProps = {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: SecondaryMeta | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: SessionRenderContext,
     renderExtras?: SessionNodeRenderExtras,
   ) => React.ReactNode;
   secondaryMeta?: SecondaryMeta | null;
-  renderContext?: 'project' | 'recent';
+  /** `tree`: one 24 px row in the workspace tree, which renders guides, chevron and forks itself. */
+  renderContext?: SessionRenderContext;
   subtreeContainsEditing: Set<string>;
   menuOpenSessionId: string | null;
   nodeStructureKey: string;

@@ -3,41 +3,21 @@ import { devtools } from 'zustand/middleware';
 
 interface SidebarSpaceStore {
   /**
-   * Space scoped in the left folder rail (`SidebarSpacesBar`) and project
-   * list. `null` is the All sessions view. This is a view filter, not the
-   * active context: selecting a session row never changes it, while folder
-   * navigation (rail clicks, folder-cycle shortcuts) sets it explicitly.
+   * Node selected in the sidebar workspace tree (a `NodeKey` from
+   * `components/session/sidebar/workspaceTree.ts`, for example `p:<id>`,
+   * `w:<dir>` or `chats`). It is where "New session" lands and what the folder
+   * cycle shortcuts move. It filters nothing and opens no session.
    */
-  selectedSpaceId: string | null;
-  selectedWorktreePath: string | null;
-
-  /** Focus a project space, dropping any worktree pin. */
-  selectSpace: (id: string | null) => void;
-  /** Focus a linked worktree row inside a project space. */
-  selectWorktree: (projectId: string, worktreePath: string | null) => void;
-  /** Return to the All sessions view. */
-  clearSpaceSelection: () => void;
-  /** Keep the project space, drop the worktree pin. */
-  clearSelectedWorktree: () => void;
+  selectedNodeKey: string | null;
+  select: (key: string | null) => void;
 }
 
 export const useSidebarSpaceStore = create<SidebarSpaceStore>()(
   devtools(
     (set) => ({
-      selectedSpaceId: null,
-      selectedWorktreePath: null,
-
-      selectSpace: (id) => {
-        set({ selectedSpaceId: id, selectedWorktreePath: null });
-      },
-      selectWorktree: (projectId, worktreePath) => {
-        set({ selectedSpaceId: projectId, selectedWorktreePath: worktreePath });
-      },
-      clearSpaceSelection: () => {
-        set({ selectedSpaceId: null, selectedWorktreePath: null });
-      },
-      clearSelectedWorktree: () => {
-        set({ selectedWorktreePath: null });
+      selectedNodeKey: null,
+      select: (key) => {
+        set({ selectedNodeKey: key });
       },
     }),
     { name: 'sidebar-space' },

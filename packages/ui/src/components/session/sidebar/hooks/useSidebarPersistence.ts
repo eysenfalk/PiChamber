@@ -1,6 +1,4 @@
 import React from 'react';
-import { updateDesktopSettings } from '@/lib/persistence';
-import { useProjectsStore } from '@/stores/useProjectsStore';
 
 type SafeStorageLike = {
   getItem: (key: string) => string | null;
@@ -32,49 +30,6 @@ export const useSidebarPersistence = (args: Args) => {
     setExpandedParents,
     setCollapsedProjects,
   } = args;
-
-  const persistCollapsedProjectsTimer = React.useRef<number | null>(null);
-  const pendingCollapsedProjects = React.useRef<Set<string> | null>(null);
-
-  const flushCollapsedProjectsPersist = React.useCallback(() => {
-    const collapsed = pendingCollapsedProjects.current;
-    pendingCollapsedProjects.current = null;
-    persistCollapsedProjectsTimer.current = null;
-    if (!collapsed) {
-      return;
-    }
-
-    const { projects } = useProjectsStore.getState();
-    const updatedProjects = projects.map((project) => ({
-      ...project,
-      sidebarCollapsed: collapsed.has(project.id),
-    }));
-    void updateDesktopSettings({ projects: updatedProjects }).catch(() => {});
-  }, []);
-
-  const scheduleCollapsedProjectsPersist = React.useCallback((collapsed: Set<string>) => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    pendingCollapsedProjects.current = collapsed;
-    if (persistCollapsedProjectsTimer.current !== null) {
-      window.clearTimeout(persistCollapsedProjectsTimer.current);
-    }
-    persistCollapsedProjectsTimer.current = window.setTimeout(() => {
-      flushCollapsedProjectsPersist();
-    }, 700);
-  }, [flushCollapsedProjectsPersist]);
-
-  React.useEffect(() => {
-    return () => {
-      if (typeof window !== 'undefined' && persistCollapsedProjectsTimer.current !== null) {
-        window.clearTimeout(persistCollapsedProjectsTimer.current);
-      }
-      persistCollapsedProjectsTimer.current = null;
-      pendingCollapsedProjects.current = null;
-    };
-  }, []);
 
   React.useEffect(() => {
     try {
@@ -114,5 +69,4 @@ export const useSidebarPersistence = (args: Args) => {
     }
   }, [collapsedGroups, keys.groupCollapse, safeStorage]);
 
-  return { scheduleCollapsedProjectsPersist };
 };

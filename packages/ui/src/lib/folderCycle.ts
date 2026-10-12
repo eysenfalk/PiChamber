@@ -1,13 +1,10 @@
 import { buildDraftTargetProjects, GLOBAL_PROJECT_ID } from '@/components/chat/composer/state/draftTargetProjects';
-import type { Session } from '@/lib/chat/types';
 import { normalizePath } from '@/lib/pathNormalization';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSidebarSpaceStore } from '@/stores/useSidebarSpaceStore';
-import { useUIStore } from '@/stores/useUIStore';
 import { buildAvailableWorktreesByProject, useWorktreeStore } from '@/stores/useWorktreeStore';
-import { getSyncSessions } from '@/sync/sync-refs';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 
 /**
@@ -22,15 +19,12 @@ export function getNextCycleId(orderedIds: readonly string[], currentId: string 
   return orderedIds[(index + 1) % orderedIds.length] ?? null;
 }
 
-type SessionWithDirectory = Session & { directory?: string | null };
-
 /**
- * Global folder switch (Ctrl+Shift+F, or the application menu): same effect
- * as clicking a folder in the left folder picker. Points the active project at
- * the target project in sidebar order, then selects a session in that folder
- * or opens a draft when the folder is empty. Wraps; never includes `__home__`
- * (the sidebar never lists it). The optional direction lets the application
- * menu move backward while the keyboard shortcut keeps moving forward.
+ * Global folder switch (Ctrl+Shift+F, or the application menu): moves the
+ * sidebar tree selection to the next project in sidebar order and points the
+ * active project at it, like clicking the project row. Opens no session.
+ * Wraps; never includes `__home__`. The optional direction lets the
+ * application menu move backward while the keyboard shortcut moves forward.
  *
  * Returns true when it acted, false when there was nothing to cycle.
  */
@@ -60,34 +54,9 @@ export function cycleSessionFolder(direction: 1 | -1 = 1): boolean {
   if (!nextId) {
     return false;
   }
-  const next = projects.find((project) => project.id === nextId);
-  const nextDir = normalizePath(next?.path ?? null);
-  if (!next || !nextDir) {
-    return false;
-  }
 
   projectsState.setActiveProjectIdOnly(nextId);
-  // The left folder rail is a view filter, not derived state: selecting a
-  // session never moves it, so folder navigation must move it explicitly —
-  // exactly like clicking the folder in the rail does.
-  useSidebarSpaceStore.getState().selectSpace(nextId);
-  useUIStore.getState().closeMainSurfaces();
-
-  const worktrees = buildAvailableWorktreesByProject(projects, useWorktreeStore.getState());
-  const match = getSyncSessions().find((session) => {
-    const dir = normalizePath((session as SessionWithDirectory).directory ?? null);
-    if (!dir) {
-      return false;
-    }
-    return resolveProjectForSessionDirectory(projects, worktrees, dir)?.id === nextId;
-  });
-  if (match) {
-    const matchDir = normalizePath((match as SessionWithDirectory).directory ?? null);
-    useSessionUIStore.getState().setCurrentSession(match.id, matchDir);
-    return true;
-  }
-
-  useSessionUIStore.getState().openNewSessionDraft({ selectedProjectId: nextId, directoryOverride: nextDir });
+  useSidebarSpaceStore.getState().select(`p:${nextId}`);
   return true;
 }
 
@@ -153,7 +122,7 @@ export function cycleDraftFolder(): boolean {
 
   if (projectsState.activeProjectId !== next.ownerProjectId) {
     projectsState.setActiveProjectIdOnly(next.ownerProjectId);
-    useSidebarSpaceStore.getState().selectSpace(next.ownerProjectId);
+    useSidebarSpaceStore.getState().select(`p:${next.ownerProjectId}`);
   }
   sessionUI.setNewSessionDraftTarget({
     projectId: next.ownerProjectId,

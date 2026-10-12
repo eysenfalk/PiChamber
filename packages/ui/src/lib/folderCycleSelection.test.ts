@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { ProjectEntry } from '@/lib/api/types';
 
-// The sidebar space (folder) selection must follow Ctrl+Shift+F. These tests
-// drive the real cycle action and assert the selection store — the same store
-// the spaces rail reads — moves with the new active project.
+// The sidebar tree selection must follow Ctrl+Shift+F. These tests drive the
+// real cycle action and assert it moves the selection without opening a session.
 const setCurrentSessionCalls: Array<{ id: string | null; directory: string | null }> = [];
 const openNewSessionDraftCalls: Array<unknown> = [];
 const closeMainSurfacesCalls: number[] = [];
@@ -63,39 +62,36 @@ beforeEach(() => {
     activeProjectId: projectA.id,
     manualProjectOrder: [projectA.id, projectB.id],
   });
-  useSidebarSpaceStore.setState({
-    selectedSpaceId: projectA.id,
-    selectedWorktreePath: '/repo-a/wt-1',
-  });
+  useSidebarSpaceStore.setState({ selectedNodeKey: 'w:/repo-a/wt-1' });
 });
 
+const expectNoSessionOpened = () => {
+  expect(setCurrentSessionCalls).toEqual([]);
+  expect(openNewSessionDraftCalls).toEqual([]);
+  expect(closeMainSurfacesCalls).toEqual([]);
+};
+
 describe('cycleSessionFolder sidebar selection', () => {
-  test('moves the sidebar space selection to the cycled folder', () => {
+  test('moves the tree selection to the cycled project and opens no session', () => {
     expect(cycleSessionFolder()).toBe(true);
 
     expect(useProjectsStore.getState().activeProjectId).toBe(projectB.id);
-    expect(setCurrentSessionCalls).toEqual([{ id: 'session-b', directory: '/repo-b' }]);
-    // The spaces rail reads this store: it must show the folder we cycled to,
-    // and drop the previous folder's worktree pin.
-    expect(useSidebarSpaceStore.getState().selectedSpaceId).toBe(projectB.id);
-    expect(useSidebarSpaceStore.getState().selectedWorktreePath).toBeNull();
+    expect(useSidebarSpaceStore.getState().selectedNodeKey).toBe(`p:${projectB.id}`);
+    expectNoSessionOpened();
   });
 
   test('cycles backward for the application menu previous-project action', () => {
     useProjectsStore.setState({ activeProjectId: projectB.id });
-    useSidebarSpaceStore.setState({ selectedSpaceId: projectB.id, selectedWorktreePath: null });
+    useSidebarSpaceStore.setState({ selectedNodeKey: `p:${projectB.id}` });
 
     expect(cycleSessionFolder(-1)).toBe(true);
 
     expect(useProjectsStore.getState().activeProjectId).toBe(projectA.id);
-    expect(useSidebarSpaceStore.getState().selectedSpaceId).toBe(projectA.id);
-    expect(openNewSessionDraftCalls).toEqual([{
-      selectedProjectId: projectA.id,
-      directoryOverride: projectA.path,
-    }]);
+    expect(useSidebarSpaceStore.getState().selectedNodeKey).toBe(`p:${projectA.id}`);
+    expectNoSessionOpened();
   });
 
-  test('leaves the space selection alone when there is nothing to cycle', () => {
+  test('leaves the selection alone when there is nothing to cycle', () => {
     useProjectsStore.setState({
       projects: [projectA],
       activeProjectId: projectA.id,
@@ -104,7 +100,6 @@ describe('cycleSessionFolder sidebar selection', () => {
 
     expect(cycleSessionFolder()).toBe(false);
 
-    expect(useSidebarSpaceStore.getState().selectedSpaceId).toBe(projectA.id);
-    expect(useSidebarSpaceStore.getState().selectedWorktreePath).toBe('/repo-a/wt-1');
+    expect(useSidebarSpaceStore.getState().selectedNodeKey).toBe('w:/repo-a/wt-1');
   });
 });

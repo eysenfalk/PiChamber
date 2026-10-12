@@ -1,3 +1,4 @@
+import type { SessionRenderContext } from './sessionNodeTypes';
 import React from 'react';
 import type { MainTab } from '@/stores/useUIStore';
 import type { SortableDragHandleProps } from './sortableItems';
@@ -36,7 +37,7 @@ export type SessionGroupSectionProps = {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: SessionRenderContext,
     renderExtras?: SessionNodeRenderExtras,
   ) => React.ReactNode;
   showMoreGroupSessions: (groupKey: string, currentVisibleCount: number) => void;

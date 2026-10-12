@@ -1,3 +1,4 @@
+import type { SessionRenderContext } from './sessionNodeTypes';
 import React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { SessionNode } from './types';
@@ -21,7 +22,7 @@ export interface VirtualArchivedSessionListProps {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: SessionRenderContext,
     renderExtras?: SessionNodeRenderExtras
   ) => React.ReactNode;
   getRenderExtras: (node: SessionNode) => SessionNodeRenderExtras;

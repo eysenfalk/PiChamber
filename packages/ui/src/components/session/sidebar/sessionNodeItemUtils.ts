@@ -1,3 +1,4 @@
+import type { SessionRenderContext } from './sessionNodeTypes';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { getPinnedSessionKey } from '@/stores/useSessionPinnedStore';
 import type { SessionNode } from './types';
@@ -166,7 +167,7 @@ export const nodeHasPinnedMembershipChange = (
 export const resolveMenuOpenSessionId = (
   nodes: SessionNode[],
   menuKey: string | null,
-  renderContext: 'project' | 'recent',
+  renderContext: SessionRenderContext,
   archivedBucket: boolean,
 ): string | null => {
   if (!menuKey) return null;

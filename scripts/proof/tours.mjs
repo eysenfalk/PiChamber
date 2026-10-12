@@ -104,6 +104,47 @@ export function forkRenameTour(manifest) {
   ] });
 }
 
+/** Issue #95: one workspace tree. Chats, projects with their worktrees, fork chains and other folders in one compact list. */
+export function sidebarTreeTour(manifest) {
+  const sessions = manifest?.sessions;
+  const project = manifest?.projects?.find(candidate => candidate.name === manifest?.worktrees?.[0]?.project);
+  const find = role => sessions?.find(session => session.role === role && nonempty(session.title));
+  const [long, fork, forkChild, chat] = ['long', 'fork', 'fork-child', 'chat'].map(find);
+  const worktrees = sessions?.filter(session => session.role === 'worktree' && session.project === project?.name && nonempty(session.worktree)) ?? [];
+  if (!project || !nonempty(project.path) || !long || !fork || !forkChild || !chat || worktrees.length < 2) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const row = key => `[data-tree-node="${key}"]`;
+  const main = row(`w:${project.path}`);
+  const expand = [
+    { type: 'wait', text: label }, { type: 'click', text: label }, { type: 'wait', selector: main },
+    { type: 'click', selector: main }, { type: 'wait', text: long.title },
+  ];
+  const tree = [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }, { selector: `${main}[aria-expanded="true"]` },
+    ...worktrees.map(worktree => ({ text: worktree.worktree })), { text: long.title }];
+  return validateTour({ name: 'sidebar-tree', steps: [
+    { caption: 'One tree instead of two areas: Chats on top, then projects. Nothing is expanded yet.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[role="tree"]' }, { type: 'wait', text: label }],
+      evidence: [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }] },
+    { caption: `Clicking ${label} selects and expands it and shows its worktrees. Clicking main shows its sessions.`, viewport: 'desktop', theme: 'light',
+      actions: expand, evidence: tree },
+    { caption: 'Forks sit under their parent session, with a fork count.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
+        { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],
+      evidence: [{ text: long.title }, { text: fork.title }, { text: forkChild.title }, { selector: '[aria-label="1 fork"]' }] },
+    { caption: 'Chats holds sessions started without a project, in the home directory.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: 'Chats' }, { type: 'wait', text: chat.title }],
+      evidence: [{ selector: `${row('chats')}[aria-expanded="true"]` }, { text: chat.title }] },
+    { caption: 'The same tree in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
+      evidence: [{ selector: 'html.dark [role="tree"]' }, { text: chat.title }, { text: long.title }] },
+    { caption: 'The hosted mobile drawer shows the same tree.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
+        { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: '[data-mobile-sessions-drawer] [role="tree"]' }],
+      evidence: [{ selector: '[data-mobile-sessions-drawer] [role="tree"]' }, { text: 'Chats' }, { text: label }] },
+    { caption: 'Mobile in light theme.', viewport: 'mobile', theme: 'light', actions: [],
+      evidence: [{ selector: '[data-mobile-sessions-drawer] [role="tree"]' }, { text: label }] },
+  ] });
+}
+
 /** Issue #46: the create-device dialog on a server without Tailscale (the lab pod has none) keeps the home network as default. */
 export function addDeviceTour() {
   // Desktop opens Settings from the URL; hosted mobile ignores `?settings=` and goes through the drawer.

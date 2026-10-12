@@ -1,3 +1,4 @@
+import type { SessionRenderContext } from './sidebar/sessionNodeTypes';
 import React from 'react';
 import { cn } from '@/lib/utils';
 import type { SessionFolder } from '@/stores/useSessionFoldersStore';
@@ -31,7 +32,7 @@ interface SessionFolderItemProps<TSessionNode extends { session: { id: string } 
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null } | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: SessionRenderContext,
     renderExtras?: SessionNodeChildRenderExtras,
   ) => React.ReactNode;
   /**
