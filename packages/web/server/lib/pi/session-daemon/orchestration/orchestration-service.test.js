@@ -37,7 +37,7 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
   return runtime;
 };
 
-const createHarness = ({ workerLimit = 4 } = {}) => {
+const createHarness = ({ workerLimit = 4, activity = new Map(), now } = {}) => {
   const runtimes = new Map();
   const states = new Map();
   const add = (runtime) => { runtimes.set(runtime.session.sessionId, runtime); return runtime; };
@@ -67,6 +67,8 @@ const createHarness = ({ workerLimit = 4 } = {}) => {
     ],
     hostStatus: () => ({ cpuCount: 8 }),
     resolveBranch: async () => 'main',
+    getSessionActivity: (sessionId) => activity.get(sessionId),
+    now,
   };
   const service = createOrchestrationService(deps);
   const settle = async (sessionId, assistant) => {
@@ -161,6 +163,32 @@ describe('orchestration service', () => {
     await expect(waiting).resolves.toMatchObject({
       timedOut: false,
       sessions: [{ sessionId: 'worker-1', state: 'idle', outcome: 'completed', lastReply: 'done here' }],
+    });
+  });
+
+  it('shows a stuck, retrying, blocked or failed worker in list and read', async () => {
+    const activity = new Map();
+    const { service, runtimes, states, settle } = createHarness({ activity, now: () => 100_000 });
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' });
+    runtimes.get('worker-1').session.messages.push({ role: 'user', content: 'one', timestamp: 40_000 });
+    activity.set('worker-1', { runStartedAt: 30_000, waitingForInput: true });
+    states.set('worker-2', 'retry');
+    activity.set('worker-2', { runStartedAt: 90_000, retry: { attempt: 2, message: '400 invalid thinking', next: 1 } });
+
+    const listed = await service.call('orch', 'session_list', {});
+    expect(listed.sessions).toEqual([
+      expect.objectContaining({ sessionId: 'worker-1', state: 'busy', activity: { runningForMs: 70_000, quietForMs: 60_000, waitingForInput: true } }),
+      expect.objectContaining({ sessionId: 'worker-2', state: 'retry', activity: { runningForMs: 10_000, retry: { attempt: 2, error: '400 invalid thinking' } } }),
+    ]);
+
+    runtimes.get('worker-2').session.messages.push({ role: 'assistant', content: [], stopReason: 'error', errorMessage: '400 invalid thinking' });
+    await settle('worker-2');
+    const read = await service.call('orch', 'session_read', { sessionId: 'worker-2' });
+    expect(read).toMatchObject({ state: 'idle', outcome: 'error', error: '400 invalid thinking' });
+    expect(read).not.toHaveProperty('activity');
+    await expect(service.call('orch', 'session_list', { scope: 'all' })).resolves.toMatchObject({
+      sessions: expect.arrayContaining([expect.objectContaining({ sessionId: 'worker-2', outcome: 'error', error: '400 invalid thinking' })]),
     });
   });
 

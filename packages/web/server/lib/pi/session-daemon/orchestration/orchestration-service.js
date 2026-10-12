@@ -73,6 +73,11 @@ const outcomeOf = (message) => {
   return 'completed';
 };
 
+const lastTimestamp = (runtime) => {
+  const timestamp = runtime?.session?.messages?.at?.(-1)?.timestamp;
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+};
+
 const toolByName = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool]));
 
 /**
@@ -91,6 +96,7 @@ export function createOrchestrationService(deps) {
     listModels,
     hostStatus,
     resolveBranch = async () => undefined,
+    getSessionActivity = () => ({}),
     now = () => Date.now(),
   } = deps;
 
@@ -127,16 +133,45 @@ export function createOrchestrationService(deps) {
     }
   };
 
+  // Signals an orchestrator needs to spot a stuck worker: how long the
+  // current run has lasted, how long since its transcript last moved, an
+  // automatic retry after a provider error, and a blocking dialog. Only
+  // present while the worker runs; a settled run reports outcome and error.
+  const activityOf = (sessionId, runtime, state) => {
+    if (state !== 'busy' && state !== 'retry' && state !== 'starting') return undefined;
+    const { runStartedAt, retry, waitingForInput } = getSessionActivity(sessionId) ?? {};
+    const at = now();
+    const last = lastTimestamp(runtime);
+    const activity = {
+      ...(Number.isFinite(runStartedAt) ? { runningForMs: Math.max(0, at - runStartedAt) } : {}),
+      ...(last !== undefined ? { quietForMs: Math.max(0, at - Math.max(last, runStartedAt ?? 0)) } : {}),
+      ...(retry ? { retry: { attempt: retry.attempt, error: retry.message } } : {}),
+      ...(waitingForInput ? { waitingForInput: true } : {}),
+    };
+    return Object.keys(activity).length ? activity : undefined;
+  };
+
+  const runStatus = (sessionId, runtime, state) => {
+    const assistant = lastAssistant(runtime);
+    const activity = activityOf(sessionId, runtime, state);
+    return {
+      ...(assistant ? { outcome: outcomeOf(assistant) } : {}),
+      ...(typeof assistant?.errorMessage === 'string' ? { error: assistant.errorMessage } : {}),
+      ...(activity ? { activity } : {}),
+    };
+  };
+
   const describeWorker = async (record) => {
     const live = getLiveRuntime(record.sessionId);
+    const state = record.stopped ? 'stopped' : stateOf(record.sessionId);
     return {
       sessionId: record.sessionId,
       title: record.title,
       cwd: record.cwd,
       role: record.role,
       branch: await resolveBranch(record.cwd).catch(() => undefined),
-      state: record.stopped ? 'stopped' : stateOf(record.sessionId),
-      ...(live ? {} : { resident: false }),
+      state,
+      ...(live ? runStatus(record.sessionId, live, state) : { resident: false }),
     };
   };
 
@@ -278,13 +313,18 @@ export function createOrchestrationService(deps) {
     const runtime = await callerRuntime(callerSessionId);
     if (args.scope === 'all') {
       return {
-        sessions: listLiveRuntimes().map((candidate) => ({
-          sessionId: candidate.session.sessionId,
-          cwd: candidate.cwd,
-          title: candidate.session.sessionManager?.getSessionName?.(),
-          state: stateOf(candidate.session.sessionId),
-          ...(lineageOf(candidate) ? { parentSessionId: lineageOf(candidate).parentSessionId } : {}),
-        })),
+        sessions: listLiveRuntimes().map((candidate) => {
+          const sessionId = candidate.session.sessionId;
+          const state = stateOf(sessionId);
+          return {
+            sessionId,
+            cwd: candidate.cwd,
+            title: candidate.session.sessionManager?.getSessionName?.(),
+            state,
+            ...runStatus(sessionId, candidate, state),
+            ...(lineageOf(candidate) ? { parentSessionId: lineageOf(candidate).parentSessionId } : {}),
+          };
+        }),
       };
     }
     return { sessions: await Promise.all(childRecordsOf(runtime).map(describeWorker)) };
@@ -292,11 +332,12 @@ export function createOrchestrationService(deps) {
 
   const snapshot = (sessionId, runtime) => {
     const assistant = lastAssistant(runtime);
+    const state = stateOf(sessionId);
     return {
       sessionId,
-      state: stateOf(sessionId),
-      ...(assistant ? { outcome: outcomeOf(assistant), lastReply: truncate(textOf(assistant.content), READ_TEXT_LIMIT) } : {}),
-      ...(typeof assistant?.errorMessage === 'string' ? { error: assistant.errorMessage } : {}),
+      state,
+      ...runStatus(sessionId, runtime, state),
+      ...(assistant ? { lastReply: truncate(textOf(assistant.content), READ_TEXT_LIMIT) } : {}),
     };
   };
 

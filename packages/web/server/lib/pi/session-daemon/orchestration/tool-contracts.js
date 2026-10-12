@@ -15,6 +15,7 @@ const clientRequestId = {
   pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$',
   description: 'Idempotency key. Use a new value per intent and the same value when retrying it.',
 };
+const RUN_STATUS = 'Each session reports state, the outcome and error of its last turn, and while it runs an activity object: runningForMs, quietForMs since its transcript last changed, retry with the provider error during an automatic retry, and waitingForInput when a dialog blocks it.';
 const thinking = { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] };
 const model = {
   type: 'object',
@@ -62,7 +63,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'session_list',
     label: 'List sessions',
-    description: 'List sessions. scope "workers" (default) lists this session\'s workers; "all" lists every live session.',
+    description: 'List sessions. scope "workers" (default) lists this session\'s workers; "all" lists every live session. ' + RUN_STATUS,
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -72,7 +73,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'session_read',
     label: 'Read session',
-    description: 'Read a session\'s state and its latest messages as text.',
+    description: 'Read a session\'s state and its latest messages as text. ' + RUN_STATUS,
     parameters: {
       type: 'object',
       additionalProperties: false,

@@ -3829,6 +3829,11 @@ export function createSessionDaemon({
       if (!live) return 'dormant';
       return live.session.isStreaming || activeRunStartedAt.has(sessionId) ? 'busy' : 'idle';
     },
+    getSessionActivity: (sessionId) => ({
+      runStartedAt: activeRunStartedAt.get(sessionId),
+      retry: retryStateBySession.get(sessionId),
+      waitingForInput: Boolean(extensionBridge.getSnapshotState(sessionId).dialogs?.length),
+    }),
     createWorkerSession: async ({ cwd: workerCwd, title, model, thinking, parentSessionPath, lineage }) => {
       const created = await createSession(
         { cwd: workerCwd, title, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) },
