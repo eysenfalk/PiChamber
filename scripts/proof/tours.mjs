@@ -150,6 +150,10 @@ export function sidebarTreeTour(manifest) {
     pill(gitRow('rebase'), 'Rebase in progress'), pill(main, 'No upstream branch'),
   ];
   const projectRollup = pill(projectNode(project), '2 worktrees have uncommitted changes');
+  // Auto fetch (slice 6): the seed pushes a commit to fetch-me's remote that the checkout has not fetched yet.
+  const fetchMe = gitRow('remote-ahead');
+  const fetched = pill(fetchMe, '1 commit to pull*');
+  const autoFetch = '[data-settings-item="git.auto-fetch"]';
   return validateTour({ name: 'sidebar-tree', steps: [
     { caption: 'One tree instead of two areas: Chats on top, then projects. Nothing is expanded yet.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[role="tree"]' }, { type: 'wait', text: label }],
@@ -157,7 +161,15 @@ export function sidebarTreeTour(manifest) {
     { caption: `Clicking ${label} selects and expands it and shows its worktrees. Clicking main shows its sessions.`, viewport: 'desktop', theme: 'light',
       actions: expand, evidence: tree },
     { caption: 'Each worktree shows its git state: ●2 uncommitted files, ↑2 ↓1 against main, ✓ all committed, a warning while a rebase is stopped, a cloud where main has no upstream.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'wait', selector: pills[0].selector }, { type: 'wait', selector: pills[5].selector }], evidence: pills },
+      actions: [{ type: 'wait', selector: pills[0].selector }, { type: 'wait', selector: pills[5].selector }],
+      evidence: [...pills, { selector: `${fetchMe}:not(:has([aria-label^="1 commit to pull"]))` }] },
+    { caption: 'Settings > Git has Auto fetch, off by default. Turning it on fetches every 15 minutes, without ever asking for credentials.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '?settings=git' }, { type: 'wait', selector: `${autoFetch}[aria-pressed="false"]` },
+        { type: 'click', selector: autoFetch }, { type: 'wait', selector: `${autoFetch}[aria-pressed="true"]` }],
+      evidence: [{ selector: `${autoFetch}[aria-pressed="true"]` }, { text: 'Auto fetch interval' }, { text: '15 min' }] },
+    { caption: 'Back in the tree, fetch-me shows ↓1: the commit pushed to its remote arrived without a manual fetch.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: main }, { type: 'wait', selector: fetched.selector }],
+      evidence: [fetched, { text: long.title }] },
     { caption: 'Forks sit under their parent session, with a fork count.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
         { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],

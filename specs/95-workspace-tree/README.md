@@ -4,11 +4,11 @@ Temporary spec for #95 ([ADR 0009](../../docs/adr/0009-spec-folder-for-multi-pr-
 
 ## Next agent prompt
 
-Status 2026-10-12: slices 1 (PR #100), 2 (PR #105), 3 (PR #109), 4 (PR #111) and 5 are merged into `dev`; the owner approved all slice plans on 2026-10-12, so each slice goes from plan to merge without a new approval round. Choices taken without asking are in [choices.md](choices.md).
+Status 2026-10-12: slices 1 (PR #100), 2 (PR #105), 3 (PR #109), 4 (PR #111), 5 (PR #114) and 6 are merged into `dev`; the owner approved all slice plans on 2026-10-12, so each slice goes from plan to merge without a new approval round. Choices taken without asking are in [choices.md](choices.md).
 
 You are picking up the sidebar workspace tree. Read this README, then the slice file of the next open slice, then `AGENTS.md` and every project skill the slice names. Work in one branch and one draft pull request per slice, based on `origin/dev`. Start a slice only after the previous one is merged into `dev`; slices are not stacked. Do not implement before the owner approved the pull request's plan.
 
-Next pickup: [slice 6, Auto fetch](slices/6-auto-fetch.md). Its server part is prepared on `98-git-fetch-noninteractive` (rebase onto `dev` first); slice 7 is prepared on `99-sidebar-quick-create` and conflicts with the slice 5 git slot in `TreeContainerRow.tsx`.
+Next pickup: [slice 7, Quick create](slices/7-quick-create.md), prepared on `99-sidebar-quick-create`; rebase it onto `dev` first, its tour steps conflict with the slice 6 auto fetch steps in `scripts/proof/tours.mjs`.
 
 Blockers: none.
 
@@ -18,8 +18,8 @@ Global TODO:
 - [x] [2 Tree in the sidebar](slices/2-tree-mounted.md) (#96, PR #105)
 - [x] [3 Parity and cleanup](slices/3-parity.md) (closes #96, PR #109)
 - [x] [4 Visibility filter and quick search](slices/4-filter-search.md) (closes #97, PR #111)
-- [x] [5 Git pills and pull requests](slices/5-git-pills.md) (#98)
-- [ ] [6 Auto fetch](slices/6-auto-fetch.md) (closes #98)
+- [x] [5 Git pills and pull requests](slices/5-git-pills.md) (#98, PR #114)
+- [x] [6 Auto fetch](slices/6-auto-fetch.md) (closes #98)
 - [ ] [7 Quick create](slices/7-quick-create.md) (closes #99, deletes this folder)
 
 When you finish a slice: check its box, update the status line and the next pickup, and correct anything in this spec the work proved wrong, in the same pull request.
