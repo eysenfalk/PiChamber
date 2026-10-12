@@ -10,7 +10,7 @@ You are picking up the fixed orchestrator. Read this README, then the slice file
 
 Next pickup: [slice 1, Registry, reservation and takeover](slices/1-registry.md).
 
-Blockers: none for slice 1 beyond #112. Roles are the eleven confirmed by the owner: `orchestrate`, `plan`, `oracle`, `debug`, `task-easy`, `task-medium`, `task-hard`, `task-extreme`, `research`, `small`, `review`. Precondition for slice 1: the role enum and defaults of #113 and the skill of #112 use exactly these names. At `de6fd11e` #107 still had `implement-*` plus `task`; the orchestrator is having that corrected. If they still differ when slice 1 starts, stop and report.
+Blockers: none for slice 1 beyond #112. Roles are the eleven confirmed by the owner: `orchestrate`, `plan`, `oracle`, `debug`, `task-easy`, `task-medium`, `task-hard`, `task-extreme`, `research`, `small`, `review`. Compared revisions: #113 at `ff510a92` (`ORCHESTRATION_ROLES` in `settings-store.js:77`, enum in `orchestration/tool-contracts.js:52`) and #112 at `0c9683d9` (`.agents/skills/orchestrator/SKILL.md:71-87`) both use exactly these names. Slice 1 checks again that the merged state still does; if not, stop and report.
 
 Global TODO:
 

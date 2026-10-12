@@ -2,7 +2,7 @@
 
 Part of #118. Depends on #110 (PR #112) merged, and on #107 (PR #113) merged or, if still open, stacked on `107-orchestration-mcp` as the README describes. Proposed role: `task-hard`.
 
-Precondition, checked before the plan of this slice is written: the role enum in #113's `orchestration/tool-contracts.js`, the role defaults and tests in its `settings-store.js`, and #112's `orchestrator` skill use exactly the eleven names `orchestrate`, `plan`, `oracle`, `debug`, `task-easy`, `task-medium`, `task-hard`, `task-extreme`, `research`, `small`, `review`. If any of them differs, stop and report to the orchestrator; this slice adds no role names.
+Precondition, checked before the plan of this slice is written: the role enum in #113's `orchestration/tool-contracts.js`, the role defaults and tests in its `settings-store.js`, and #112's `orchestrator` skill use exactly the eleven names `orchestrate`, `plan`, `oracle`, `debug`, `task-easy`, `task-medium`, `task-hard`, `task-extreme`, `research`, `small`, `review`. At #113 `ff510a92` and #112 `0c9683d9` all three match. If the merged state differs, stop and report to the orchestrator; this slice adds no role names.
 
 ## Contract
 
