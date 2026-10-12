@@ -14,7 +14,7 @@ import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.
 
 export const LINEAGE_ENTRY = 'pichamber.orchestration.lineage';
 export const CHILD_ENTRY = 'pichamber.orchestration.child';
-export const STOPPED_ENTRY = 'pichamber.orchestration.stopped';
+const STOPPED_ENTRY = 'pichamber.orchestration.stopped';
 export const RESULT_MESSAGE = 'pichamber.orchestration.result';
 
 const RESULT_TEXT_LIMIT = 16 * 1024;
@@ -36,7 +36,7 @@ const customEntries = (runtime, customType) => {
   return entries.filter((entry) => entry?.type === 'custom' && entry.customType === customType);
 };
 
-export const lineageOf = (runtime) => customEntries(runtime, LINEAGE_ENTRY).at(-1)?.data;
+const lineageOf = (runtime) => customEntries(runtime, LINEAGE_ENTRY).at(-1)?.data;
 
 /** Worker records of a parent, in spawn order, with their stopped flag. */
 export const childRecordsOf = (runtime) => {

@@ -17,6 +17,13 @@ revoked or globally invalidated.
   tracking, relay-demand signals, revocation, and principal validation.
 - `pairing.js`: short-lived Pairing v2 sessions and one-time secret redemption
   into trusted-device client tokens.
+- `orchestration-credentials.js`: session-scoped bearer credentials for the
+  orchestration MCP endpoint `POST /api/pi/mcp` (`pcorch_…`). In memory only,
+  SHA-256 hashed, eight hour lifetime, 30 minute idle expiry, at most 256
+  (oldest gives way), revoked when the session is deleted and on server
+  restart. The raw token is returned once by the mint route and never logged.
+  The global `/api` gate lets such a bearer reach that one path (POST, outside
+  the tunnel scope); the route verifies it. See [ADR 0010](../../../../../docs/adr/0010-orchestration-through-daemon-tools.md).
 - `principal-tracker.js`: live connection tracking by principal plus the
   revocation coordinator that closes tracked connections on revocation.
 
@@ -29,6 +36,8 @@ client supplies:
 - `client:<id>` — a remote-client bearer token resolved through the hashed
   token store.
 - The raw UI session JWT — a browser session authenticated by its cookie.
+- `orch:<sessionId>` — an orchestration MCP credential; it authorizes only
+  `POST /api/pi/mcp` acting as that session and opens no live connection.
 - Opaque session tokens in passwordless mode (no credential store; no
   revocation concept).
 

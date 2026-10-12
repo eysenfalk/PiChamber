@@ -74,9 +74,9 @@ const normalizeRetryLimit = (value) => {
   return value;
 };
 
-export const ORCHESTRATION_ROLES = Object.freeze(['implementation', 'research', 'small', 'review']);
-export const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
-export const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
+const ORCHESTRATION_ROLES = Object.freeze(['implementation', 'research', 'small', 'review']);
+const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
+const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
 
 // Role defaults name only the model id: the provider that serves it is resolved
 // against the live catalog when a worker starts, so a default never pins a

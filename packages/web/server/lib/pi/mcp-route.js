@@ -12,7 +12,7 @@
 import { ORCHESTRATION_MCP_SERVER, ORCHESTRATION_TOOLS } from './session-daemon/orchestration/tool-contracts.js';
 import { ORCHESTRATION_MCP_PATH, bearerTokenFrom } from '../client-auth/orchestration-credentials.js';
 
-export const MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_INFO = { name: ORCHESTRATION_MCP_SERVER, version: '1.0.0' };
 const TOOL_NAMES = new Set(ORCHESTRATION_TOOLS.map((tool) => tool.name));
 const MCP_TOOLS = ORCHESTRATION_TOOLS.map((tool) => ({

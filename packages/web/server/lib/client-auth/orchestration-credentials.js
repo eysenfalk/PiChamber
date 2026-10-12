@@ -9,16 +9,16 @@
 
 import crypto from 'node:crypto';
 
-export const ORCHESTRATION_TOKEN_PREFIX = 'pcorch_';
-export const ORCHESTRATION_PRINCIPAL_PREFIX = 'orch:';
-export const DEFAULT_ORCHESTRATION_CREDENTIAL_LIFETIME_MS = 8 * 60 * 60 * 1000;
-export const DEFAULT_ORCHESTRATION_CREDENTIAL_IDLE_MS = 30 * 60 * 1000;
+const ORCHESTRATION_TOKEN_PREFIX = 'pcorch_';
+const ORCHESTRATION_PRINCIPAL_PREFIX = 'orch:';
+const DEFAULT_ORCHESTRATION_CREDENTIAL_LIFETIME_MS = 8 * 60 * 60 * 1000;
+const DEFAULT_ORCHESTRATION_CREDENTIAL_IDLE_MS = 30 * 60 * 1000;
 const MAX_CREDENTIALS = 256;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token, 'utf8').digest('hex');
 
 /** Cheap shape check used by the global /api gate before the route verifies the token. */
-export const isOrchestrationToken = (token) => typeof token === 'string'
+const isOrchestrationToken = (token) => typeof token === 'string'
   && token.startsWith(ORCHESTRATION_TOKEN_PREFIX)
   && token.length > ORCHESTRATION_TOKEN_PREFIX.length;
 

@@ -12,6 +12,14 @@ Live context: what we know but have not settled yet. Every entry names its sourc
 
 An RPC host receives the async status snapshot as widget `subagent-async`, line 0: `PI_SUBAGENT_ASYNC_JSON:` followed by JSON with `kind` `pi-subagents.async-status-snapshot` and `version` 1, capped at 32 KiB serialized. Hosts must not render the widget `subagent-inspect`; it carries on demand inspect replies. Before #30 the bridge and the public route projection cut every widget line at 2000 characters, which broke any larger snapshot; they now keep the `subagent-async` line 0 whole up to the cap. A new version, kind or node state makes the card show "Subagent status unavailable" until its parser learns it.
 
+### The proof lab has no model; Pi's faux provider scripts one
+
+- Source: `lab/README.md` and the #110 worker's report (2026-10-12); `@earendil-works/pi-ai` `providers/faux` used by `session-daemon/orchestration/orchestration.e2e.test.js`
+- Date: 2026-10-12
+- Settled by: a decision record on which model lab recordings use, or a model configured in the lab
+
+The lab image carries no provider credentials, so a recording of agent behavior needs a scripted model. Pi's faux provider registers a model whose replies, including tool calls, come from a script; the orchestration daemon test drives a real runtime with it.
+
 ### Intent checkpoints rely on Pi extension behavior that is not proven yet
 
 - Source: Pi 1.0.2 `docs/extensions.md` (`pi.appendEntry()`, `turn_end`) and `docs/session-format.md` (forks); `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md` (blocking extension dialogs); ADR 0006

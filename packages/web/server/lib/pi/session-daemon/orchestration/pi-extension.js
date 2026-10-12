@@ -7,7 +7,7 @@ import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName } from 
 // environment; PiChamber sessions share one daemon process, where such a token
 // would be shared by all sessions and readable through `bash`.
 
-export const ORCHESTRATION_EXTENSION_NAME = 'pichamber-orchestration';
+const ORCHESTRATION_EXTENSION_NAME = 'pichamber-orchestration';
 
 const CHILD_FORBIDDEN_TOOLS = new Set(
   ORCHESTRATION_TOOLS.filter((tool) => tool.childAllowed === false).map((tool) => qualifiedToolName(tool.name)),

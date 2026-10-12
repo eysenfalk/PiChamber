@@ -8,7 +8,7 @@
  * falls back to the generic extension card.
  */
 
-export const ORCHESTRATION_RESULT_MESSAGE_TYPE = 'pichamber.orchestration.result';
+const ORCHESTRATION_RESULT_MESSAGE_TYPE = 'pichamber.orchestration.result';
 
 export type OrchestrationOutcome = 'completed' | 'interrupted' | 'error';
 
