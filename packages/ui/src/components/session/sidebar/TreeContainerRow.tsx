@@ -80,10 +80,12 @@ type ContainerRowProps = {
   rename?: { value: string; onChange: (value: string) => void; onSave: () => void; onCancel: () => void };
   mobileVariant: boolean;
   query?: string;
+  /** Git pills of a worktree, or the dirty rollup of a collapsed project. */
+  git?: React.ReactNode;
 };
 
 /** Container rows are not tab stops: the `treeitem` around them carries the roving focus. */
-export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant, query = '' }) => {
+export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant, query = '', git }) => {
   const { node } = row;
   const longPress = useLongPressMenu();
   const expandable = node.kind !== 'more' && node.children.length > 0;
@@ -118,6 +120,7 @@ export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onAct
               <Icon name="eye-off" className="size-3" />
             </span>
           ) : null}
+          {git}
           <CountSlot node={node} expanded={row.expanded} />
         </>
       )}
