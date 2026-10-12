@@ -1,48 +1,49 @@
-import { isAbsolute, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 
-import { schemaViolation } from './contract-validator.js';
+import { OrchestrationError } from './errors.js';
+import { workerPreamble } from './instructions.js';
+import { authorize, needsOwnership } from './policy.js';
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
+import {
+  applyDurability,
+  applySettle,
+  beginStep,
+  ensureOwner,
+  failOperation,
+  finishStep,
+  importLineage,
+  keepInput,
+  ownedOperation,
+  recordSession,
+  releaseInput,
+  requestKey,
+  reserveForInput,
+  reserveSpawn,
+  slotsInUse,
+  takeOver,
+} from './worker-registry.js';
 
-// Daemon-owned orchestration: tool semantics, permissions, limits, lineage,
+// Daemon-owned orchestration: tool semantics, permissions, limits, ownership,
 // idempotency and completion delivery. Adapters (the in-process Pi extension
 // and the MCP endpoint) only resolve the calling session and forward here.
 //
-// Lineage lives in Pi's own session files, no separate store:
-// - the child's JSONL header names its parent (`parentSession`), and the child
-//   carries a `pichamber.orchestration.lineage` entry with the parent id;
-// - the parent carries one `pichamber.orchestration.child` entry per worker
-//   and a `pichamber.orchestration.stopped` entry once it stopped it.
+// Ownership and bookkeeping live in the durable registry
+// (`registry-store.js`, rules in `worker-registry.js`). A worker still
+// carries a `pichamber.orchestration.lineage` entry naming its first parent
+// and start operation; it marks the session as a worker. #107 kept workers as
+// `pichamber.orchestration.child` entries in the orchestrator's JSONL; those
+// are imported into the registry once per orchestrator and not read again.
 
 export const LINEAGE_ENTRY = 'pichamber.orchestration.lineage';
 export const CHILD_ENTRY = 'pichamber.orchestration.child';
 const STOPPED_ENTRY = 'pichamber.orchestration.stopped';
-const TASK_REJECTED = 'task_rejected';
 export const RESULT_MESSAGE = 'pichamber.orchestration.result';
 
 const RESULT_TEXT_LIMIT = 16 * 1024;
 const READ_TEXT_LIMIT = 8 * 1024;
 const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 3_600_000;
-// Result delivery retries a parent that cannot be reached: 1s, 2s, 4s, then
-// the failure is reported instead of dropped silently.
-const DELIVERY_ATTEMPTS = 4;
-const DELIVERY_RETRY_MS = 1_000;
-// Codes with which the daemon reports a session that no longer exists.
-const GONE_CODES = new Set(['INVALID_SESSION', 'SESSION_NOT_FOUND']);
-// A lookup that failed on storage errors is marked `incomplete`: the
-// session may still exist, so it is not treated as gone.
-const isGone = (error) => GONE_CODES.has(error?.code) && error?.incomplete !== true;
-// The session a call acts as was deleted; adapters revoke its credentials.
-export const CALLER_GONE = 'ORCHESTRATION_CALLER_GONE';
-
-export class OrchestrationError extends Error {
-  constructor(code, message, details) {
-    super(message);
-    this.name = 'OrchestrationError';
-    this.code = code;
-    if (details !== undefined) this.details = details;
-  }
-}
 
 const customEntries = (runtime, customType) => {
   const entries = runtime?.session?.sessionManager?.getEntries?.() ?? [];
@@ -51,21 +52,13 @@ const customEntries = (runtime, customType) => {
 
 const lineageOf = (runtime) => customEntries(runtime, LINEAGE_ENTRY).at(-1)?.data;
 
-/**
- * Worker records of a parent, in spawn order, with their stopped flag. A
- * worker whose first task Pi rejected is stopped and `rejected`: it holds no
- * slot and a spawn retry with the same key starts a new worker.
- */
-export const childRecordsOf = (runtime) => {
-  const stopped = new Map(customEntries(runtime, STOPPED_ENTRY).map((entry) => [entry.data?.sessionId, entry.data]));
+/** Worker records of a parent, in spawn order, with their stopped flag. */
+const childRecordsOf = (runtime) => {
+  const stopped = new Set(customEntries(runtime, STOPPED_ENTRY).map((entry) => entry.data?.sessionId));
   return customEntries(runtime, CHILD_ENTRY)
     .map((entry) => entry.data)
     .filter((data) => data && typeof data.sessionId === 'string')
-    .map((data) => ({
-      ...data,
-      stopped: stopped.has(data.sessionId),
-      ...(stopped.get(data.sessionId)?.reason === TASK_REJECTED ? { rejected: true } : {}),
-    }));
+    .map((data) => ({ ...data, stopped: stopped.has(data.sessionId) }));
 };
 
 const truncate = (text, limit) => {
@@ -99,6 +92,17 @@ const lastTimestamp = (runtime) => {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 };
 
+// Signal 0 probes a pid without touching it; EPERM means it exists.
+const defaultIsProcessAlive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+};
+
 const toolByName = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool]));
 
 /**
@@ -106,6 +110,7 @@ const toolByName = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool]))
  */
 export function createOrchestrationService(deps) {
   const {
+    registry,
     activateSession,
     getLiveRuntime,
     listLiveRuntimes,
@@ -118,27 +123,32 @@ export function createOrchestrationService(deps) {
     hostStatus,
     resolveBranch = async () => undefined,
     getSessionActivity = () => ({}),
-    holdSession = () => () => {},
-    canonicalDirectory = async (directory) => resolve(directory),
-    onDeliveryFailed = () => {},
-    delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
+    // 'present' | 'absent' | 'unknown' for the worker's JSONL.
+    sessionFileState = async () => 'unknown',
+    // A live session created for this start operation, if any.
+    findSessionByOperation = async () => undefined,
     now = () => Date.now(),
+    processId = process.pid,
+    isProcessAlive = defaultIsProcessAlive,
   } = deps;
+
+  // Several daemons can share one data root. Every transitional record
+  // names the process that drives it, so the restart check of one process
+  // never finishes what a live other process is still doing.
+  const self = { pid: processId, instance: randomUUID() };
+  const belongsToLiveProcess = (owner) => Boolean(owner)
+    && (owner.instance === self.instance || isProcessAlive(owner.pid));
 
   // Runs this service started that have not settled yet. A run accepted by
   // Pi may not have emitted agent_start yet, so live streaming state alone
   // would let a wait return before the run began.
-  // Each send holds its own token until its run settles, so a retry that
-  // only returns a stored receipt never releases a newer send's pending run.
-  const pendingRuns = new Map();
+  const pendingRuns = new Set();
   const waiters = new Set();
+  // In-process guards only; the registry is the durable record.
   const inflightSpawns = new Map();
-  // Admission reservations of spawns between their checks and their first
-  // accepted task: worker slots per parent and canonical directories.
-  const reservedSlots = new Map();
-  const reservedDirectories = new Set();
-  // Workers whose stop is aborting them; their settle is not reported back.
-  const stopping = new Set();
+  const runningOperations = new Map();
+  const inputsInFlight = new Map();
+  const imported = new Set();
 
   const stateOf = (sessionId) => {
     const state = getSessionState(sessionId);
@@ -149,16 +159,9 @@ export function createOrchestrationService(deps) {
     const state = stateOf(sessionId);
     return state === 'idle' || state === 'dormant';
   };
-
-  // Holds a target session's idle guard for the whole use, so a session
-  // opened here is not disposed mid-use and is disposed again when idle.
-  const withSession = async (sessionId, use) => {
-    const release = holdSession(sessionId);
-    try {
-      return await use();
-    } finally {
-      release();
-    }
+  const hasLiveRun = (sessionId) => {
+    const state = getSessionState(sessionId);
+    return state === 'busy' || state === 'retry';
   };
 
   const notifyWaiters = () => {
@@ -166,26 +169,19 @@ export function createOrchestrationService(deps) {
   };
 
   const callerRuntime = async (callerSessionId) => {
-    let runtime = getLiveRuntime(callerSessionId);
-    if (!runtime) {
-      try {
-        runtime = await activateSession(callerSessionId);
-      } catch (error) {
-        if (isGone(error)) throw new OrchestrationError(CALLER_GONE, 'The calling session no longer exists.');
-        if (GONE_CODES.has(error?.code)) {
-          throw new OrchestrationError('SESSION_LOOKUP_FAILED', 'The calling session could not be looked up; retry later.');
-        }
-        throw error;
-      }
-    }
+    const runtime = getLiveRuntime(callerSessionId) ?? await activateSession(callerSessionId);
     if (!runtime) throw new OrchestrationError('SESSION_NOT_FOUND', 'The calling session is not available.');
     return runtime;
   };
 
-  const assertOrchestrator = (runtime) => {
-    if (lineageOf(runtime)) {
-      throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', 'Workers cannot start or stop sessions.');
-    }
+  const ensureImported = async (orchestratorSessionId, runtime) => {
+    if (imported.has(orchestratorSessionId)) return;
+    const children = childRecordsOf(runtime);
+    await registry.update((document) => {
+      ensureOwner(document, orchestratorSessionId, runtime.cwd);
+      importLineage(document, orchestratorSessionId, children, now());
+    });
+    imported.add(orchestratorSessionId);
   };
 
   // Signals an orchestrator needs to spot a stuck worker: how long the
@@ -216,23 +212,25 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const describeWorker = async (record) => {
-    const live = getLiveRuntime(record.sessionId);
-    const state = record.stopped ? 'stopped' : stateOf(record.sessionId);
+  const describeWorker = async (sessionId, worker) => {
+    const live = getLiveRuntime(sessionId);
+    const state = worker.state === 'stopped' ? 'stopped' : stateOf(sessionId);
     return {
-      sessionId: record.sessionId,
-      title: record.title,
-      cwd: record.cwd,
-      role: record.role,
-      branch: await resolveBranch(record.cwd).catch(() => undefined),
+      sessionId,
+      title: worker.title,
+      cwd: worker.cwd,
+      role: worker.role,
+      branch: await resolveBranch(worker.cwd).catch(() => undefined),
       state,
-      ...(live ? runStatus(record.sessionId, live, state) : { resident: false }),
+      lifecycle: worker.state,
+      ...(live ? runStatus(sessionId, live, state) : { resident: false }),
     };
   };
 
-  const activeWorkers = (runtime) => childRecordsOf(runtime).filter((record) => !record.stopped);
-
-  const managedRuntimes = () => listLiveRuntimes().filter((runtime) => lineageOf(runtime));
+  const workersOf = (document, orchestratorSessionId, { includeStopped = true } = {}) => Object.entries(document.workers)
+    .filter(([, worker]) => worker.orchestratorSessionId === orchestratorSessionId
+      && worker.state !== 'removed'
+      && (includeStopped || worker.state !== 'stopped'));
 
   const resolveModel = async (args, settings) => {
     const role = args.role ? settings.roles[args.role] : undefined;
@@ -252,49 +250,93 @@ export function createOrchestrationService(deps) {
     return { model: { providerId: chosen.providerId, modelId: chosen.modelId }, thinking };
   };
 
-  const capabilities = async (callerSessionId) => {
-    const runtime = await callerRuntime(callerSessionId);
+  const capabilities = async (callerSessionId, _args, _options, context) => {
     const settings = await readSettings();
-    const workers = await Promise.all(activeWorkers(runtime).map(describeWorker));
+    const document = await registry.read();
+    const workers = await Promise.all(workersOf(document, callerSessionId, { includeStopped: false })
+      .map(([sessionId, worker]) => describeWorker(sessionId, worker)));
+    const operations = Object.entries(document.operations)
+      .filter(([, operation]) => operation.orchestratorSessionId === callerSessionId && operation.state === 'reserved')
+      .map(([opId, operation]) => ({ opId, step: operation.step, clientRequestId: operation.clientRequestId, title: operation.intent?.title }));
     return {
       workerLimit: settings.workerLimit,
-      freeSlots: Math.max(0, settings.workerLimit - workers.length),
+      freeSlots: Math.max(0, settings.workerLimit - slotsInUse(document)),
       roles: settings.roles,
       models: await listModels(),
       workers,
+      ...(operations.length ? { operations } : {}),
       host: hostStatus(),
-      canSpawn: !lineageOf(runtime),
+      canSpawn: context.callerKind === 'orchestrator',
     };
   };
 
-  // A run counts as pending from the send until its settle. A deduplicated
-  // receipt or a failed send starts no run, so it drops only its own token.
   const startTask = async (sessionId, text, delivery, operationId) => {
-    const token = {};
-    const tokens = pendingRuns.get(sessionId) ?? new Set();
-    tokens.add(token);
-    pendingRuns.set(sessionId, tokens);
-    const dropToken = () => {
-      const current = pendingRuns.get(sessionId);
-      if (!current?.delete(token)) return;
-      if (current.size === 0) pendingRuns.delete(sessionId);
-      notifyWaiters();
-    };
+    pendingRuns.add(sessionId);
     try {
-      const receipt = await sendInput({ sessionId, text, delivery, operationId });
-      if (receipt?.deduplicated) dropToken();
-      return receipt;
+      return await sendInput({ sessionId, text, delivery, operationId });
     } catch (error) {
-      dropToken();
+      pendingRuns.delete(sessionId);
+      notifyWaiters();
       throw error;
     }
   };
 
-  const releaseAdmission = (callerSessionId, cwd) => {
-    const slots = (reservedSlots.get(callerSessionId) ?? 1) - 1;
-    if (slots > 0) reservedSlots.set(callerSessionId, slots);
-    else reservedSlots.delete(callerSessionId);
-    reservedDirectories.delete(cwd);
+  // Runs the unfinished steps of a start operation. Every registry write
+  // checks that the operation still belongs to `caller`; after a takeover the
+  // old call stops with ORCHESTRATION_OWNER_CHANGED.
+  const runOperation = async (opId, caller, runtime) => {
+    runningOperations.set(opId, caller);
+    try {
+      let document = await registry.read();
+      let operation = ownedOperation(document, opId, caller);
+      const { intent } = operation;
+      if (operation.state === 'reserved') {
+        await registry.update((current) => beginStep(current, opId, caller, 'session', now(), self));
+        // A recreate follows a JSONL that never reached disk; the resident
+        // session of that attempt must not be adopted again.
+        let session = operation.recreate ? undefined : await findSessionByOperation({ opId, cwd: intent.cwd });
+        if (!session) {
+          try {
+            session = await createWorkerSession({
+              cwd: intent.cwd,
+              title: intent.title,
+              ...(intent.model ? { model: intent.model } : {}),
+              ...(intent.thinking ? { thinking: intent.thinking } : {}),
+              parentSessionPath: runtime.session.sessionFile,
+              lineage: {
+                parentSessionId: caller,
+                parentDirectory: runtime.cwd,
+                opId,
+                ...(intent.role ? { role: intent.role } : {}),
+              },
+            });
+          } catch (error) {
+            // The session may exist although the create call failed late.
+            session = await findSessionByOperation({ opId, cwd: intent.cwd });
+            if (!session) {
+              await registry.update((current) => failOperation(current, opId, caller, 'session', error?.message ?? String(error), now()))
+                .catch(() => {});
+              throw error;
+            }
+          }
+        }
+        await registry.update((current) => recordSession(current, opId, caller, session, now()));
+        document = await registry.read();
+        operation = ownedOperation(document, opId, caller);
+      }
+      const { sessionId } = operation;
+      if (!operation.steps.prompted?.doneAt && document.workers[sessionId]) {
+        await registry.update((current) => beginStep(current, opId, caller, 'prompted', now(), self));
+        const receipt = await startTask(sessionId, intent.brief, 'prompt', `${opId}.task`);
+        await registry.update((current) => {
+          finishStep(ownedOperation(current, opId, caller), 'prompted', now(), receipt?.messageId ? { messageId: receipt.messageId } : {});
+        });
+        document = await registry.read();
+      }
+      return { sessionId, worker: document.workers[sessionId] };
+    } finally {
+      runningOperations.delete(opId);
+    }
   };
 
   const spawnOnce = async (callerSessionId, runtime, args) => {
@@ -302,116 +344,75 @@ export function createOrchestrationService(deps) {
       throw new OrchestrationError('INVALID_ARGUMENT', 'cwd must be an absolute directory.');
     }
     const settings = await readSettings();
-    const cwd = await canonicalDirectory(args.cwd);
-    // Admission is synchronous from here to the reservation: no await may sit
-    // between the checks and the reservation, or two concurrent spawns pass
-    // the same free slot or directory.
-    const workers = activeWorkers(runtime);
-    if (workers.length + (reservedSlots.get(callerSessionId) ?? 0) >= settings.workerLimit) {
-      throw new OrchestrationError('ORCHESTRATION_LIMIT', `All ${settings.workerLimit} worker slots are in use; stop a finished worker first.`, {
-        workerLimit: settings.workerLimit,
-        workers: await Promise.all(workers.map(describeWorker)),
-      });
-    }
-    const busyId = reservedDirectories.has(cwd)
-      ? undefined
-      : managedRuntimes().find((candidate) => resolve(candidate.cwd) === cwd
-        && !isSettled(candidate.session.sessionId))?.session.sessionId;
-    if (reservedDirectories.has(cwd) || busyId) {
-      throw new OrchestrationError('ORCHESTRATION_CWD_BUSY', 'A managed worker is busy in this directory; use another worktree.', {
-        ...(busyId ? { sessionId: busyId } : {}),
-      });
-    }
-    reservedSlots.set(callerSessionId, (reservedSlots.get(callerSessionId) ?? 0) + 1);
-    reservedDirectories.add(cwd);
-    try {
-      const { model, thinking } = await resolveModel(args, settings);
-      const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
-      const lineage = {
-        parentSessionId: callerSessionId,
-        parentDirectory: runtime.cwd,
-        ...(args.role ? { role: args.role } : {}),
-      };
-      const created = await createWorkerSession({
-        cwd,
-        title,
-        ...(model ? { model } : {}),
-        ...(thinking ? { thinking } : {}),
-        parentSessionPath: runtime.session.sessionFile,
-        lineage,
-      });
-      const record = {
-        sessionId: created.sessionId,
-        cwd: created.cwd,
-        title,
-        ...(args.role ? { role: args.role } : {}),
-        ...(model ? { model } : {}),
-        ...(args.clientRequestId ? { clientRequestId: args.clientRequestId } : {}),
-        createdAt: now(),
-      };
-      runtime.session.sessionManager.appendCustomEntry(CHILD_ENTRY, record);
-      try {
-        await startTask(created.sessionId, args.task, 'prompt', args.clientRequestId ? `${args.clientRequestId}.task` : undefined);
-      } catch (error) {
-        // Pi persisted nothing for the rejected first prompt, so the idle
-        // ephemeral cleanup removes the worker session. The record frees its
-        // slot and a retry with the same key starts a new worker.
-        runtime.session.sessionManager.appendCustomEntry(STOPPED_ENTRY, { sessionId: created.sessionId, stoppedAt: now(), reason: TASK_REJECTED });
-        throw error;
+    const known = args.clientRequestId
+      ? (await registry.read()).requestKeys[requestKey(callerSessionId, args.clientRequestId)]
+      : undefined;
+    if (!known) {
+      const busyHere = listLiveRuntimes().find((candidate) => lineageOf(candidate) && candidate.cwd === args.cwd
+        && !isSettled(candidate.session.sessionId));
+      if (busyHere) {
+        throw new OrchestrationError('ORCHESTRATION_CWD_BUSY', 'A managed worker is busy in this directory; use another worktree.', {
+          sessionId: busyHere.session.sessionId,
+        });
       }
-      return record;
-    } finally {
-      releaseAdmission(callerSessionId, cwd);
     }
+    const { model, thinking } = await resolveModel(args, settings);
+    const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
+    const intent = {
+      cwd: args.cwd,
+      title,
+      brief: `${workerPreamble(callerSessionId)}${args.task}`,
+      ...(args.role ? { role: args.role } : {}),
+      ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
+    };
+    const reserved = await registry.update((document) => {
+      ensureOwner(document, callerSessionId, runtime.cwd);
+      return reserveSpawn(document, {
+        caller: callerSessionId,
+        clientRequestId: args.clientRequestId,
+        intent,
+        workerLimit: settings.workerLimit,
+        opId: `op_${randomUUID()}`,
+        at: now(),
+        process: self,
+      });
+    });
+    const result = await runOperation(reserved.opId, callerSessionId, runtime);
+    return { ...result, deduplicated: reserved.resumed };
   };
 
-  const spawn = async (callerSessionId, args, options) => {
-    const runtime = await callerRuntime(callerSessionId);
-    assertOrchestrator(runtime);
-    let record;
-    let deduplicated = false;
-    if (args.clientRequestId) {
-      const key = `${callerSessionId}\u0000${args.clientRequestId}`;
-      // A running spawn wrote its record before its first task was accepted,
-      // so a retry shares that operation's outcome before it trusts a record.
-      const existing = inflightSpawns.has(key)
-        ? undefined
-        : childRecordsOf(runtime).find((candidate) => candidate.clientRequestId === args.clientRequestId && !candidate.rejected);
-      if (inflightSpawns.has(key)) {
-        record = await inflightSpawns.get(key);
-        deduplicated = true;
-      } else if (existing) {
-        record = existing;
-        deduplicated = true;
-      } else {
-        const operation = spawnOnce(callerSessionId, runtime, args);
-        inflightSpawns.set(key, operation);
-        try {
-          record = await operation;
-        } finally {
-          inflightSpawns.delete(key);
-        }
-      }
+  const spawn = async (callerSessionId, args, options, context) => {
+    let outcome;
+    const key = args.clientRequestId ? `${callerSessionId}\u0000${args.clientRequestId}` : undefined;
+    if (key && inflightSpawns.has(key)) {
+      outcome = { ...await inflightSpawns.get(key), deduplicated: true };
     } else {
-      record = await spawnOnce(callerSessionId, runtime, args);
+      const operation = spawnOnce(callerSessionId, context.runtime, args);
+      if (key) inflightSpawns.set(key, operation);
+      try {
+        outcome = await operation;
+      } finally {
+        if (key) inflightSpawns.delete(key);
+      }
     }
+    const { sessionId, worker } = outcome;
     const result = {
-      sessionId: record.sessionId,
-      cwd: record.cwd,
-      title: record.title,
-      ...(record.role ? { role: record.role } : {}),
-      ...(record.model ? { model: record.model } : {}),
-      ...(deduplicated ? { deduplicated: true } : {}),
+      sessionId,
+      cwd: worker?.cwd,
+      title: worker?.title,
+      ...(worker?.role ? { role: worker.role } : {}),
+      ...(worker?.model ? { model: worker.model } : {}),
+      ...(outcome.deduplicated ? { deduplicated: true } : {}),
     };
     if (args.mode === 'wait') {
-      const waited = await wait(callerSessionId, { sessionIds: [record.sessionId], timeoutMs: args.timeoutMs }, options);
+      const waited = await wait(callerSessionId, { sessionIds: [sessionId], timeoutMs: args.timeoutMs }, options);
       return { ...result, ...waited.sessions[0], timedOut: waited.timedOut };
     }
-    return { ...result, state: stateOf(record.sessionId) };
+    return { ...result, state: stateOf(sessionId) };
   };
 
   const list = async (callerSessionId, args = {}) => {
-    const runtime = await callerRuntime(callerSessionId);
     if (args.scope === 'all') {
       return {
         sessions: listLiveRuntimes().map((candidate) => {
@@ -428,7 +429,11 @@ export function createOrchestrationService(deps) {
         }),
       };
     }
-    return { sessions: await Promise.all(childRecordsOf(runtime).map(describeWorker)) };
+    const document = await registry.read();
+    return {
+      sessions: await Promise.all(workersOf(document, callerSessionId)
+        .map(([sessionId, worker]) => describeWorker(sessionId, worker))),
+    };
   };
 
   const snapshot = (sessionId, runtime) => {
@@ -442,9 +447,7 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const read = (callerSessionId, args) => withSession(args.sessionId, () => readSession(callerSessionId, args));
-
-  const readSession = async (_callerSessionId, args) => {
+  const read = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const limit = args.limit ?? 10;
     const messages = (runtime.session.messages ?? [])
@@ -466,9 +469,7 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const send = (callerSessionId, args) => withSession(args.sessionId, () => sendSession(callerSessionId, args));
-
-  const sendSession = async (_callerSessionId, args) => {
+  const send = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const receipt = await startTask(runtime.session.sessionId, args.text, args.delivery ?? 'prompt', args.clientRequestId);
     return {
@@ -482,7 +483,7 @@ export function createOrchestrationService(deps) {
   const wait = async (_callerSessionId, args, options = {}) => {
     const sessionIds = [...new Set(args.sessionIds)];
     for (const sessionId of sessionIds) {
-      if (!getLiveRuntime(sessionId)) await withSession(sessionId, () => activateSession(sessionId));
+      if (!getLiveRuntime(sessionId)) await activateSession(sessionId);
     }
     const cap = Math.min(options.maxWaitMs ?? MAX_WAIT_MS, MAX_WAIT_MS);
     const timeoutMs = Math.min(args.timeoutMs ?? DEFAULT_WAIT_MS, cap);
@@ -516,68 +517,65 @@ export function createOrchestrationService(deps) {
   };
 
   const interrupt = async (_callerSessionId, args) => {
-    await withSession(args.sessionId, () => abortSession(args.sessionId));
+    await abortSession(args.sessionId);
     return { sessionId: args.sessionId, interrupted: true };
   };
 
-  // Stops the worker and its own workers, deepest first. A worker counts as
-  // stopped only after its abort succeeded or it no longer exists; until then
-  // `stopping` holds back the result the abort settles. A failed abort keeps
-  // the worker's slot, and its ancestors stay running so a retry can finish.
-  const stopTree = async (parentRuntime, sessionId, result) => {
-    if (result.stopped.includes(sessionId)) return true;
-    stopping.add(sessionId);
-    try {
-      const child = getLiveRuntime(sessionId);
-      let descendantsStopped = true;
-      if (child) {
-        for (const grandchild of childRecordsOf(child).filter((record) => !record.stopped)) {
-          if (!await stopTree(child, grandchild.sessionId, result)) descendantsStopped = false;
-        }
-      }
-      if (!descendantsStopped) {
-        result.failed.push({ sessionId, code: 'ORCHESTRATION_DESCENDANT_STOP_FAILED' });
-        return false;
-      }
-      try {
-        await withSession(sessionId, () => abortSession(sessionId));
-      } catch (error) {
-        if (!isGone(error)) {
-          result.failed.push({ sessionId, code: typeof error?.code === 'string' ? error.code : 'ABORT_FAILED' });
-          return false;
-        }
-      }
-      pendingRuns.delete(sessionId);
-      parentRuntime.session.sessionManager.appendCustomEntry(STOPPED_ENTRY, { sessionId, stoppedAt: now() });
-      result.stopped.push(sessionId);
-      return true;
-    } finally {
-      stopping.delete(sessionId);
-    }
+  // `stopping` holds the slot and suppresses the result delivery of the abort
+  // settle; the worker becomes `stopped` once its abort returned.
+  const stopTree = async (sessionId, stopped) => {
+    if (stopped.includes(sessionId)) return;
+    stopped.push(sessionId);
+    pendingRuns.delete(sessionId);
+    const children = await registry.update((document) => {
+      const worker = document.workers[sessionId];
+      if (worker) worker.stopping = self;
+      return workersOf(document, sessionId, { includeStopped: false }).map(([childId]) => childId);
+    });
+    for (const childId of children) await stopTree(childId, stopped);
+    await abortSession(sessionId).catch(() => {});
+    await registry.update((document) => {
+      const worker = document.workers[sessionId];
+      if (!worker) return;
+      delete worker.stopping;
+      delete worker.doneReported;
+      delete worker.gate;
+      worker.state = 'stopped';
+      worker.stateSince = now();
+    });
   };
 
-  const stop = async (callerSessionId, args) => {
-    const runtime = await callerRuntime(callerSessionId);
-    assertOrchestrator(runtime);
-    const record = childRecordsOf(runtime).find((candidate) => candidate.sessionId === args.sessionId);
-    if (!record) {
-      throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', 'Only your own workers can be stopped.');
-    }
-    if (record.stopped) return { sessionId: args.sessionId, stopped: [], alreadyStopped: true };
-    const result = { stopped: [], failed: [] };
-    await stopTree(runtime, args.sessionId, result);
+  const stop = async (_callerSessionId, args) => {
+    const worker = (await registry.read()).workers[args.sessionId];
+    if (worker?.state === 'stopped') return { sessionId: args.sessionId, stopped: [], alreadyStopped: true };
+    const stopped = [];
+    await stopTree(args.sessionId, stopped);
     notifyWaiters();
-    if (result.failed.length > 0) {
-      throw new OrchestrationError('ORCHESTRATION_STOP_FAILED', 'Some workers could not be aborted and keep running; retry session_stop.', {
-        sessionId: args.sessionId,
-        ...result,
-      });
+    return { sessionId: args.sessionId, stopped };
+  };
+
+  const takeover = async (callerSessionId, args, _options, context) => {
+    const from = args.fromSessionId;
+    if (from === callerSessionId) {
+      throw new OrchestrationError('INVALID_ARGUMENT', 'An orchestrator cannot take over from itself.');
     }
-    return { sessionId: args.sessionId, stopped: result.stopped };
+    const busyStep = [...runningOperations.values()].includes(from);
+    if (busyStep || !isSettled(from)) {
+      throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', busyStep
+        ? 'A start of that orchestrator is still running; retry when it finished.'
+        : 'That orchestrator is still running; interrupt it or wait until it is idle.', { sessionId: from });
+    }
+    const fromRuntime = getLiveRuntime(from) ?? await activateSession(from).catch(() => undefined);
+    if (fromRuntime && !lineageOf(fromRuntime)) await ensureImported(from, fromRuntime);
+    const moved = await registry.update((document) => {
+      ensureOwner(document, callerSessionId, context.runtime.cwd);
+      return takeOver(document, { from, to: callerSessionId, at: now() });
+    });
+    return { fromSessionId: from, workers: moved.workers, operations: moved.operations };
   };
 
   const handlers = {
-    orchestration_capabilities: (caller) => capabilities(caller),
+    orchestration_capabilities: capabilities,
     session_spawn: spawn,
     session_list: list,
     session_read: read,
@@ -585,104 +583,189 @@ export function createOrchestrationService(deps) {
     session_wait: wait,
     session_interrupt: interrupt,
     session_stop: stop,
+    orchestration_takeover: takeover,
   };
 
   /**
-   * Execute one tool as `callerSessionId`. The arguments are validated here
-   * against the shared contracts, so both adapters get the same bounds, and
-   * the caller must still exist for every tool: a credential of a deleted
-   * session cannot act on other sessions.
+   * Execute one tool as `callerSessionId`. Arguments are validated by the
+   * adapter against the shared JSON Schema contracts; the policy decides
+   * before any side effect.
    */
   const call = async (callerSessionId, toolName, args = {}, options = {}) => {
-    const tool = toolByName.get(toolName);
-    if (!tool) {
+    if (!toolByName.has(toolName)) {
       throw new OrchestrationError('UNKNOWN_TOOL', `Unknown orchestration tool: ${toolName}`);
     }
     if (typeof callerSessionId !== 'string' || callerSessionId.length === 0) {
       throw new OrchestrationError('SESSION_NOT_FOUND', 'The calling session is unknown.');
     }
-    const input = args ?? {};
-    const violation = schemaViolation(tool.parameters, input);
-    if (violation) throw new OrchestrationError('INVALID_ARGUMENT', violation);
-    await callerRuntime(callerSessionId);
-    return handlers[toolName](callerSessionId, input, options);
+    await reconciled();
+    const runtime = await callerRuntime(callerSessionId);
+    const callerKind = lineageOf(runtime) ? 'worker' : 'orchestrator';
+    if (callerKind === 'orchestrator') await ensureImported(callerSessionId, runtime);
+    const targetOwner = needsOwnership(toolName)
+      ? (await registry.read()).workers[args?.sessionId]?.orchestratorSessionId ?? null
+      : undefined;
+    authorize({ toolName, callerSessionId, callerKind, targetOwner });
+    return handlers[toolName](callerSessionId, args ?? {}, options, { runtime, callerKind });
   };
 
-  /** Confirms that a session exists before a credential is issued for it. */
-  const verifyCaller = async (callerSessionId) => {
-    await callerRuntime(callerSessionId);
-    return { sessionId: callerSessionId };
-  };
-
-  /**
-   * Called by the daemon when a send finished without an agent turn (a
-   * handled extension command), so no agent_settled follows.
-   */
-  const onInputCompleted = (sessionId) => {
-    if (!pendingRuns.delete(sessionId)) return;
-    notifyWaiters();
-  };
-
-  const deliverResult = async (sessionId, result, lineage) => {
-    const parent = getLiveRuntime(lineage.parentSessionId)
-      ?? await activateSession(lineage.parentSessionId, lineage.parentDirectory);
-    const record = childRecordsOf(parent).find((candidate) => candidate.sessionId === sessionId);
-    if (!record || record.stopped || stopping.has(sessionId)) return;
-    const { assistant, cwd } = result;
+  const deliverResult = async (sessionId, runtime, worker, ownerCwd) => {
+    const owner = worker.orchestratorSessionId;
+    const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
+    const assistant = lastAssistant(runtime);
     const outcome = outcomeOf(assistant);
     const reply = truncate(textOf(assistant?.content), RESULT_TEXT_LIMIT);
-    const title = result.title || record.title;
+    const title = runtime.session.sessionManager?.getSessionName?.() || worker.title;
     const header = `Worker "${title}" (${sessionId}) ${outcome === 'completed' ? 'finished' : outcome === 'interrupted' ? 'was interrupted' : 'failed'}.`;
     await parent.session.sendCustomMessage({
       customType: RESULT_MESSAGE,
       content: [header, assistant?.errorMessage ? `Error: ${assistant.errorMessage}` : '', reply].filter(Boolean).join('\n\n'),
       display: true,
-      details: { sessionId, title, cwd, outcome, ...(record.role ? { role: record.role } : {}) },
+      details: { sessionId, title, cwd: runtime.cwd, outcome, ...(worker.role ? { role: worker.role } : {}) },
     }, { triggerTurn: true, deliverAs: 'followUp' });
   };
 
   /**
-   * Called by the daemon for every agent_settled. Resolves waits and delivers
-   * a worker's result to its parent as a custom message that starts a parent
-   * turn, or queues as follow-up while the parent is busy. A parent that
-   * cannot be reached is retried with backoff; a deleted parent drops the
-   * result, and a final failure is reported through `onDeliveryFailed`.
+   * Called by the daemon for every agent_settled. Applies the worker's state
+   * transition, resolves waits and delivers a worker's result to its current
+   * owner as a custom message that starts a turn, or queues as follow-up
+   * while the owner is busy.
    */
   const onSessionSettled = async (sessionId, runtime) => {
     pendingRuns.delete(sessionId);
     notifyWaiters();
-    if (stopping.has(sessionId)) return;
     const lineage = lineageOf(runtime);
-    if (!lineage?.parentSessionId) return;
-    // The settled turn's result, taken before any await: a later turn of the
-    // worker must not replace it while a delivery retry waits.
-    const result = {
-      assistant: lastAssistant(runtime),
-      title: runtime.session.sessionManager?.getSessionName?.(),
-      cwd: runtime.cwd,
-    };
-    for (let attempt = 1; ; attempt += 1) {
-      try {
-        // The parent's guard covers activation and the send until it is
-        // accepted, but not the backoff between attempts.
-        await withSession(lineage.parentSessionId, () => deliverResult(sessionId, result, lineage));
-        return;
-      } catch (error) {
-        if (isGone(error)) return;
-        if (attempt >= DELIVERY_ATTEMPTS) {
-          onDeliveryFailed({ sessionId, parentSessionId: lineage.parentSessionId, parentDirectory: lineage.parentDirectory, error });
+    let document = await registry.read();
+    if (!document.workers[sessionId] && lineage?.parentSessionId && !imported.has(lineage.parentSessionId)) {
+      const parent = getLiveRuntime(lineage.parentSessionId)
+        ?? await activateSession(lineage.parentSessionId, lineage.parentDirectory);
+      await ensureImported(lineage.parentSessionId, parent);
+      document = await registry.read();
+    }
+    if (!document.workers[sessionId]) return;
+    await reconciled();
+    document = await registry.read();
+    if (!document.workers[sessionId]) return;
+    const presence = document.workers[sessionId].state === 'starting'
+      ? await sessionFileState(sessionId, document.workers[sessionId].sessionFile)
+      : undefined;
+    const settled = await registry.update((current) => {
+      const state = applySettle(current, sessionId, presence, now());
+      const worker = current.workers[sessionId];
+      return { state, worker: worker ? { ...worker } : undefined, ownerCwd: current.owners[worker?.orchestratorSessionId]?.cwd };
+    });
+    if (!settled.worker || settled.worker.stopping || settled.state === 'stopped') return;
+    await deliverResult(sessionId, runtime, settled.worker, settled.ownerCwd ?? lineage?.parentDirectory);
+  };
+
+  /**
+   * Input gate, called by the daemon's one input path before it activates a
+   * session. A `done` or `stopped` worker reserves its slot here, unless a run
+   * is live (steer and follow-up need no slot). The returned ticket goes back
+   * to `afterSessionInput` once the input started a run or ended without one.
+   */
+  const beforeSessionInput = async (sessionId) => {
+    inputsInFlight.set(sessionId, (inputsInFlight.get(sessionId) ?? 0) + 1);
+    try {
+      if (!(await registry.read()).workers[sessionId]) return { token: null };
+      await reconciled();
+      const worker = (await registry.read()).workers[sessionId];
+      if (!worker || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return { token: null };
+      const { workerLimit } = await readSettings();
+      const token = await registry.update((document) => reserveForInput(document, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
+      return { token };
+    } catch (error) {
+      inputDone(sessionId);
+      throw error;
+    }
+  };
+
+  const inputDone = (sessionId) => {
+    const remaining = (inputsInFlight.get(sessionId) ?? 1) - 1;
+    if (remaining > 0) inputsInFlight.set(sessionId, remaining);
+    else inputsInFlight.delete(sessionId);
+  };
+
+  // The slot returns only when this input started no run, no run is live and
+  // no parallel input is still on its way (it may yet start one, R3-S1).
+  const afterSessionInput = async (sessionId, ticket, { startedRun = false } = {}) => {
+    inputDone(sessionId);
+    const token = ticket?.token;
+    if (!token) return;
+    const keep = startedRun || hasLiveRun(sessionId) || inputsInFlight.has(sessionId);
+    await registry.update((document) => (keep
+      ? keepInput(document, sessionId, token)
+      : releaseInput(document, sessionId, token, now())));
+  };
+
+  /**
+   * A worker reported `done` in its current run. The worker becomes `done`,
+   * and its slot free, when that run settles; the run may still call tools.
+   */
+  const recordDoneReport = (sessionId) => registry.update((document) => {
+    const worker = document.workers[sessionId];
+    if (!worker || (worker.state !== 'active' && worker.state !== 'starting')) return false;
+    worker.doneReported = true;
+    return true;
+  });
+
+  // The restart check runs once per process, before the first use that
+  // touches the registry, not at daemon start: a daemon that never
+  // orchestrates never writes the registry.
+  let reconciling;
+  const reconciled = () => {
+    reconciling ??= reconcile().catch((error) => {
+      reconciling = undefined;
+      throw error;
+    });
+    return reconciling;
+  };
+
+  /**
+   * After a restart: adopt or release reserved starts, check `starting` workers
+   * against the disk, and finish what a crash interrupted (a stop, an input
+   * gate). No run is live after a restart.
+   */
+  const reconcile = async () => {
+    const document = await registry.read();
+    for (const [opId, operation] of Object.entries(document.operations)) {
+      if (operation.state !== 'reserved' || operation.recreate || belongsToLiveProcess(operation.process)) continue;
+      const session = await findSessionByOperation({ opId, cwd: operation.intent?.cwd });
+      await registry.update((current) => {
+        const live = current.operations[opId];
+        if (live?.state !== 'reserved' || live.recreate) return;
+        if (session) {
+          recordSession(current, opId, live.orchestratorSessionId, session, now());
           return;
         }
-        await delay(DELIVERY_RETRY_MS * 2 ** (attempt - 1));
-      }
+        live.state = 'abandoned';
+        live.stateSince = now();
+      });
+    }
+    const workers = Object.entries((await registry.read()).workers);
+    for (const [sessionId, worker] of workers) {
+      const checkStart = worker.state === 'starting' && !belongsToLiveProcess(worker.process);
+      const presence = checkStart ? await sessionFileState(sessionId, worker.sessionFile) : undefined;
+      await registry.update((current) => {
+        const live = current.workers[sessionId];
+        if (!live) return;
+        if (presence && live.state === 'starting') applyDurability(current, sessionId, presence, now());
+        if (live.gate && !belongsToLiveProcess(live.gate.process)) releaseInput(current, sessionId, live.gate.token, now());
+        if (live.stopping && !belongsToLiveProcess(live.stopping)) {
+          delete live.stopping;
+          live.state = 'stopped';
+          live.stateSince = now();
+        }
+      });
     }
   };
 
   return {
     call,
     onSessionSettled,
-    onInputCompleted,
-    verifyCaller,
+    beforeSessionInput,
+    afterSessionInput,
+    recordDoneReport,
     isWorker: (sessionManager) => Boolean(lineageOf({ session: { sessionManager } })),
     toolNames: ORCHESTRATION_TOOL_NAMES,
   };

@@ -58,7 +58,9 @@ import {
 } from './session-jsonl.js';
 import { resolvePiChamberDataDir } from '../../pichamber-data-dir.js';
 import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from './orchestration/host-info.js';
-import { LINEAGE_ENTRY, OrchestrationError, createOrchestrationService } from './orchestration/orchestration-service.js';
+import { OrchestrationError } from './orchestration/errors.js';
+import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
+import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -3155,13 +3157,24 @@ export function createSessionDaemon({
       }
       claimEntry = claimed.entry;
     }
+    // Orchestration input gate: a finished worker takes a slot before its
+    // new run starts and gets it back when the input started no run.
+    let gateTicket;
+    let startedRun = false;
     try {
-      const result = await runSessionInput(payload, delivery);
+      gateTicket = await orchestration.beforeSessionInput(payload.sessionId).catch((error) => {
+        throw error instanceof OrchestrationError ? new SessionDaemonProtocolError(error.code, error.message) : error;
+      });
+      const result = await runSessionInput(payload, delivery, {
+        onAccepted: (disposition) => { startedRun = disposition !== 'handled'; },
+      });
       claimEntry?.settle({ accepted: true, receipt: { accepted: true, messageId: result.messageId } });
       return result;
     } catch (error) {
       claimEntry?.settle({ accepted: false, error });
       throw error;
+    } finally {
+      if (gateTicket) await orchestration.afterSessionInput(payload.sessionId, gateTicket, { startedRun }).catch(() => {});
     }
   };
 
@@ -3173,7 +3186,7 @@ export function createSessionDaemon({
   // deleted when its assigned JSONL is positively absent (see
   // disposeIdleSessionRuntime).
 
-  const runSessionInput = async (payload, delivery) => {
+  const runSessionInput = async (payload, delivery, { onAccepted } = {}) => {
     if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string'
       || typeof payload.text !== 'string' || payload.text.length === 0 || Buffer.byteLength(payload.text) > 64 * 1024) {
       throw new SessionDaemonProtocolError('INVALID_PROMPT', 'The session prompt is invalid.');
@@ -3277,9 +3290,10 @@ export function createSessionDaemon({
     let preflightOutcome = null;
     let notifyPreflight;
     const preflightGate = new Promise((resolve) => { notifyPreflight = resolve; });
-    const onPreflightResult = () => {
+    const onPreflightResult = (disposition) => {
       if (preflightOutcome !== null) return;
       preflightOutcome = true;
+      onAccepted?.(disposition);
       notifyPreflight(true);
     };
     try {
@@ -3828,6 +3842,14 @@ export function createSessionDaemon({
     if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, sessionId, activeRuntime.cwd);
   };
 
+  const sessionFileOf = (live) => {
+    try {
+      return live?.session?.sessionManager?.getSessionFile?.() ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const orchestration = createOrchestrationService({
     activateSession,
     // Every session a tool uses holds the idle guard like a direct request,
@@ -3855,7 +3877,29 @@ export function createSessionDaemon({
         { parentSessionPath, lineage },
       );
       const sessionId = created.session.id;
-      return { sessionId, cwd: runtimeRegistry?.findBySessionId(sessionId)?.cwd ?? workerCwd };
+      const live = runtimeRegistry?.findBySessionId(sessionId);
+      return { sessionId, cwd: live?.cwd ?? workerCwd, sessionFile: sessionFileOf(live) };
+    },
+    registry: createOrchestrationRegistryStore({ file: join(resolvePiChamberDataDir(), 'pi', 'orchestration-registry.json') }),
+    // The idle disposal's durability check: stat success is durable, ENOENT
+    // is positively absent, anything else cannot prove either.
+    sessionFileState: async (sessionId, recordedFile) => {
+      const file = sessionFileOf(runtimeRegistry?.findBySessionId(sessionId)) ?? recordedFile;
+      if (typeof file !== 'string' || file.length === 0) return 'unknown';
+      try {
+        await stat(file);
+        return 'present';
+      } catch (error) {
+        return error?.code === 'ENOENT' ? 'absent' : 'unknown';
+      }
+    },
+    findSessionByOperation: async ({ opId }) => {
+      const live = (runtimeRegistry?.listAll() ?? []).find((candidate) => {
+        const entries = candidate.session?.sessionManager?.getEntries?.() ?? [];
+        return entries.some((entry) => entry?.type === 'custom' && entry.customType === LINEAGE_ENTRY && entry.data?.opId === opId);
+      });
+      if (!live) return undefined;
+      return { sessionId: live.session.sessionId, cwd: live.cwd, sessionFile: sessionFileOf(live) };
     },
     sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
       { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },

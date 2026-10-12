@@ -1,14 +1,17 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { ORCHESTRATION_TOOLS } from './tool-contracts.js';
-import { SUPPORTED_KEYWORDS } from './contract-validator.js';
 import {
   CHILD_ENTRY,
   LINEAGE_ENTRY,
   RESULT_MESSAGE,
-  childRecordsOf,
   createOrchestrationService,
 } from './orchestration-service.js';
+import { createOrchestrationRegistryStore } from './registry-store.js';
 
 const ROLES = {
   'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
@@ -39,13 +42,50 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
   return runtime;
 };
 
-const createHarness = ({ workerLimit = 4, activity = new Map(), now, delay = async () => {}, holdSession } = {}) => {
+const registryFile = () => join(mkdtempSync(join(tmpdir(), 'pichamber-orchestration-service-')), 'registry.json');
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  return { promise, resolve };
+};
+
+const alivePids = new Set();
+let nextPid = 1000;
+
+/**
+ * One daemon process. Two harnesses on the same `file` are two processes
+ * sharing the durable registry; a new harness on the same file is a restart.
+ */
+const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker' } = {}) => {
   const runtimes = new Map();
   const states = new Map();
+  // JSONL presence per worker; a settled worker got its assistant message.
+  const fileStates = new Map();
   const add = (runtime) => { runtimes.set(runtime.session.sessionId, runtime); return runtime; };
   const orchestrator = add(createRuntime({ sessionId: 'orch' }));
+  const registry = createOrchestrationRegistryStore({ file });
   let counter = 0;
+  let service;
+  const pid = nextPid++;
+  alivePids.add(pid);
+  // The daemon's one input path: the gate around a prompt that may start a run.
+  const input = async (sessionId, { outcome = 'started' } = {}) => {
+    const ticket = await service.beforeSessionInput(sessionId);
+    let startedRun = false;
+    try {
+      if (outcome === 'rejected') throw Object.assign(new Error('rejected by preflight'), { code: 'PROMPT_REJECTED' });
+      if (outcome === 'started') {
+        states.set(sessionId, 'busy');
+        startedRun = true;
+      }
+      return { accepted: true };
+    } finally {
+      await service.afterSessionInput(sessionId, ticket, { startedRun });
+    }
+  };
   const deps = {
+    registry,
     activateSession: vi.fn(async (sessionId) => {
       const runtime = runtimes.get(sessionId);
       if (!runtime) throw Object.assign(new Error('missing'), { code: 'SESSION_NOT_FOUND' });
@@ -56,10 +96,10 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, delay = asy
     getSessionState: (sessionId) => states.get(sessionId) ?? (runtimes.has(sessionId) ? 'idle' : 'dormant'),
     createWorkerSession: vi.fn(async ({ cwd, lineage }) => {
       counter += 1;
-      const runtime = add(createRuntime({ sessionId: `worker-${counter}`, cwd, lineage }));
-      return { sessionId: runtime.session.sessionId, cwd };
+      const runtime = add(createRuntime({ sessionId: `${workerPrefix}-${counter}`, cwd, lineage }));
+      return { sessionId: runtime.session.sessionId, cwd, sessionFile: runtime.session.sessionFile };
     }),
-    sendInput: vi.fn(async ({ sessionId }) => { states.set(sessionId, 'busy'); return { accepted: true }; }),
+    sendInput: vi.fn(async ({ sessionId }) => input(sessionId)),
     abortSession: vi.fn(async (sessionId) => { states.set(sessionId, 'idle'); }),
     readSettings: async () => ({ workerLimit, roles: ROLES }),
     listModels: async () => [
@@ -70,23 +110,39 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, delay = asy
     hostStatus: () => ({ cpuCount: 8 }),
     resolveBranch: async () => 'main',
     getSessionActivity: (sessionId) => activity.get(sessionId),
-    onDeliveryFailed: vi.fn(),
-    delay: vi.fn(delay),
+    sessionFileState: async (sessionId) => fileStates.get(sessionId) ?? 'absent',
+    findSessionByOperation: async ({ opId }) => {
+      const runtime = [...runtimes.values()].find((candidate) => candidate.session.sessionManager.getEntries()
+        .some((entry) => entry.customType === LINEAGE_ENTRY && entry.data?.opId === opId));
+      return runtime ? { sessionId: runtime.session.sessionId, cwd: runtime.cwd, sessionFile: runtime.session.sessionFile } : undefined;
+    },
     now,
-    ...(holdSession ? { holdSession } : {}),
+    processId: pid,
+    isProcessAlive: (candidate) => alivePids.has(candidate),
   };
-  const service = createOrchestrationService(deps);
-  const settle = async (sessionId, assistant) => {
+  service = createOrchestrationService(deps);
+  const settle = async (sessionId, assistant, { durable = true } = {}) => {
     const runtime = runtimes.get(sessionId);
     if (assistant) runtime.session.messages.push({ role: 'assistant', content: [{ type: 'text', text: assistant }] });
+    if (durable && !fileStates.has(sessionId)) fileStates.set(sessionId, 'present');
     states.set(sessionId, 'idle');
     await service.onSessionSettled(sessionId, runtime);
   };
-  return { service, deps, runtimes, states, orchestrator, settle };
+  const workers = async () => (await registry.read()).workers;
+  // The process dies; its resident sessions die with it.
+  const crash = () => { alivePids.delete(pid); };
+  return { service, deps, runtimes, states, fileStates, orchestrator, settle, input, registry, workers, file, add, crash };
 };
 
 const expectCode = async (promise, code) => {
   await expect(promise).rejects.toMatchObject({ code });
+};
+
+/** A worker whose run settled after it reported `done`. */
+const finishWorker = async (harness, sessionId) => {
+  await harness.service.recordDoneReport(sessionId);
+  await harness.settle(sessionId, 'finished');
+  expect((await harness.workers())[sessionId].state).toBe('done');
 };
 
 describe('orchestration tool contracts', () => {
@@ -98,42 +154,40 @@ describe('orchestration tool contracts', () => {
   });
 });
 
-describe('orchestration contract validation', () => {
-  it('uses only schema keywords the core validator enforces', () => {
-    const keywords = new Set();
-    const walk = (schema) => {
-      for (const [key, value] of Object.entries(schema)) {
-        keywords.add(key);
-        if (key === 'properties') Object.values(value).forEach(walk);
-        if (key === 'items') walk(value);
-      }
-    };
-    ORCHESTRATION_TOOLS.forEach((tool) => walk(tool.parameters));
-    expect([...keywords].filter((keyword) => !SUPPORTED_KEYWORDS.has(keyword))).toEqual([]);
-  });
-});
-
 describe('orchestration service', () => {
-  it('spawns a linked worker, starts its task and reports it as a slot', async () => {
-    const { service, deps, orchestrator, runtimes } = createHarness();
+  it('spawns a linked worker with the preamble, journals the start and reports it as a slot', async () => {
+    const { service, deps, orchestrator, runtimes, registry } = createHarness();
     const spawned = await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'Fix the bug\nDetails', role: 'task-hard' });
 
     expect(spawned).toMatchObject({ sessionId: 'worker-1', cwd: '/work/a', title: 'Fix the bug', role: 'task-hard', state: 'busy' });
     expect(spawned.model).toEqual({ providerId: 'anthropic', modelId: 'claude-opus-5-5' });
-    expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({
-      cwd: '/work/a',
-      thinking: 'high',
-      parentSessionPath: '/sessions/orch.jsonl',
-      lineage: { parentSessionId: 'orch', parentDirectory: '/work/main', role: 'task-hard' },
-    }));
-    expect(deps.sendInput).toHaveBeenCalledWith({ sessionId: 'worker-1', text: 'Fix the bug\nDetails', delivery: 'prompt', operationId: undefined });
-    expect(childRecordsOf(orchestrator).map((record) => record.sessionId)).toEqual(['worker-1']);
+    const { lineage } = deps.createWorkerSession.mock.calls[0][0];
+    expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/work/a', thinking: 'high', parentSessionPath: '/sessions/orch.jsonl' }));
+    expect(lineage).toEqual({ parentSessionId: 'orch', parentDirectory: '/work/main', role: 'task-hard', opId: expect.stringMatching(/^op_/) });
+    const [{ text, operationId }] = deps.sendInput.mock.calls[0];
+    expect(text).toMatch(/^You are a worker session started by the PiChamber orchestrator session orch\./);
+    expect(text.endsWith('Fix the bug\nDetails')).toBe(true);
+    expect(operationId).toBe(`${lineage.opId}.task`);
+
+    const document = await registry.read();
+    expect(document.workers['worker-1']).toMatchObject({ orchestratorSessionId: 'orch', opId: lineage.opId, role: 'task-hard', state: 'starting' });
+    expect(document.operations[lineage.opId]).toMatchObject({ state: 'created', sessionId: 'worker-1', step: 'prompted' });
+    expect(Object.keys(document.operations[lineage.opId].steps)).toEqual(['reserved', 'session', 'prompted']);
+    // The registry is the record; nothing is written into the orchestrator's JSONL.
+    expect(orchestrator.session.sessionManager.getEntries()).toEqual([]);
     expect(service.isWorker(runtimes.get('worker-1').session.sessionManager)).toBe(true);
     expect(service.isWorker(orchestrator.session.sessionManager)).toBe(false);
 
     const capabilities = await service.call('orch', 'orchestration_capabilities');
     expect(capabilities).toMatchObject({ workerLimit: 4, freeSlots: 3, canSpawn: true, host: { cpuCount: 8 } });
-    expect(capabilities.workers).toEqual([expect.objectContaining({ sessionId: 'worker-1', branch: 'main', state: 'busy' })]);
+    expect(capabilities.workers).toEqual([expect.objectContaining({ sessionId: 'worker-1', branch: 'main', state: 'busy', lifecycle: 'starting' })]);
+  });
+
+  it('makes a starting worker active once its JSONL is on disk', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first reply');
+    expect((await harness.workers())['worker-1'].state).toBe('active');
   });
 
   it('enforces the worker limit until a worker is stopped', async () => {
@@ -145,17 +199,37 @@ describe('orchestration service', () => {
     await expect(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' })).resolves.toMatchObject({ sessionId: 'worker-2' });
   });
 
+  it('gives the last slot to exactly one of two racing spawns', async () => {
+    const { service, deps } = createHarness({ workerLimit: 1 });
+    const results = await Promise.allSettled([
+      service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' }),
+      service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected').reason).toMatchObject({ code: 'ORCHESTRATION_LIMIT' });
+    expect(deps.createWorkerSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts the slots of every orchestrator in the daemon', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await expectCode(harness.service.call('orch-2', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+  });
+
   it('rejects a second worker in a directory where a managed worker is busy', async () => {
     const { service } = createHarness();
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'two' }), 'ORCHESTRATION_CWD_BUSY');
   });
 
-  it('keeps spawn and stop away from workers and foreign sessions', async () => {
+  it('keeps spawn, stop and takeover away from workers and stop away from foreign sessions', async () => {
     const { service, runtimes } = createHarness();
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await expectCode(service.call('worker-1', 'session_spawn', { cwd: '/work/b', task: 'x' }), 'ORCHESTRATION_FORBIDDEN');
     await expectCode(service.call('worker-1', 'session_stop', { sessionId: 'orch' }), 'ORCHESTRATION_FORBIDDEN');
+    await expectCode(service.call('worker-1', 'orchestration_takeover', { fromSessionId: 'orch' }), 'ORCHESTRATION_FORBIDDEN');
+    await expect(service.call('worker-1', 'orchestration_capabilities')).resolves.toMatchObject({ canSpawn: false });
 
     runtimes.set('other', createRuntime({ sessionId: 'other' }));
     await expectCode(service.call('orch', 'session_stop', { sessionId: 'other' }), 'ORCHESTRATION_FORBIDDEN');
@@ -166,7 +240,7 @@ describe('orchestration service', () => {
   });
 
   it('deduplicates retried and concurrent spawns by clientRequestId', async () => {
-    const { service, deps } = createHarness();
+    const { service, deps, registry } = createHarness();
     const args = { cwd: '/work/a', task: 'one', clientRequestId: 'req-1' };
     const [first, concurrent] = await Promise.all([
       service.call('orch', 'session_spawn', args),
@@ -175,9 +249,142 @@ describe('orchestration service', () => {
     const retried = await service.call('orch', 'session_spawn', args);
 
     expect(deps.createWorkerSession).toHaveBeenCalledTimes(1);
+    expect(deps.sendInput).toHaveBeenCalledTimes(1);
     expect(concurrent).toMatchObject({ sessionId: first.sessionId, deduplicated: true });
     expect(retried).toMatchObject({ sessionId: first.sessionId, deduplicated: true });
-    expect(deps.sendInput).toHaveBeenCalledWith(expect.objectContaining({ operationId: 'req-1.task' }));
+    const document = await registry.read();
+    expect(Object.keys(document.operations)).toEqual([document.requestKeys['orch:req-1']]);
+  });
+
+  it('resumes a start whose session exists after a failed create call, so a retry gives one worker', async () => {
+    const { service, deps, workers } = createHarness();
+    deps.createWorkerSession.mockImplementationOnce(async (options) => {
+      await deps.createWorkerSession(options);
+      throw new Error('connection lost after create');
+    });
+    await expect(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'worker-1' });
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    expect(Object.keys(await workers())).toEqual(['worker-1']);
+  });
+
+  it('survives a crash after the session create and before the worker write: a retry gives one worker', async () => {
+    const first = createHarness();
+    const hang = deferred();
+    first.deps.createWorkerSession.mockImplementationOnce(() => hang.promise);
+    void first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    await vi.waitFor(() => expect(first.deps.createWorkerSession).toHaveBeenCalled());
+
+    // Restart: nothing reached disk, the resident session is gone.
+    first.crash();
+    const restarted = createHarness({ file: first.file, workerPrefix: 'after' });
+    await expect(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'after-1' });
+    const document = await restarted.registry.read();
+    expect(Object.keys(document.workers)).toEqual(['after-1']);
+    expect(Object.values(document.operations).map((operation) => operation.state).sort()).toEqual(['abandoned', 'created']);
+  });
+
+  it('survives a crash before the first assistant message: the start is reserved again and a retry gives one durable worker', async () => {
+    const first = createHarness({ workerLimit: 2 });
+    await first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+
+    // Restart: Pi never wrote the JSONL, so the session vanished.
+    first.crash();
+    const restarted = createHarness({ workerLimit: 2, file: first.file, workerPrefix: 'after' });
+    const capabilities = await restarted.service.call('orch', 'orchestration_capabilities');
+    expect(capabilities.freeSlots).toBe(1);
+    expect(capabilities.workers).toEqual([]);
+    const opId = (await restarted.registry.read()).requestKeys['orch:job-1'];
+    expect((await restarted.registry.read()).operations[opId]).toMatchObject({ state: 'reserved', step: 'session', recreate: true });
+
+    await expect(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'after-1' });
+    await restarted.settle('after-1', 'reply');
+    const document = await restarted.registry.read();
+    expect(Object.keys(document.workers)).toEqual(['after-1']);
+    expect(document.workers['after-1'].state).toBe('active');
+    expect(document.operations[opId]).toMatchObject({ state: 'created', sessionId: 'after-1' });
+  });
+
+  it('leaves the open start of another live daemon process alone', async () => {
+    const first = createHarness();
+    const hang = deferred();
+    first.deps.createWorkerSession.mockImplementationOnce(() => hang.promise);
+    void first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }).catch(() => {});
+    await vi.waitFor(() => expect(first.deps.createWorkerSession).toHaveBeenCalled());
+
+    const second = createHarness({ file: first.file });
+    await second.service.call('orch', 'orchestration_capabilities');
+    const opId = (await second.registry.read()).requestKeys['orch:job-1'];
+    expect((await second.registry.read()).operations[opId].state).toBe('reserved');
+  });
+
+  it('keeps workers and roles across a restart', async () => {
+    const first = createHarness();
+    await first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', role: 'research' });
+    await first.settle('worker-1', 'reply');
+
+    first.crash();
+    const restarted = createHarness({ file: first.file });
+    restarted.add(createRuntime({ sessionId: 'worker-1', cwd: '/work/a' }));
+    const listed = await restarted.service.call('orch', 'session_list', {});
+    expect(listed.sessions).toEqual([expect.objectContaining({ sessionId: 'worker-1', role: 'research', lifecycle: 'active', cwd: '/work/a' })]);
+  });
+
+  it('holds the slot of a worker that reported done until its held-open turn settles', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    await harness.service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'more' });
+
+    await harness.service.recordDoneReport('worker-1');
+    await expectCode(harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    await harness.settle('worker-1', 'finished');
+    expect((await harness.workers())['worker-1'].state).toBe('done');
+    await expect(harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' })).resolves.toMatchObject({ sessionId: 'worker-2' });
+  });
+
+  it('makes a worker that reports done in its first durable turn done after that one settle', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.service.recordDoneReport('worker-1');
+    await harness.settle('worker-1', 'finished at once');
+    expect((await harness.workers())['worker-1'].state).toBe('done');
+    await expect(harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' })).resolves.toMatchObject({ sessionId: 'worker-2' });
+  });
+
+  it('gives the last slot to one of a UI prompt and a session_send racing for two done workers', async () => {
+    const harness = createHarness({ workerLimit: 2 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' });
+    await finishWorker(harness, 'worker-1');
+    await finishWorker(harness, 'worker-2');
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/c', task: 'three' });
+
+    const results = await Promise.allSettled([
+      harness.input('worker-1'),
+      harness.service.call('orch', 'session_send', { sessionId: 'worker-2', text: 'again' }),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected').reason).toMatchObject({ code: 'ORCHESTRATION_LIMIT' });
+    const states = Object.values(await harness.workers()).map((worker) => worker.state).sort();
+    expect(states).toEqual(['active', 'done', 'starting']);
+  });
+
+  it('returns the slot when an input to a done worker starts no run, and keeps it for a parallel input that does', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await finishWorker(harness, 'worker-1');
+
+    await expect(harness.input('worker-1', { outcome: 'rejected' })).rejects.toThrow('rejected by preflight');
+    expect((await harness.workers())['worker-1'].state).toBe('done');
+    await harness.input('worker-1', { outcome: 'handled' });
+    expect((await harness.workers())['worker-1'].state).toBe('done');
+
+    await Promise.all([harness.input('worker-1', { outcome: 'handled' }), harness.input('worker-1')]);
+    expect((await harness.workers())['worker-1'].state).toBe('active');
+    await expectCode(harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
   });
 
   it('resolves waits when a worker settles and reports timeouts otherwise', async () => {
@@ -188,6 +395,7 @@ describe('orchestration service', () => {
       .resolves.toMatchObject({ timedOut: true, sessions: [{ sessionId: 'worker-1', state: 'busy' }] });
 
     const waiting = service.call('orch', 'session_wait', { sessionIds: ['worker-1'], timeoutMs: 5_000 });
+    await vi.waitFor(() => expect(service.call).toBeDefined());
     await settle('worker-1', 'done here');
     await expect(waiting).resolves.toMatchObject({
       timedOut: false,
@@ -272,7 +480,7 @@ describe('orchestration service', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 
-  it('delivers a settled worker result to its parent as a turn-starting custom message', async () => {
+  it('delivers a settled worker result to its owner as a turn-starting custom message', async () => {
     const { service, orchestrator, settle } = createHarness();
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', role: 'research' });
     await settle('worker-1', 'research result');
@@ -288,207 +496,18 @@ describe('orchestration service', () => {
     expect(message.content).toContain('research result');
   });
 
-  it('stops a worker tree without delivering the stopped results', async () => {
-    const { service, deps, orchestrator, runtimes, settle } = createHarness();
+  it('stops a worker without delivering the stopped result', async () => {
+    const { service, deps, orchestrator, settle, workers } = createHarness();
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    // A grandchild recorded under worker-1 (e.g. spawned before a role change).
-    runtimes.get('worker-1').session.sessionManager.appendCustomEntry(CHILD_ENTRY, { sessionId: 'grand', cwd: '/work/g' });
-    runtimes.set('grand', createRuntime({ sessionId: 'grand', cwd: '/work/g', lineage: { parentSessionId: 'worker-1' } }));
 
     const stopped = await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
-    expect(stopped.stopped).toEqual(['grand', 'worker-1']);
+    expect(stopped.stopped).toEqual(['worker-1']);
     expect(deps.abortSession).toHaveBeenCalledWith('worker-1');
-    expect(deps.abortSession).toHaveBeenCalledWith('grand');
+    expect((await workers())['worker-1'].state).toBe('stopped');
 
     await settle('worker-1', 'late');
     expect(orchestrator.delivered).toHaveLength(0);
     await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ alreadyStopped: true });
-  });
-
-  it('admits concurrent spawns with different keys only up to the limit and once per directory', async () => {
-    const { service, deps } = createHarness({ workerLimit: 2 });
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    let release;
-    const gate = new Promise((resolve) => { release = resolve; });
-    const create = deps.createWorkerSession.getMockImplementation();
-    deps.createWorkerSession.mockImplementation(async (input) => { await gate; return create(input); });
-
-    const atLimit = [
-      service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two', clientRequestId: 'two' }),
-      service.call('orch', 'session_spawn', { cwd: '/work/c', task: 'three', clientRequestId: 'three' }),
-    ].map((promise) => promise.then(() => 'ok', (error) => error.code));
-    await new Promise((resolve) => { setTimeout(resolve, 5); });
-    release();
-    expect((await Promise.all(atLimit)).sort()).toEqual(['ORCHESTRATION_LIMIT', 'ok']);
-    expect(deps.createWorkerSession).toHaveBeenCalledTimes(2);
-  });
-
-  it('admits one concurrent spawn per directory, also under another spelling of the path', async () => {
-    const { service, deps } = createHarness();
-    let release;
-    const gate = new Promise((resolve) => { release = resolve; });
-    const create = deps.createWorkerSession.getMockImplementation();
-    deps.createWorkerSession.mockImplementation(async (input) => { await gate; return create(input); });
-
-    const sameTree = [
-      service.call('orch', 'session_spawn', { cwd: '/work/tree', task: 'one', clientRequestId: 'one' }),
-      service.call('orch', 'session_spawn', { cwd: '/work/tree/.', task: 'two', clientRequestId: 'two' }),
-    ].map((promise) => promise.then(() => 'ok', (error) => error.code));
-    await new Promise((resolve) => { setTimeout(resolve, 5); });
-    release();
-    expect((await Promise.all(sameTree)).sort()).toEqual(['ORCHESTRATION_CWD_BUSY', 'ok']);
-    // Settled workers do not hold the directory; a later spelling still matches.
-    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/x/../tree', task: 'three' }), 'ORCHESTRATION_CWD_BUSY');
-  });
-
-  it('frees the reservation when worker creation fails', async () => {
-    const { service, deps } = createHarness({ workerLimit: 1 });
-    deps.createWorkerSession.mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'CREATE_FAILED' }));
-    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' }), 'CREATE_FAILED');
-    await expect(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' })).resolves.toMatchObject({ state: 'busy' });
-  });
-
-  it('starts a new worker when a spawn retry follows a rejected first task', async () => {
-    const { service, deps, orchestrator } = createHarness({ workerLimit: 1 });
-    deps.sendInput.mockRejectedValueOnce(Object.assign(new Error('no auth'), { code: 'PROVIDER_AUTH_REQUIRED' }));
-    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job' }), 'PROVIDER_AUTH_REQUIRED');
-    await expect(service.call('orch', 'orchestration_capabilities')).resolves.toMatchObject({ freeSlots: 1, workers: [] });
-
-    const retried = await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job' });
-    expect(retried).toMatchObject({ sessionId: 'worker-2', state: 'busy' });
-    expect(retried.deduplicated).toBeUndefined();
-    expect(deps.sendInput).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'worker-2', operationId: 'job.task' }));
-    expect(childRecordsOf(orchestrator).map(({ sessionId, stopped, rejected }) => ({ sessionId, stopped, rejected })))
-      .toEqual([{ sessionId: 'worker-1', stopped: true, rejected: true }, { sessionId: 'worker-2', stopped: false, rejected: undefined }]);
-  });
-
-  it('keeps a session idle when a send retry only returns the stored receipt', async () => {
-    const { service, deps, settle } = createHarness();
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    await service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'more', delivery: 'followUp', clientRequestId: 'more' });
-    await settle('worker-1', 'done');
-    deps.sendInput.mockResolvedValueOnce({ accepted: true, deduplicated: true });
-
-    await expect(service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'more', delivery: 'followUp', clientRequestId: 'more' }))
-      .resolves.toMatchObject({ deduplicated: true, state: 'idle' });
-    await expect(service.call('orch', 'session_wait', { sessionIds: ['worker-1'], timeoutMs: 1_000 }))
-      .resolves.toMatchObject({ timedOut: false, sessions: [expect.objectContaining({ state: 'idle' })] });
-  });
-
-  it('ends a pending run when a send completes without an agent turn', async () => {
-    const { service, deps, states } = createHarness();
-    deps.sendInput.mockResolvedValueOnce({ accepted: true });
-    states.set('orch', 'idle');
-    await service.call('orch', 'session_send', { sessionId: 'orch', text: '/handled-command' });
-    expect((await service.call('orch', 'session_read', { sessionId: 'orch' })).state).toBe('starting');
-    service.onInputCompleted('orch');
-    await expect(service.call('orch', 'session_wait', { sessionIds: ['orch'], timeoutMs: 1_000 })).resolves.toMatchObject({ timedOut: false });
-  });
-
-  it('keeps the slot and reports a failed stop until an abort succeeds', async () => {
-    const { service, deps, orchestrator, settle } = createHarness();
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    deps.abortSession.mockRejectedValueOnce(Object.assign(new Error('sdk'), { code: 'ABORT_REJECTED' }));
-
-    await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).rejects.toMatchObject({
-      code: 'ORCHESTRATION_STOP_FAILED',
-      details: { stopped: [], failed: [{ sessionId: 'worker-1', code: 'ABORT_REJECTED' }] },
-    });
-    await expect(service.call('orch', 'orchestration_capabilities')).resolves.toMatchObject({ freeSlots: 3, workers: [expect.objectContaining({ state: 'busy' })] });
-
-    await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toEqual({ sessionId: 'worker-1', stopped: ['worker-1'] });
-    await settle('worker-1', 'late');
-    expect(orchestrator.delivered).toHaveLength(0);
-  });
-
-  it('counts a worker that no longer exists as stopped', async () => {
-    const { service, deps } = createHarness();
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    deps.abortSession.mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'INVALID_SESSION' }));
-    await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toEqual({ sessionId: 'worker-1', stopped: ['worker-1'] });
-  });
-
-  it('rejects arguments outside the published contract before touching any session', async () => {
-    const { service, deps } = createHarness();
-    const invalid = [
-      ['session_read', { sessionId: 'orch', limit: 0 }],
-      ['session_read', { sessionId: 'orch', limit: 51 }],
-      ['session_read', { sessionId: 'orch', limit: 1.5 }],
-      ['session_wait', { sessionIds: [] }],
-      ['session_wait', { sessionIds: Array.from({ length: 17 }, (_, index) => `s${index}`) }],
-      ['session_wait', { sessionIds: ['orch'], timeoutMs: -1 }],
-      ['session_wait', { sessionIds: ['orch'], timeoutMs: 3_600_001 }],
-      ['session_send', { sessionId: 'orch', text: 'x', delivery: 'later' }],
-      ['session_spawn', { cwd: '/work/a', task: 'x', extra: true }],
-      ['session_spawn', { cwd: '/work/a' }],
-    ];
-    for (const [tool, args] of invalid) {
-      await expectCode(service.call('orch', tool, args), 'INVALID_ARGUMENT');
-    }
-    expect(deps.activateSession).not.toHaveBeenCalled();
-    expect(deps.createWorkerSession).not.toHaveBeenCalled();
-  });
-
-  it('refuses every tool to a caller session that no longer exists', async () => {
-    const { service } = createHarness();
-    for (const tool of ['session_read', 'session_send', 'session_interrupt']) {
-      const args = tool === 'session_send' ? { sessionId: 'orch', text: 'x' } : { sessionId: 'orch' };
-      await expectCode(service.call('deleted', tool, args), 'ORCHESTRATION_CALLER_GONE');
-    }
-    await expectCode(service.call('deleted', 'session_wait', { sessionIds: ['orch'] }), 'ORCHESTRATION_CALLER_GONE');
-    await expect(service.call('orch', 'session_read', { sessionId: 'orch' })).resolves.toMatchObject({ sessionId: 'orch' });
-  });
-
-  it('retries a result delivery to an unreachable parent and reports a final failure', async () => {
-    const { service, deps, orchestrator, runtimes, settle } = createHarness({
-      // The parent becomes reachable again while the first retry waits.
-      delay: async () => { runtimes.set('orch', orchestrator); },
-    });
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    runtimes.delete('orch');
-    deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'RUNTIME_UNAVAILABLE' }));
-    await settle('worker-1', 'result');
-    expect(orchestrator.delivered).toHaveLength(1);
-    expect(deps.delay).toHaveBeenCalledTimes(1);
-    expect(deps.onDeliveryFailed).not.toHaveBeenCalled();
-
-    deps.delay.mockImplementation(async () => {});
-    orchestrator.session.sendCustomMessage = async () => { throw Object.assign(new Error('closed'), { code: 'RUNTIME_DISPOSED' }); };
-    await settle('worker-1', 'second');
-    expect(deps.delay).toHaveBeenCalledTimes(4);
-    expect(deps.onDeliveryFailed).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'worker-1', parentSessionId: 'orch' }));
-  });
-
-  it('holds the parent guard for each delivery until it is accepted, but not across the backoff', async () => {
-    const held = new Map();
-    const heldDuring = { sends: [], backoffs: [] };
-    const { service, deps, orchestrator, settle } = createHarness({
-      delay: async () => { heldDuring.backoffs.push(held.get('orch') ?? 0); },
-      holdSession: (sessionId) => {
-        held.set(sessionId, (held.get(sessionId) ?? 0) + 1);
-        return () => held.set(sessionId, held.get(sessionId) - 1);
-      },
-    });
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    const send = orchestrator.session.sendCustomMessage;
-    orchestrator.session.sendCustomMessage = async (...args) => {
-      heldDuring.sends.push(held.get('orch') ?? 0);
-      if (heldDuring.sends.length === 1) throw Object.assign(new Error('closed'), { code: 'RUNTIME_DISPOSED' });
-      return send.apply(orchestrator.session, args);
-    };
-    await settle('worker-1', 'result');
-    expect(heldDuring).toEqual({ sends: [1, 1], backoffs: [0] });
-    expect(held.get('orch')).toBe(0);
-    expect(deps.onDeliveryFailed).not.toHaveBeenCalled();
-  });
-
-  it('drops the result of a worker whose parent was deleted', async () => {
-    const { service, deps, runtimes, settle } = createHarness();
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    runtimes.delete('orch');
-    await settle('worker-1', 'result');
-    expect(deps.delay).not.toHaveBeenCalled();
-    expect(deps.onDeliveryFailed).not.toHaveBeenCalled();
   });
 
   it('rejects unknown models, retired roles and relative directories', async () => {
@@ -558,5 +577,98 @@ describe('orchestration service', () => {
     deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('unreadable'), { code: 'INVALID_SESSION', incomplete: true }));
     await expectCode(service.call('missing', 'session_read', { sessionId: 'orch' }), 'SESSION_LOOKUP_FAILED');
     await expectCode(service.call('missing', 'session_read', { sessionId: 'orch' }), 'ORCHESTRATION_CALLER_GONE');
+  });
+});
+
+describe('orchestration takeover', () => {
+  it('moves an idle and a done worker; the old orchestrator can no longer stop them and results reach the new owner', async () => {
+    const harness = createHarness();
+    const successor = harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', role: 'research' });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' });
+    await harness.settle('worker-1', 'idle now');
+    await finishWorker(harness, 'worker-2');
+    harness.orchestrator.delivered.length = 0;
+
+    await expect(harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' }))
+      .resolves.toMatchObject({ fromSessionId: 'orch', workers: ['worker-1', 'worker-2'] });
+    const listed = await harness.service.call('orch-2', 'session_list', {});
+    expect(listed.sessions.map((worker) => [worker.sessionId, worker.lifecycle])).toEqual([['worker-1', 'active'], ['worker-2', 'done']]);
+    await expect(harness.service.call('orch', 'session_list', {})).resolves.toEqual({ sessions: [] });
+    await expectCode(harness.service.call('orch', 'session_stop', { sessionId: 'worker-1' }), 'ORCHESTRATION_FORBIDDEN');
+
+    await harness.service.call('orch-2', 'session_send', { sessionId: 'worker-1', text: 'more' });
+    await harness.settle('worker-1', 'for the successor');
+    expect(harness.orchestrator.delivered).toHaveLength(0);
+    expect(successor.delivered.map((entry) => entry.message.details.sessionId)).toEqual(['worker-1']);
+    await expect(harness.service.call('orch-2', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ stopped: ['worker-1'] });
+  });
+
+  it('refuses a takeover while the old orchestrator runs or from itself', async () => {
+    const harness = createHarness();
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    harness.states.set('orch', 'busy');
+    await expectCode(harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' }), 'ORCHESTRATION_TAKEOVER_BUSY');
+    await expectCode(harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch-2' }), 'INVALID_ARGUMENT');
+  });
+
+  it('refuses a takeover whose retry key the caller already uses, and changes nothing', async () => {
+    const harness = createHarness();
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    await harness.service.call('orch-2', 'session_spawn', { cwd: '/work/b', task: 'two', clientRequestId: 'job-1' });
+    const before = JSON.stringify(await harness.registry.read());
+
+    await expectCode(harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' }), 'ORCHESTRATION_TAKEOVER_KEY_CONFLICT');
+    expect(JSON.stringify(await harness.registry.read())).toBe(before);
+  });
+
+  it('lets the new owner finish a partial start once and refuses the late write of the old call', async () => {
+    const old = createHarness();
+    const hang = deferred();
+    old.deps.createWorkerSession.mockImplementationOnce(async (options) => {
+      await hang.promise;
+      return { sessionId: 'late-session', cwd: options.cwd };
+    });
+    const lateCall = old.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    await vi.waitFor(() => expect(old.deps.createWorkerSession).toHaveBeenCalled());
+
+    // A second daemon process sharing the registry: orch-2 takes over and retries.
+    const successor = createHarness({ file: old.file, workerPrefix: 'new' });
+    successor.add(createRuntime({ sessionId: 'orch-2' }));
+    successor.add(createRuntime({ sessionId: 'orch' }));
+    await expect(successor.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' }))
+      .resolves.toMatchObject({ operations: [expect.stringMatching(/^op_/)] });
+    await expect(successor.service.call('orch-2', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'new-1' });
+
+    hang.resolve();
+    await expect(lateCall).rejects.toMatchObject({ code: 'ORCHESTRATION_OWNER_CHANGED' });
+    const document = await successor.registry.read();
+    expect(Object.keys(document.operations)).toHaveLength(1);
+    expect(Object.keys(document.workers)).toEqual(['new-1']);
+    expect(document.workers['new-1'].orchestratorSessionId).toBe('orch-2');
+  });
+
+  it('imports the workers of a JSONL-only orchestrator once', async () => {
+    const harness = createHarness();
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    const legacy = harness.add(createRuntime({ sessionId: 'legacy' }));
+    legacy.session.sessionManager.appendCustomEntry(CHILD_ENTRY, { sessionId: 'old-1', cwd: '/work/x', title: 'old one', role: 'research' });
+    legacy.session.sessionManager.appendCustomEntry(CHILD_ENTRY, { sessionId: 'old-2', cwd: '/work/y', title: 'old two' });
+    legacy.session.sessionManager.appendCustomEntry('pichamber.orchestration.stopped', { sessionId: 'old-2' });
+
+    await harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'legacy' });
+    const document = await harness.registry.read();
+    expect(document.workers['old-1']).toMatchObject({ orchestratorSessionId: 'orch-2', state: 'active', role: 'research' });
+    expect(document.workers['old-2']).toMatchObject({ orchestratorSessionId: 'orch-2', state: 'stopped' });
+    expect(document.importedFromLineage).toEqual(expect.arrayContaining(['legacy']));
+
+    // A later child entry is not read again, also not by another process.
+    legacy.session.sessionManager.appendCustomEntry(CHILD_ENTRY, { sessionId: 'old-3', cwd: '/work/z', title: 'old three' });
+    const other = createHarness({ file: harness.file });
+    other.add(legacy);
+    await other.service.call('legacy', 'session_list', {});
+    expect((await other.registry.read()).workers['old-3']).toBeUndefined();
   });
 });

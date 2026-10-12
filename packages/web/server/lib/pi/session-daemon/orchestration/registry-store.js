@@ -10,9 +10,9 @@ import { withCrossProcessLock } from '../../../server/cross-process-lock.js';
 // the current document, lets the caller change it and writes it back, all
 // inside one serialised critical section. Unknown keys survive a write.
 
-export const REGISTRY_VERSION = 1;
+const REGISTRY_VERSION = 1;
 
-export class RegistryInvalidError extends Error {
+class RegistryInvalidError extends Error {
   constructor() {
     super('The orchestration registry is invalid.');
     this.name = 'RegistryInvalidError';
@@ -37,7 +37,7 @@ const normalize = (parsed) => {
   return document;
 };
 
-export const emptyRegistry = () => normalize({});
+const emptyRegistry = () => normalize({});
 
 /**
  * @param {{ file: string }} options absolute path of the registry file.

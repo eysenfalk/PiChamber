@@ -1,10 +1,10 @@
 import { createConnection } from 'node:net';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
 import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
@@ -200,6 +200,30 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(capabilities.result.value.host).toEqual(expect.objectContaining({ cpuCount: expect.any(Number), memory: expect.objectContaining({ freeBytes: expect.any(Number) }) }));
     const workerSpawn = await client.request('orchestration.call', { sessionId: workerId, tool: 'session_spawn', args: { cwd: workerDir, task: 'nested' } });
     expect(workerSpawn.result.error).toMatchObject({ code: expect.stringMatching(/^ORCHESTRATION_/) });
+
+    // The durable registry holds the worker, made active by its settled first turn.
+    const registryFile = join(root, 'data', 'pi', 'orchestration-registry.json');
+    await vi.waitFor(async () => {
+      const registry = JSON.parse(await readFile(registryFile, 'utf8'));
+      expect(registry.workers[workerId]).toMatchObject({ orchestratorSessionId: parentId, state: 'active' });
+    }, { timeout: 10_000 });
+
+    // A successor takes the worker over through the IPC path; the old
+    // orchestrator then cannot stop it, and a worker cannot take over.
+    const successor = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
+    const successorId = successor.result.session.id;
+    const workerTakeover = await client.request('orchestration.call', { sessionId: workerId, tool: 'orchestration_takeover', args: { fromSessionId: parentId } });
+    expect(workerTakeover.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
+    let takeover;
+    await vi.waitFor(async () => {
+      takeover = await client.request('orchestration.call', { sessionId: successorId, tool: 'orchestration_takeover', args: { fromSessionId: parentId } });
+      expect(takeover.result.error).toBeUndefined();
+    }, { timeout: 10_000 });
+    expect(takeover.result.value).toMatchObject({ fromSessionId: parentId, workers: [workerId] });
+    const oldStop = await client.request('orchestration.call', { sessionId: parentId, tool: 'session_stop', args: { sessionId: workerId } });
+    expect(oldStop.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
+    const listed = await client.request('orchestration.call', { sessionId: successorId, tool: 'session_list', args: {} });
+    expect(listed.result.value.sessions).toEqual([expect.objectContaining({ sessionId: workerId, lifecycle: 'active' })]);
 
     await client.close();
   }, 120_000);
