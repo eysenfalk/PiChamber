@@ -29,7 +29,7 @@ Which orchestrator owns which worker lives in a durable registry in the daemon. 
       issue?, branch?, worktree?, pullRequest?: { repo, number, headSha? },
       state, stateSince, createdAt,
       report?, question?, snapshot?,         // slice 2
-      remedy?, github?, cleanup?,            // slices 5, 7, 9
+      remedy?, github?, cleanup?, servesPr?, // slices 5, 7, 9, 9
     },
   },
   pendingEvents: {},                         // slice 3
