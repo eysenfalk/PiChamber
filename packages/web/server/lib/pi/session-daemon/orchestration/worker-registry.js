@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import { OrchestrationError } from './errors.js';
 
 // The registry document's rules: slot accounting, the start journal, worker
@@ -25,6 +27,27 @@ const assertFreeSlot = (document, workerLimit) => {
       inUse,
     });
   }
+};
+
+const sameDirectory = (left, right) => typeof left === 'string' && typeof right === 'string'
+  && resolve(left) === resolve(right);
+
+/**
+ * One worker per worktree: a reserved start or a `starting`/`active` worker
+ * holds its directory exactly as long as its slot, across all daemons of the
+ * data root. Directories are canonical when written; `resolve` only folds
+ * lexical spellings of older records.
+ */
+const assertFreeDirectory = (document, cwd, exceptSessionId) => {
+  const operation = Object.entries(document.operations)
+    .find(([, candidate]) => candidate.state === 'reserved' && sameDirectory(candidate.intent?.cwd, cwd));
+  const worker = Object.entries(document.workers)
+    .find(([sessionId, candidate]) => sessionId !== exceptSessionId
+      && SLOT_WORKER_STATES.has(candidate.state) && sameDirectory(candidate.cwd, cwd));
+  if (!operation && !worker) return;
+  throw new OrchestrationError('ORCHESTRATION_CWD_BUSY', 'A managed worker holds this directory; use another worktree.', {
+    ...(worker ? { sessionId: worker[0] } : { opId: operation[0] }),
+  });
 };
 
 export const ensureOwner = (document, orchestratorSessionId, cwd) => {
@@ -57,6 +80,7 @@ export const reserveSpawn = (document, { caller, clientRequestId, intent, worker
     }
   }
   assertFreeSlot(document, workerLimit);
+  assertFreeDirectory(document, intent.cwd);
   document.operations[opId] = {
     kind: 'spawn',
     orchestratorSessionId: caller,
@@ -76,9 +100,15 @@ export const reserveSpawn = (document, { caller, clientRequestId, intent, worker
 
 export const beginStep = (document, opId, caller, step, at, process) => {
   const operation = ownedOperation(document, opId, caller);
+  if (step === 'session' && operation.state !== 'reserved') {
+    throw new OrchestrationError('ORCHESTRATION_START_CLOSED', 'This start was closed meanwhile; retry the spawn.', { opId, state: operation.state });
+  }
   operation.process = process;
   operation.step = step;
   operation.steps[step] = { startedAt: at };
+  // The prompt step drives the worker's start; its stamp is the start's claim.
+  const worker = operation.sessionId ? document.workers[operation.sessionId] : undefined;
+  if (worker?.state === 'starting') worker.process = process;
   return operation;
 };
 
@@ -89,6 +119,11 @@ export const finishStep = (operation, step, at, details = {}) => {
 /** Step `session` done: the worker is added in the same transaction. */
 export const recordSession = (document, opId, caller, session, at) => {
   const operation = ownedOperation(document, opId, caller);
+  // Only a held reservation may become a worker; an abandoned or failed start
+  // already gave its slot away.
+  if (operation.state !== 'reserved') {
+    throw new OrchestrationError('ORCHESTRATION_START_CLOSED', 'This start was closed meanwhile; retry the spawn.', { opId, state: operation.state });
+  }
   const { intent } = operation;
   finishStep(operation, 'session', at, { sessionId: session.sessionId });
   operation.sessionId = session.sessionId;
@@ -118,6 +153,25 @@ export const failOperation = (document, opId, caller, step, message, at) => {
   operation.state = 'failed';
   operation.stateSince = at;
   operation.error = { step, message, at };
+};
+
+/**
+ * Pi rejected the first task. Pi persisted nothing, so the session is
+ * ephemeral and goes away; the worker is stopped with reason `task_rejected`
+ * and frees its slot and directory, and a retry with the same key starts a
+ * new worker because only open operations are reused.
+ */
+export const rejectStart = (document, opId, caller, message, at) => {
+  const operation = ownedOperation(document, opId, caller);
+  operation.state = 'failed';
+  operation.stateSince = at;
+  operation.error = { step: 'prompted', message, at };
+  const worker = operation.sessionId ? document.workers[operation.sessionId] : undefined;
+  if (!worker) return;
+  worker.state = 'stopped';
+  worker.stateSince = at;
+  worker.stoppedReason = 'task_rejected';
+  delete worker.process;
 };
 
 const setWorkerState = (worker, state, at) => {
@@ -183,6 +237,7 @@ export const reserveForInput = (document, sessionId, { workerLimit, token, at, p
   const worker = document.workers[sessionId];
   if (!worker || !RESTARTABLE_STATES.has(worker.state)) return null;
   assertFreeSlot(document, workerLimit);
+  assertFreeDirectory(document, worker.cwd, sessionId);
   worker.gate = { token, previous: worker.state, process };
   setWorkerState(worker, 'active', at);
   return token;
@@ -237,10 +292,20 @@ export const importLineage = (document, orchestratorSessionId, children, at) => 
  * to `to`, with retry keys for the new owner. A caller key that already maps
  * to another operation refuses the whole takeover before any change (R3-S2).
  */
-export const takeOver = (document, { from, to, at }) => {
+export const takeOver = (document, { from, to, at, isRunning = () => false }) => {
+  // `isRunning(opId, operation)` says whether the step's process still runs it.
   const operations = Object.entries(document.operations)
     .filter(([, operation]) => operation.orchestratorSessionId === from
       && (OPEN_OPERATION_STATES.has(operation.state) || operation.state === 'created'));
+  // A step that started and did not finish in a live process is still running.
+  const running = operations.filter(([opId, operation]) => {
+    const step = operation.steps?.[operation.step];
+    return step?.startedAt !== undefined && step.doneAt === undefined && step.endedAt === undefined
+      && isRunning(opId, operation);
+  });
+  if (running.length > 0) {
+    throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', 'A start of that orchestrator is still running; retry when it finished.', { opIds: running.map(([opId]) => opId) });
+  }
   const conflicts = [];
   for (const [opId, operation] of operations) {
     if (!operation.clientRequestId) continue;

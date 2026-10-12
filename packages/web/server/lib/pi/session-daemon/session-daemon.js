@@ -61,6 +61,7 @@ import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from
 import { OrchestrationError } from './orchestration/errors.js';
 import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
 import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
+import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -3893,13 +3894,21 @@ export function createSessionDaemon({
         return error?.code === 'ENOENT' ? 'absent' : 'unknown';
       }
     },
-    findSessionByOperation: async ({ opId }) => {
+    // Resident sessions first, then the persisted ones of the start's
+    // directory; a failed read throws, so the start stays undecided.
+    findSessionByOperation: async ({ opId, cwd: operationCwd }) => {
       const live = (runtimeRegistry?.listAll() ?? []).find((candidate) => {
         const entries = candidate.session?.sessionManager?.getEntries?.() ?? [];
         return entries.some((entry) => entry?.type === 'custom' && entry.customType === LINEAGE_ENTRY && entry.data?.opId === opId);
       });
-      if (!live) return undefined;
-      return { sessionId: live.session.sessionId, cwd: live.cwd, sessionFile: sessionFileOf(live) };
+      if (live) return { sessionId: live.session.sessionId, cwd: live.cwd, sessionFile: sessionFileOf(live) };
+      if (typeof operationCwd !== 'string' || operationCwd.length === 0) return undefined;
+      return findPersistedSessionByOperation({
+        opId,
+        cwd: operationCwd,
+        listSessions: ({ cwd: listCwd }) => listSessions({ cwd: listCwd, agentDir }),
+        lineageType: LINEAGE_ENTRY,
+      });
     },
     sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
       { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },

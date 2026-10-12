@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 
+import { schemaViolation } from './contract-validator.js';
 import { OrchestrationError } from './errors.js';
 import { workerPreamble } from './instructions.js';
 import { authorize, needsOwnership } from './policy.js';
+import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTime } from './process-identity.js';
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
 import {
   applyDurability,
@@ -16,6 +18,7 @@ import {
   keepInput,
   ownedOperation,
   recordSession,
+  rejectStart,
   releaseInput,
   requestKey,
   reserveForInput,
@@ -44,6 +47,15 @@ const RESULT_TEXT_LIMIT = 16 * 1024;
 const READ_TEXT_LIMIT = 8 * 1024;
 const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 3_600_000;
+// Result delivery retries a parent that cannot be reached: 1s, 2s, 4s, then
+// the failure is reported instead of dropped silently.
+const DELIVERY_ATTEMPTS = 4;
+const DELIVERY_RETRY_MS = 1_000;
+// Codes with which the daemon reports a session that no longer exists.
+const GONE_CODES = new Set(['INVALID_SESSION', 'SESSION_NOT_FOUND']);
+const isGone = (error) => GONE_CODES.has(error?.code);
+// The session a call acts as was deleted; adapters revoke its credentials.
+export const CALLER_GONE = 'ORCHESTRATION_CALLER_GONE';
 
 const customEntries = (runtime, customType) => {
   const entries = runtime?.session?.sessionManager?.getEntries?.() ?? [];
@@ -92,17 +104,6 @@ const lastTimestamp = (runtime) => {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 };
 
-// Signal 0 probes a pid without touching it; EPERM means it exists.
-const defaultIsProcessAlive = (pid) => {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === 'EPERM';
-  }
-};
-
 const toolByName = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool]));
 
 /**
@@ -128,16 +129,25 @@ export function createOrchestrationService(deps) {
     // A live session created for this start operation, if any.
     findSessionByOperation = async () => undefined,
     now = () => Date.now(),
+    // Canonical form of a worker directory, so spellings share one lock.
+    canonicalDirectory = async (directory) => directory,
+    onDeliveryFailed = () => {},
+    delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
     processId = process.pid,
-    isProcessAlive = defaultIsProcessAlive,
+    processInstance = PROCESS_INSTANCE,
+    isProcessAlive = isPidAlive,
+    processStartTime = readProcessStartTime,
   } = deps;
 
   // Several daemons can share one data root. Every transitional record
   // names the process that drives it, so the restart check of one process
   // never finishes what a live other process is still doing.
-  const self = { pid: processId, instance: randomUUID() };
-  const belongsToLiveProcess = (owner) => Boolean(owner)
-    && (owner.instance === self.instance || isProcessAlive(owner.pid));
+  const { self, isLive: belongsToLiveProcess, isMine } = createProcessIdentity({
+    pid: processId,
+    instance: processInstance,
+    isAlive: isProcessAlive,
+    startTimeOf: processStartTime,
+  });
 
   // Runs this service started that have not settled yet. A run accepted by
   // Pi may not have emitted agent_start yet, so live streaming state alone
@@ -147,7 +157,8 @@ export function createOrchestrationService(deps) {
   // In-process guards only; the registry is the durable record.
   const inflightSpawns = new Map();
   const runningOperations = new Map();
-  const inputsInFlight = new Map();
+  // Inputs on their way per session; the slot decision waits for the last.
+  const inputGates = new Map();
   const imported = new Set();
 
   const stateOf = (sessionId) => {
@@ -169,8 +180,16 @@ export function createOrchestrationService(deps) {
   };
 
   const callerRuntime = async (callerSessionId) => {
-    const runtime = getLiveRuntime(callerSessionId) ?? await activateSession(callerSessionId);
-    if (!runtime) throw new OrchestrationError('SESSION_NOT_FOUND', 'The calling session is not available.');
+    let runtime = getLiveRuntime(callerSessionId);
+    if (!runtime) {
+      try {
+        runtime = await activateSession(callerSessionId);
+      } catch (error) {
+        if (isGone(error)) throw new OrchestrationError(CALLER_GONE, 'The calling session no longer exists.');
+        throw error;
+      }
+    }
+    if (!runtime) throw new OrchestrationError(CALLER_GONE, 'The calling session no longer exists.');
     return runtime;
   };
 
@@ -270,10 +289,18 @@ export function createOrchestrationService(deps) {
     };
   };
 
+  // A run counts as pending from the send until its settle. A deduplicated
+  // receipt starts no run, so it only keeps a pending flag an earlier send set.
   const startTask = async (sessionId, text, delivery, operationId) => {
+    const wasPending = pendingRuns.has(sessionId);
     pendingRuns.add(sessionId);
     try {
-      return await sendInput({ sessionId, text, delivery, operationId });
+      const receipt = await sendInput({ sessionId, text, delivery, operationId });
+      if (receipt?.deduplicated && !wasPending) {
+        pendingRuns.delete(sessionId);
+        notifyWaiters();
+      }
+      return receipt;
     } catch (error) {
       pendingRuns.delete(sessionId);
       notifyWaiters();
@@ -311,8 +338,9 @@ export function createOrchestrationService(deps) {
               },
             });
           } catch (error) {
-            // The session may exist although the create call failed late.
-            session = await findSessionByOperation({ opId, cwd: intent.cwd });
+            // The session may exist although the create call failed late. An
+            // undecided lookup keeps the reservation for a retry.
+            session = await findSessionByOperation({ opId, cwd: intent.cwd }).catch(() => { throw error; });
             if (!session) {
               await registry.update((current) => failOperation(current, opId, caller, 'session', error?.message ?? String(error), now()))
                 .catch(() => {});
@@ -326,16 +354,50 @@ export function createOrchestrationService(deps) {
       }
       const { sessionId } = operation;
       if (!operation.steps.prompted?.doneAt && document.workers[sessionId]) {
+        // A prompt step that began before a crash may have been accepted;
+        // send receipts do not outlive the process, the transcript does.
+        const accepted = operation.steps.prompted?.startedAt !== undefined && await hasUserMessage(sessionId, intent.cwd);
         await registry.update((current) => beginStep(current, opId, caller, 'prompted', now(), self));
-        const receipt = await startTask(sessionId, intent.brief, 'prompt', `${opId}.task`);
+        let receipt;
+        if (!accepted) {
+          try {
+            receipt = await startTask(sessionId, intent.brief, 'prompt', `${opId}.task`);
+          } catch (error) {
+            await registry.update((current) => rejectStart(current, opId, caller, error?.message ?? String(error), now()))
+              .catch(() => {});
+            throw error;
+          }
+        }
         await registry.update((current) => {
-          finishStep(ownedOperation(current, opId, caller), 'prompted', now(), receipt?.messageId ? { messageId: receipt.messageId } : {});
+          finishStep(ownedOperation(current, opId, caller), 'prompted', now(), accepted
+            ? { recovered: true }
+            : receipt?.messageId ? { messageId: receipt.messageId } : {});
         });
         document = await registry.read();
       }
       return { sessionId, worker: document.workers[sessionId] };
+    } catch (error) {
+      // The step ended without finishing; a takeover need not wait for it.
+      await registry.update((current) => {
+        const live = current.operations[opId];
+        const step = live?.orchestratorSessionId === caller ? live.steps?.[live.step] : undefined;
+        if (step?.startedAt !== undefined && step.doneAt === undefined) step.endedAt = now();
+      }).catch(() => {});
+      throw error;
     } finally {
       runningOperations.delete(opId);
+    }
+  };
+
+  // Whether the transcript already holds the task, so a resumed prompt step
+  // must not send it again. Unreadable counts as not accepted: the send then
+  // fails the same way and closes the start.
+  const hasUserMessage = async (sessionId, cwd) => {
+    try {
+      const runtime = getLiveRuntime(sessionId) ?? await activateSession(sessionId, cwd);
+      return (runtime?.session?.messages ?? []).some((message) => message?.role === 'user');
+    } catch {
+      return false;
     }
   };
 
@@ -344,22 +406,12 @@ export function createOrchestrationService(deps) {
       throw new OrchestrationError('INVALID_ARGUMENT', 'cwd must be an absolute directory.');
     }
     const settings = await readSettings();
-    const known = args.clientRequestId
-      ? (await registry.read()).requestKeys[requestKey(callerSessionId, args.clientRequestId)]
-      : undefined;
-    if (!known) {
-      const busyHere = listLiveRuntimes().find((candidate) => lineageOf(candidate) && candidate.cwd === args.cwd
-        && !isSettled(candidate.session.sessionId));
-      if (busyHere) {
-        throw new OrchestrationError('ORCHESTRATION_CWD_BUSY', 'A managed worker is busy in this directory; use another worktree.', {
-          sessionId: busyHere.session.sessionId,
-        });
-      }
-    }
+    // The registry holds the directory with the slot; spellings fold here.
+    const cwd = await canonicalDirectory(args.cwd);
     const { model, thinking } = await resolveModel(args, settings);
     const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
     const intent = {
-      cwd: args.cwd,
+      cwd,
       title,
       brief: `${workerPreamble(callerSessionId)}${args.task}`,
       ...(args.role ? { role: args.role } : {}),
@@ -521,19 +573,39 @@ export function createOrchestrationService(deps) {
     return { sessionId: args.sessionId, interrupted: true };
   };
 
-  // `stopping` holds the slot and suppresses the result delivery of the abort
-  // settle; the worker becomes `stopped` once its abort returned.
-  const stopTree = async (sessionId, stopped) => {
-    if (stopped.includes(sessionId)) return;
-    stopped.push(sessionId);
-    pendingRuns.delete(sessionId);
+  // Stops the worker and its own workers, deepest first. `stopping` holds the
+  // slot and suppresses the result of the abort settle. A worker becomes
+  // `stopped`, and frees its slot, only after its abort succeeded or the
+  // session no longer exists. A failed abort, for example of a worker resident
+  // in another daemon, keeps the worker and its slot, and its ancestors keep
+  // running, so a retry can finish the stop.
+  const stopTree = async (sessionId, result) => {
+    if (result.stopped.includes(sessionId)) return true;
     const children = await registry.update((document) => {
       const worker = document.workers[sessionId];
       if (worker) worker.stopping = self;
       return workersOf(document, sessionId, { includeStopped: false }).map(([childId]) => childId);
     });
-    for (const childId of children) await stopTree(childId, stopped);
-    await abortSession(sessionId).catch(() => {});
+    let failure;
+    for (const childId of children) {
+      if (!await stopTree(childId, result)) failure = 'ORCHESTRATION_DESCENDANT_STOP_FAILED';
+    }
+    if (!failure) {
+      try {
+        await abortSession(sessionId);
+      } catch (error) {
+        if (!isGone(error)) failure = typeof error?.code === 'string' ? error.code : 'ABORT_FAILED';
+      }
+    }
+    if (failure) {
+      result.failed.push({ sessionId, code: failure });
+      await registry.update((document) => {
+        const worker = document.workers[sessionId];
+        if (isMine(worker?.stopping)) delete worker.stopping;
+      });
+      return false;
+    }
+    pendingRuns.delete(sessionId);
     await registry.update((document) => {
       const worker = document.workers[sessionId];
       if (!worker) return;
@@ -543,15 +615,23 @@ export function createOrchestrationService(deps) {
       worker.state = 'stopped';
       worker.stateSince = now();
     });
+    result.stopped.push(sessionId);
+    return true;
   };
 
   const stop = async (_callerSessionId, args) => {
     const worker = (await registry.read()).workers[args.sessionId];
     if (worker?.state === 'stopped') return { sessionId: args.sessionId, stopped: [], alreadyStopped: true };
-    const stopped = [];
-    await stopTree(args.sessionId, stopped);
+    const result = { stopped: [], failed: [] };
+    await stopTree(args.sessionId, result);
     notifyWaiters();
-    return { sessionId: args.sessionId, stopped };
+    if (result.failed.length > 0) {
+      throw new OrchestrationError('ORCHESTRATION_STOP_FAILED', 'Some workers could not be aborted and keep running; retry session_stop.', {
+        sessionId: args.sessionId,
+        ...result,
+      });
+    }
+    return { sessionId: args.sessionId, stopped: result.stopped };
   };
 
   const takeover = async (callerSessionId, args, _options, context) => {
@@ -559,17 +639,34 @@ export function createOrchestrationService(deps) {
     if (from === callerSessionId) {
       throw new OrchestrationError('INVALID_ARGUMENT', 'An orchestrator cannot take over from itself.');
     }
-    const busyStep = [...runningOperations.values()].includes(from);
-    if (busyStep || !isSettled(from)) {
-      throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', busyStep
-        ? 'A start of that orchestrator is still running; retry when it finished.'
-        : 'That orchestrator is still running; interrupt it or wait until it is idle.', { sessionId: from });
+    // Only a session resident here can be proven idle. One that is resident
+    // in another daemon (SESSION_IN_USE) or cannot be checked is not idle; a
+    // deleted one has no run left.
+    let fromRuntime = getLiveRuntime(from);
+    if (!fromRuntime) {
+      try {
+        fromRuntime = await activateSession(from);
+      } catch (error) {
+        if (!isGone(error)) {
+          throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', 'That orchestrator cannot be checked here, it may still run in another PiChamber instance.', {
+            sessionId: from,
+            ...(typeof error?.code === 'string' ? { cause: error.code } : {}),
+          });
+        }
+      }
     }
-    const fromRuntime = getLiveRuntime(from) ?? await activateSession(from).catch(() => undefined);
+    if (fromRuntime && !isSettled(from)) {
+      throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', 'That orchestrator is still running; interrupt it or wait until it is idle.', { sessionId: from });
+    }
     if (fromRuntime && !lineageOf(fromRuntime)) await ensureImported(from, fromRuntime);
+    // A start step in flight blocks the takeover: here when this service runs
+    // it, elsewhere while the process that began it lives.
+    const isRunning = (opId, operation) => (isMine(operation.process)
+      ? runningOperations.has(opId)
+      : belongsToLiveProcess(operation.process));
     const moved = await registry.update((document) => {
       ensureOwner(document, callerSessionId, context.runtime.cwd);
-      return takeOver(document, { from, to: callerSessionId, at: now() });
+      return takeOver(document, { from, to: callerSessionId, at: now(), isRunning });
     });
     return { fromSessionId: from, workers: moved.workers, operations: moved.operations };
   };
@@ -587,17 +684,20 @@ export function createOrchestrationService(deps) {
   };
 
   /**
-   * Execute one tool as `callerSessionId`. Arguments are validated by the
-   * adapter against the shared JSON Schema contracts; the policy decides
-   * before any side effect.
+   * Execute one tool as `callerSessionId`. The arguments are validated here
+   * against the shared contracts, so both adapters get the same bounds; the
+   * caller must still exist, and the policy decides before any side effect.
    */
   const call = async (callerSessionId, toolName, args = {}, options = {}) => {
-    if (!toolByName.has(toolName)) {
+    const tool = toolByName.get(toolName);
+    if (!tool) {
       throw new OrchestrationError('UNKNOWN_TOOL', `Unknown orchestration tool: ${toolName}`);
     }
     if (typeof callerSessionId !== 'string' || callerSessionId.length === 0) {
       throw new OrchestrationError('SESSION_NOT_FOUND', 'The calling session is unknown.');
     }
+    const violation = schemaViolation(tool.parameters, args ?? {});
+    if (violation) throw new OrchestrationError('INVALID_ARGUMENT', violation);
     await reconciled();
     const runtime = await callerRuntime(callerSessionId);
     const callerKind = lineageOf(runtime) ? 'worker' : 'orchestrator';
@@ -607,6 +707,39 @@ export function createOrchestrationService(deps) {
       : undefined;
     authorize({ toolName, callerSessionId, callerKind, targetOwner });
     return handlers[toolName](callerSessionId, args ?? {}, options, { runtime, callerKind });
+  };
+
+  /** Confirms that a session exists before a credential is issued for it. */
+  const verifyCaller = async (callerSessionId) => {
+    await callerRuntime(callerSessionId);
+    return { sessionId: callerSessionId };
+  };
+
+  /**
+   * Called by the daemon when a send finished without an agent turn (a
+   * handled extension command), so no agent_settled follows.
+   */
+  const onInputCompleted = (sessionId) => {
+    if (!pendingRuns.delete(sessionId)) return;
+    notifyWaiters();
+  };
+
+  // A parent that cannot be reached is retried with backoff; a deleted parent
+  // drops the result, and a final failure is reported through onDeliveryFailed.
+  const deliverWithRetry = async (sessionId, runtime, worker, ownerCwd) => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await deliverResult(sessionId, runtime, worker, ownerCwd);
+        return;
+      } catch (error) {
+        if (isGone(error)) return;
+        if (attempt >= DELIVERY_ATTEMPTS) {
+          onDeliveryFailed({ sessionId, parentSessionId: worker.orchestratorSessionId, parentDirectory: ownerCwd, error });
+          return;
+        }
+        await delay(DELIVERY_RETRY_MS * 2 ** (attempt - 1));
+      }
+    }
   };
 
   const deliverResult = async (sessionId, runtime, worker, ownerCwd) => {
@@ -655,7 +788,7 @@ export function createOrchestrationService(deps) {
       return { state, worker: worker ? { ...worker } : undefined, ownerCwd: current.owners[worker?.orchestratorSessionId]?.cwd };
     });
     if (!settled.worker || settled.worker.stopping || settled.state === 'stopped') return;
-    await deliverResult(sessionId, runtime, settled.worker, settled.ownerCwd ?? lineage?.parentDirectory);
+    await deliverWithRetry(sessionId, runtime, settled.worker, settled.ownerCwd ?? lineage?.parentDirectory);
   };
 
   /**
@@ -665,37 +798,56 @@ export function createOrchestrationService(deps) {
    * to `afterSessionInput` once the input started a run or ended without one.
    */
   const beforeSessionInput = async (sessionId) => {
-    inputsInFlight.set(sessionId, (inputsInFlight.get(sessionId) ?? 0) + 1);
+    // A gate that is deciding keep or release finishes before a new input joins.
+    while (inputGates.get(sessionId)?.closing) await inputGates.get(sessionId).closing;
+    const gate = inputGates.get(sessionId) ?? { inputs: 0, token: null, started: false };
+    gate.inputs += 1;
+    inputGates.set(sessionId, gate);
     try {
-      if (!(await registry.read()).workers[sessionId]) return { token: null };
+      let document;
+      try {
+        document = await registry.read();
+      } catch (error) {
+        // A broken registry must not block sessions that are provably no
+        // workers; a worker or an undecided session still fails closed.
+        const runtime = getLiveRuntime(sessionId) ?? await activateSession(sessionId).catch(() => undefined);
+        if (runtime && !lineageOf(runtime)) return {};
+        throw error;
+      }
+      if (!document.workers[sessionId]) return {};
       await reconciled();
       const worker = (await registry.read()).workers[sessionId];
-      if (!worker || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return { token: null };
+      if (gate.token || !worker || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return {};
       const { workerLimit } = await readSettings();
-      const token = await registry.update((document) => reserveForInput(document, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
-      return { token };
+      const token = await registry.update((current) => reserveForInput(current, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
+      if (token) gate.token = token;
+      return {};
     } catch (error) {
-      inputDone(sessionId);
+      await afterSessionInput(sessionId, {}, { startedRun: false }).catch(() => {});
       throw error;
     }
   };
 
-  const inputDone = (sessionId) => {
-    const remaining = (inputsInFlight.get(sessionId) ?? 1) - 1;
-    if (remaining > 0) inputsInFlight.set(sessionId, remaining);
-    else inputsInFlight.delete(sessionId);
-  };
-
-  // The slot returns only when this input started no run, no run is live and
-  // no parallel input is still on its way (it may yet start one, R3-S1).
-  const afterSessionInput = async (sessionId, ticket, { startedRun = false } = {}) => {
-    inputDone(sessionId);
-    const token = ticket?.token;
-    if (!token) return;
-    const keep = startedRun || hasLiveRun(sessionId) || inputsInFlight.has(sessionId);
-    await registry.update((document) => (keep
-      ? keepInput(document, sessionId, token)
-      : releaseInput(document, sessionId, token, now())));
+  // Parallel inputs share one gate. The last one to finish decides: the slot
+  // stays when any of them started a run or a run is live, and returns
+  // otherwise (S1).
+  const afterSessionInput = async (sessionId, _ticket, { startedRun = false } = {}) => {
+    const gate = inputGates.get(sessionId);
+    if (!gate || gate.closing) return;
+    gate.inputs -= 1;
+    if (startedRun) gate.started = true;
+    if (gate.inputs > 0) return;
+    const { token } = gate;
+    const keep = gate.started || hasLiveRun(sessionId);
+    gate.closing = (token
+      ? registry.update((document) => (keep
+        ? keepInput(document, sessionId, token)
+        : releaseInput(document, sessionId, token, now())))
+      : Promise.resolve()
+    ).finally(() => {
+      if (inputGates.get(sessionId) === gate) inputGates.delete(sessionId);
+    });
+    await gate.closing;
   };
 
   /**
@@ -709,31 +861,39 @@ export function createOrchestrationService(deps) {
     return true;
   });
 
-  // The restart check runs once per process, before the first use that
-  // touches the registry, not at daemon start: a daemon that never
-  // orchestrates never writes the registry.
+  // The check is lazy, not at daemon start: a daemon that never
+  // orchestrates never writes the registry. It runs before each use that touches the registry, so a process
+  // that dies later is still recovered (S2); concurrent uses share one pass.
+  // It looks only at open transitions of dead processes, not the history.
   let reconciling;
   const reconciled = () => {
-    reconciling ??= reconcile().catch((error) => {
-      reconciling = undefined;
-      throw error;
-    });
+    reconciling ??= reconcile().finally(() => { reconciling = undefined; });
     return reconciling;
   };
 
+  const sameStamp = (left, right) => left?.pid === right?.pid
+    && left?.instance === right?.instance && left?.service === right?.service;
+
   /**
-   * After a restart: adopt or release reserved starts, check `starting` workers
-   * against the disk, and finish what a crash interrupted (a stop, an input
-   * gate). No run is live after a restart.
+   * Recovery of transitions whose process died: adopt or release reserved
+   * starts, check `starting` workers against the disk, and finish an
+   * interrupted stop or input gate. Every change is bound to the stamp read
+   * before it, so a transition another process claimed meanwhile stays (B3).
    */
   const reconcile = async () => {
     const document = await registry.read();
     for (const [opId, operation] of Object.entries(document.operations)) {
       if (operation.state !== 'reserved' || operation.recreate || belongsToLiveProcess(operation.process)) continue;
-      const session = await findSessionByOperation({ opId, cwd: operation.intent?.cwd });
+      let session;
+      try {
+        session = await findSessionByOperation({ opId, cwd: operation.intent?.cwd });
+      } catch {
+        // Undecided: the reservation stays for a later pass or a retry (S5).
+        continue;
+      }
       await registry.update((current) => {
         const live = current.operations[opId];
-        if (live?.state !== 'reserved' || live.recreate) return;
+        if (live?.state !== 'reserved' || live.recreate || !sameStamp(live.process, operation.process)) return;
         if (session) {
           recordSession(current, opId, live.orchestratorSessionId, session, now());
           return;
@@ -749,13 +909,16 @@ export function createOrchestrationService(deps) {
       await registry.update((current) => {
         const live = current.workers[sessionId];
         if (!live) return;
-        if (presence && live.state === 'starting') applyDurability(current, sessionId, presence, now());
-        if (live.gate && !belongsToLiveProcess(live.gate.process)) releaseInput(current, sessionId, live.gate.token, now());
-        if (live.stopping && !belongsToLiveProcess(live.stopping)) {
-          delete live.stopping;
-          live.state = 'stopped';
-          live.stateSince = now();
+        // The file check applies only to the start it was made for; a start
+        // another process claimed meanwhile stays.
+        if (presence && live.state === 'starting' && sameStamp(live.process, worker.process)
+          && !belongsToLiveProcess(live.process)) {
+          applyDurability(current, sessionId, presence, now());
         }
+        if (live.gate && !belongsToLiveProcess(live.gate.process)) releaseInput(current, sessionId, live.gate.token, now());
+        // A stop whose process died may not have aborted the run: the worker
+        // keeps its state and slot, and session_stop can be retried.
+        if (live.stopping && !belongsToLiveProcess(live.stopping)) delete live.stopping;
       });
     }
   };
@@ -766,6 +929,8 @@ export function createOrchestrationService(deps) {
     beforeSessionInput,
     afterSessionInput,
     recordDoneReport,
+    onInputCompleted,
+    verifyCaller,
     isWorker: (sessionManager) => Boolean(lineageOf({ session: { sessionManager } })),
     toolNames: ORCHESTRATION_TOOL_NAMES,
   };
