@@ -1,6 +1,6 @@
 # Slice 7. Start and cleanup
 
-Closes #118. Depends on slice 6 and on #110 (PR #112) merged. Proposed role: `task-extreme`.
+Closes #118. Depends on slices 5 and 6 and on #110 (PR #112) merged. Proposed role: `task-extreme`.
 
 ## Contract
 
@@ -15,7 +15,10 @@ worker_start { issue: number, slug: string, role, brief, repo?: absolute path, c
   → { sessionId, branch, worktree, state }
 worker_cleanup { sessionId, force?: false }   // runs the cleanup checks now
 worker_abandon { sessionId }                  // undoes a start_failed start
+session_delete { sessionId }                  // deletes one of the caller's workers
 ```
+
+`session_delete` is new here, not in #107 (orchestrator decision 2026-10-12). It is orchestrator only, accepts only workers of the caller in the registry whose state is not `starting` or `active` with a live run, stops the worker first when needed, and calls the daemon's existing `deleteSession(sessionId, directory)`, the function behind `sessions.delete` and `DELETE /api/pi/sessions/:id`, which disposes the runtime, removes the JSONL and releases the lease. The record becomes `removed`; a failed delete leaves the record and returns the daemon's error. Cleanup uses the same path.
 
 `worker_start` steps, each recorded in `record.start.steps` before the next begins:
 
@@ -26,7 +29,7 @@ worker_abandon { sessionId }                  // undoes a start_failed start
 
 A failure stops, sets `start_failed` with the error and the completed steps, and emits `start_failed`. A retry with the same `clientRequestId` resumes after the last completed step; `worker_abandon` removes only artifacts this start recorded.
 
-Cleanup on `pr_merged` (and by `worker_cleanup`), when `orchestration.cleanup.auto` is on (default on): checks from #112: pull request `MERGED`, local branch tip equals the merged head SHA, worktree clean, no running run. Then stop the session, delete the session (daemon delete op, the same as the UI's), `git worktree remove` (never `--force`), `git branch -d` after the squash check, delete the remote branch. Each step is recorded; a failed check or step sets `cleanup_blocked`, emits `cleanup_blocked` with the reason and leaves everything else; success sets `removed` and emits `cleanup_done`. Never touches `main`, `dev` or a branch with commits not in the merged head.
+Cleanup on `pr_merged` (and by `worker_cleanup`), when `orchestration.cleanup.auto` is on (default on): checks from #112: pull request `MERGED`, local branch tip equals the merged head SHA, worktree clean, no running run. Then stop the session, delete it through `session_delete`'s path, `git worktree remove` (never `--force`), `git branch -d` after the squash check, delete the remote branch. Each step is recorded; a failed check or step sets `cleanup_blocked`, emits `cleanup_blocked` with the reason and leaves everything else; success sets `removed` and emits `cleanup_done`. Never touches `main`, `dev` or a branch with commits not in the merged head.
 
 The skill drops its manual branch, worktree and cleanup steps in favour of these tools.
 
@@ -40,7 +43,7 @@ Focused tests, `bun run test`, lab recording; this slice is a candidate to split
 
 ## Left to the implementer
 
-The worktree location (next to the repository like `~/.wt/worktrees/<repo>/<branch>`, or a setting), how the session delete op is reached from the service, branch slug rules.
+The worktree location (next to the repository like `~/.wt/worktrees/<repo>/<branch>`, or a setting), branch slug rules, whether cleanup also deletes the worker's own stopped review workers.
 
 ## Stays green
 
