@@ -51,7 +51,7 @@ const Pill: React.FC<{ pill: WorktreePill; fetchedAt: number | null; error: stri
     case 'attention': {
       const label = ATTENTION_LABEL[pill.reason];
       return (
-        <span role="img" aria-label={label} title={label} className="inline-flex items-center text-[var(--status-warning)]">
+        <span role="img" aria-label={label} title={label} className="inline-flex items-center text-[var(--status-error)]">
           <Icon name="alert" className="size-3" />
         </span>
       );
@@ -63,7 +63,7 @@ const Pill: React.FC<{ pill: WorktreePill; fetchedAt: number | null; error: stri
     case 'clean':
       // An icon, not the ✓ glyph: the interface monospace font has no check mark.
       return (
-        <span role="img" aria-label="All committed" title="All committed" className="inline-flex items-center text-muted-foreground/60">
+        <span role="img" aria-label="All committed" title="All committed" className="inline-flex items-center text-muted-foreground/85">
           <Icon name="check" className="size-3" />
         </span>
       );
