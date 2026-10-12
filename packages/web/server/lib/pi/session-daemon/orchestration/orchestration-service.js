@@ -29,7 +29,9 @@ const DELIVERY_ATTEMPTS = 4;
 const DELIVERY_RETRY_MS = 1_000;
 // Codes with which the daemon reports a session that no longer exists.
 const GONE_CODES = new Set(['INVALID_SESSION', 'SESSION_NOT_FOUND']);
-const isGone = (error) => GONE_CODES.has(error?.code);
+// A lookup that failed on storage errors is marked `incomplete`: the
+// session may still exist, so it is not treated as gone.
+const isGone = (error) => GONE_CODES.has(error?.code) && error?.incomplete !== true;
 // The session a call acts as was deleted; adapters revoke its credentials.
 export const CALLER_GONE = 'ORCHESTRATION_CALLER_GONE';
 
@@ -125,7 +127,9 @@ export function createOrchestrationService(deps) {
   // Runs this service started that have not settled yet. A run accepted by
   // Pi may not have emitted agent_start yet, so live streaming state alone
   // would let a wait return before the run began.
-  const pendingRuns = new Set();
+  // Each send holds its own token until its run settles, so a retry that
+  // only returns a stored receipt never releases a newer send's pending run.
+  const pendingRuns = new Map();
   const waiters = new Set();
   const inflightSpawns = new Map();
   // Admission reservations of spawns between their checks and their first
@@ -156,6 +160,9 @@ export function createOrchestrationService(deps) {
         runtime = await activateSession(callerSessionId);
       } catch (error) {
         if (isGone(error)) throw new OrchestrationError(CALLER_GONE, 'The calling session no longer exists.');
+        if (GONE_CODES.has(error?.code)) {
+          throw new OrchestrationError('SESSION_LOOKUP_FAILED', 'The calling session could not be looked up; retry later.');
+        }
         throw error;
       }
     }
@@ -249,20 +256,24 @@ export function createOrchestrationService(deps) {
   };
 
   // A run counts as pending from the send until its settle. A deduplicated
-  // receipt starts no run, so it only keeps a pending flag an earlier send set.
+  // receipt or a failed send starts no run, so it drops only its own token.
   const startTask = async (sessionId, text, delivery, operationId) => {
-    const wasPending = pendingRuns.has(sessionId);
-    pendingRuns.add(sessionId);
+    const token = {};
+    const tokens = pendingRuns.get(sessionId) ?? new Set();
+    tokens.add(token);
+    pendingRuns.set(sessionId, tokens);
+    const dropToken = () => {
+      const current = pendingRuns.get(sessionId);
+      if (!current?.delete(token)) return;
+      if (current.size === 0) pendingRuns.delete(sessionId);
+      notifyWaiters();
+    };
     try {
       const receipt = await sendInput({ sessionId, text, delivery, operationId });
-      if (receipt?.deduplicated && !wasPending) {
-        pendingRuns.delete(sessionId);
-        notifyWaiters();
-      }
+      if (receipt?.deduplicated) dropToken();
       return receipt;
     } catch (error) {
-      pendingRuns.delete(sessionId);
-      notifyWaiters();
+      dropToken();
       throw error;
     }
   };
@@ -348,13 +359,17 @@ export function createOrchestrationService(deps) {
     let record;
     let deduplicated = false;
     if (args.clientRequestId) {
-      const existing = childRecordsOf(runtime).find((candidate) => candidate.clientRequestId === args.clientRequestId && !candidate.rejected);
       const key = `${callerSessionId}\u0000${args.clientRequestId}`;
-      if (existing) {
-        record = existing;
-        deduplicated = true;
-      } else if (inflightSpawns.has(key)) {
+      // A running spawn wrote its record before its first task was accepted,
+      // so a retry shares that operation's outcome before it trusts a record.
+      const existing = inflightSpawns.has(key)
+        ? undefined
+        : childRecordsOf(runtime).find((candidate) => candidate.clientRequestId === args.clientRequestId && !candidate.rejected);
+      if (inflightSpawns.has(key)) {
         record = await inflightSpawns.get(key);
+        deduplicated = true;
+      } else if (existing) {
+        record = existing;
         deduplicated = true;
       } else {
         const operation = spawnOnce(callerSessionId, runtime, args);
@@ -592,21 +607,21 @@ export function createOrchestrationService(deps) {
     notifyWaiters();
   };
 
-  const deliverResult = async (sessionId, runtime, lineage) => {
+  const deliverResult = async (sessionId, result, lineage) => {
     const parent = getLiveRuntime(lineage.parentSessionId)
       ?? await activateSession(lineage.parentSessionId, lineage.parentDirectory);
     const record = childRecordsOf(parent).find((candidate) => candidate.sessionId === sessionId);
     if (!record || record.stopped || stopping.has(sessionId)) return;
-    const assistant = lastAssistant(runtime);
+    const { assistant, cwd } = result;
     const outcome = outcomeOf(assistant);
     const reply = truncate(textOf(assistant?.content), RESULT_TEXT_LIMIT);
-    const title = runtime.session.sessionManager?.getSessionName?.() || record.title;
+    const title = result.title || record.title;
     const header = `Worker "${title}" (${sessionId}) ${outcome === 'completed' ? 'finished' : outcome === 'interrupted' ? 'was interrupted' : 'failed'}.`;
     await parent.session.sendCustomMessage({
       customType: RESULT_MESSAGE,
       content: [header, assistant?.errorMessage ? `Error: ${assistant.errorMessage}` : '', reply].filter(Boolean).join('\n\n'),
       display: true,
-      details: { sessionId, title, cwd: runtime.cwd, outcome, ...(record.role ? { role: record.role } : {}) },
+      details: { sessionId, title, cwd, outcome, ...(record.role ? { role: record.role } : {}) },
     }, { triggerTurn: true, deliverAs: 'followUp' });
   };
 
@@ -623,9 +638,16 @@ export function createOrchestrationService(deps) {
     if (stopping.has(sessionId)) return;
     const lineage = lineageOf(runtime);
     if (!lineage?.parentSessionId) return;
+    // The settled turn's result, taken before any await: a later turn of the
+    // worker must not replace it while a delivery retry waits.
+    const result = {
+      assistant: lastAssistant(runtime),
+      title: runtime.session.sessionManager?.getSessionName?.(),
+      cwd: runtime.cwd,
+    };
     for (let attempt = 1; ; attempt += 1) {
       try {
-        await deliverResult(sessionId, runtime, lineage);
+        await deliverResult(sessionId, result, lineage);
         return;
       } catch (error) {
         if (isGone(error)) return;

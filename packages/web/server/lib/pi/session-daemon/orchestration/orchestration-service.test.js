@@ -476,4 +476,63 @@ describe('orchestration service', () => {
     await expectCode(service.call('orch', 'session_spawn', { cwd: 'relative', task: 'x' }), 'INVALID_ARGUMENT');
     await expectCode(service.call('orch', 'no_such_tool'), 'UNKNOWN_TOOL');
   });
+
+  it('lets a spawn retry share a first task that is still being accepted', async () => {
+    const { service, deps } = createHarness({ workerLimit: 1 });
+    let reject;
+    deps.sendInput.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    const first = service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job' });
+    await vi.waitFor(() => expect(reject).toBeTypeOf('function'));
+    const retry = service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job' });
+    reject(Object.assign(new Error('no auth'), { code: 'PROVIDER_AUTH_REQUIRED' }));
+
+    await expectCode(first, 'PROVIDER_AUTH_REQUIRED');
+    await expectCode(retry, 'PROVIDER_AUTH_REQUIRED');
+    expect(deps.createWorkerSession).toHaveBeenCalledTimes(1);
+    await expect(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job' }))
+      .resolves.toMatchObject({ sessionId: 'worker-2', state: 'busy' });
+  });
+
+  it('keeps a newer send pending when an older send retry returns its stored receipt', async () => {
+    const { service, deps, states } = createHarness();
+    states.set('orch', 'idle');
+    const releases = [];
+    deps.sendInput.mockImplementation(() => new Promise((resolve) => { releases.push(resolve); }));
+    const retry = service.call('orch', 'session_send', { sessionId: 'orch', text: 'a', clientRequestId: 'a' });
+    const fresh = service.call('orch', 'session_send', { sessionId: 'orch', text: 'b', clientRequestId: 'b' });
+    await vi.waitFor(() => expect(releases).toHaveLength(2));
+    releases[0]({ accepted: true, deduplicated: true });
+    await retry;
+
+    expect((await service.call('orch', 'session_read', { sessionId: 'orch' })).state).toBe('starting');
+    releases[1]({ accepted: true });
+    await fresh;
+    expect((await service.call('orch', 'session_read', { sessionId: 'orch' })).state).toBe('starting');
+  });
+
+  it('delivers the settled turn on a retry even after the worker ran another turn', async () => {
+    const { service, orchestrator, settle } = createHarness();
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    let failFirst = true;
+    const send = orchestrator.session.sendCustomMessage;
+    orchestrator.session.sendCustomMessage = async (message, options) => {
+      if (failFirst) {
+        failFirst = false;
+        // The worker finishes another turn while the first delivery is retried.
+        await settle('worker-1', 'second');
+        throw Object.assign(new Error('closed'), { code: 'RUNTIME_DISPOSED' });
+      }
+      return send(message, options);
+    };
+    await settle('worker-1', 'first');
+
+    expect(orchestrator.delivered.map(({ message }) => message.content.split('\n\n').at(-1))).toEqual(['second', 'first']);
+  });
+
+  it('does not report a caller as gone when its lookup failed on storage errors', async () => {
+    const { service, deps } = createHarness();
+    deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('unreadable'), { code: 'INVALID_SESSION', incomplete: true }));
+    await expectCode(service.call('missing', 'session_read', { sessionId: 'orch' }), 'SESSION_LOOKUP_FAILED');
+    await expectCode(service.call('missing', 'session_read', { sessionId: 'orch' }), 'ORCHESTRATION_CALLER_GONE');
+  });
 });

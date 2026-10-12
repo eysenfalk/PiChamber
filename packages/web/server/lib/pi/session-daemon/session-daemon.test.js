@@ -1029,6 +1029,73 @@ describe('Pi session daemon spike', () => {
     })).rejects.toThrow('Daemon connection closed');
   });
 
+  it('disposes sessions an orchestration call activated once they are idle again', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-idle-'));
+    const endpoint = testDaemonEndpoint(root);
+    const callerFile = join(root, 'caller.jsonl');
+    const targetFile = join(root, 'target.jsonl');
+    await writeFile(callerFile, `{"type":"session","id":"caller","cwd":"${root}"}\n`);
+    await writeFile(targetFile, `{"type":"session","id":"target","cwd":"${root}"}\n`);
+    const runtimes = [
+      new FakeRuntime({ cwd: root, session: new FakeSession('caller', callerFile) }),
+      new FakeRuntime({ cwd: root, session: new FakeSession('target', targetFile) }),
+      new FakeRuntime({ cwd: root, session: new FakeSession('caller', callerFile) }),
+    ];
+    let created = 0;
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      idleTimeoutMs: 10,
+      listSessions: async () => [{ path: callerFile, id: 'caller', cwd: root }, { path: targetFile, id: 'target', cwd: root }],
+      createRuntime: async () => runtimes[created++],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.call', { sessionId: 'caller', tool: 'session_read', args: { sessionId: 'target' } }))
+      .resolves.toMatchObject({ result: { value: { sessionId: 'target' } } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[0].disposed).toBe(true);
+    expect(runtimes[1].disposed).toBe(true);
+
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[2].disposed).toBe(true);
+    await client.close();
+  });
+
+  it('reports a failed caller lookup as retryable instead of a gone caller', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-lookup-'));
+    const endpoint = testDaemonEndpoint(root);
+    const sessionFile = join(root, 'caller.jsonl');
+    await writeFile(sessionFile, `{"type":"session","id":"caller","cwd":"${root}"}\n`);
+    let listing = 'fail';
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      listSessions: async () => {
+        if (listing === 'fail') throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        return listing === 'empty' ? [] : [{ path: sessionFile, id: 'caller', cwd: root }];
+      },
+      createRuntime: async () => new FakeRuntime({ cwd: root, session: new FakeSession('caller', sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
+      .resolves.toMatchObject({ result: { error: { code: 'SESSION_LOOKUP_FAILED' } } });
+    listing = 'empty';
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
+      .resolves.toMatchObject({ result: { error: { code: 'ORCHESTRATION_CALLER_GONE' } } });
+    listing = 'found';
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
+    await client.close();
+  });
+
   it('keeps live message aliases across idle disposal and runtime reopening', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-message-alias-idle-'));
     const endpoint = testDaemonEndpoint(root);

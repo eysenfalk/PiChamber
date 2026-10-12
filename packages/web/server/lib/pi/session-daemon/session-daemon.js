@@ -1193,7 +1193,9 @@ export function createSessionDaemon({
       case 'sessions.setThinking':
       case 'sessions.compact':
       case 'sessions.delete':
-      case 'sessions.rename': {
+      case 'sessions.rename':
+      case 'orchestration.call':
+      case 'orchestration.caller': {
         const candidate = message?.payload?.sessionId;
         return isValidIdleSessionId(candidate) ? candidate : undefined;
       }
@@ -1351,6 +1353,10 @@ export function createSessionDaemon({
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
     }
+    // Set when a lookup path failed for another reason than absence. The
+    // final INVALID_SESSION then carries `incomplete`, because the session may
+    // exist behind a transient storage error and must not be treated as gone.
+    let incomplete = false;
     const candidateDirs = new Set();
     let requestedTargetDirectory;
     if (requestedDirectory) {
@@ -1372,6 +1378,7 @@ export function createSessionDaemon({
           return { target, directory };
         }
       } catch {
+        incomplete = true;
         // Continue through the remaining authoritative lookup paths.
       }
       return undefined;
@@ -1398,6 +1405,7 @@ export function createSessionDaemon({
         return { target: { id: sessionId, path: named.path }, directory };
       }
     } catch {
+      incomplete = true;
       // Fall through to list / header scan for non-standard filenames.
     }
 
@@ -1439,12 +1447,21 @@ export function createSessionDaemon({
               knownDirectories.add(validated);
               return { target: { id: sessionId, path: fullPath }, directory: validated };
             }
-          } catch {}
+          } catch (error) {
+            // A file whose header is not JSON is no session; any other
+            // failure may hide the one being looked up.
+            if (!(error instanceof SyntaxError)) incomplete = true;
+          }
         }
       }
-    } catch {}
+    } catch (error) {
+      if (error?.code !== 'ENOENT') incomplete = true;
+    }
 
-    throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
+    throw Object.assign(
+      new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.'),
+      incomplete ? { incomplete: true } : {},
+    );
   };
 
   const activateInflightBySessionId = new Map();
@@ -3839,7 +3856,16 @@ export function createSessionDaemon({
   };
 
   const orchestration = createOrchestrationService({
-    activateSession,
+    // Sessions a tool activates hold the idle guard like a direct request, so
+    // a dormant target that was opened only for a read is disposed again.
+    activateSession: async (sessionId, requestedDirectory) => {
+      const guard = acquireSessionAccess(sessionId);
+      try {
+        return await activateSession(sessionId, requestedDirectory);
+      } finally {
+        releaseSessionAccess(guard);
+      }
+    },
     getLiveRuntime: (sessionId) => runtimeRegistry?.findBySessionId(sessionId),
     listLiveRuntimes: () => runtimeRegistry?.listAll() ?? [],
     getSessionState: (sessionId) => {
