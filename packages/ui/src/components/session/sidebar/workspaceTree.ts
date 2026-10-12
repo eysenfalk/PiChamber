@@ -58,8 +58,10 @@ export type TreeNode = {
   projectId?: string;
   /** Directory a new session in this node would use: the worktree, flat project root, or `~` for Chats. */
   directory?: string;
-  /** Session folder scope of this container (worktree or flat project). */
+  /** Session folder scope of this container (worktree or flat project) or of this folder. */
   folderScopeKey?: string;
+  /** Id of the session folder behind a `folder` node. */
+  folderId?: string;
 };
 
 export type WorkspaceTreeProject = { id: string; label: string; root: string };
@@ -318,6 +320,7 @@ const buildContainerChildren = (builder: Builder, container: Container): TreeNod
       lastActivity: 0,
       rollup: { ...EMPTY_ROLLUP },
       folderScopeKey: scopeKey,
+      folderId: folder.id,
     });
     return linkChildren(builder, node);
   };
@@ -595,3 +598,41 @@ export const formatTreeAsText = (rows: readonly TreeRow[]): string => rows.map((
   if (flags.length > 0) parts.push(`[${flags.join(', ')}]`);
   return parts.join('  ');
 }).join('\n');
+
+type FolderScope = { scopeKey: string; directory: string | null };
+
+/** Folder scopes (flat project root, or each worktree) per project id, in tree order. */
+export const folderScopesByProject = (tree: Pick<WorkspaceTree, 'roots'>): Map<string, FolderScope[]> => {
+  const scopes = new Map<string, FolderScope[]>();
+  const visit = (node: TreeNode): void => {
+    if (node.projectId && node.folderScopeKey && (node.kind === 'project' || node.kind === 'worktree')) {
+      const list = scopes.get(node.projectId);
+      const scope = { scopeKey: node.folderScopeKey, directory: node.directory ?? null };
+      if (list) list.push(scope);
+      else scopes.set(node.projectId, [scope]);
+    }
+    node.children.forEach(visit);
+  };
+  tree.roots.forEach(visit);
+  return scopes;
+};
+
+export type ProjectSession = { id: string; directory: string | null };
+
+/** Every session below each project (forks and cut-off ones included), in tree order, with the directory it lives in. */
+export const sessionsByProject = (tree: Pick<WorkspaceTree, 'roots'>): Map<string, ProjectSession[]> => {
+  const sessions = new Map<string, ProjectSession[]>();
+  const visit = (node: TreeNode, projectId: string | undefined, directory: string | null): void => {
+    const nextProjectId = node.kind === 'project' ? node.projectId : projectId;
+    const nextDirectory = node.directory ?? directory;
+    if (node.kind === 'session' && node.session && nextProjectId) {
+      const entry = { id: node.session.id, directory: normalizePath(node.session.directory) ?? nextDirectory };
+      const list = sessions.get(nextProjectId);
+      if (list) list.push(entry);
+      else sessions.set(nextProjectId, [entry]);
+    }
+    node.children.forEach((child) => visit(child, nextProjectId, nextDirectory));
+  };
+  tree.roots.forEach((node) => visit(node, undefined, null));
+  return sessions;
+};

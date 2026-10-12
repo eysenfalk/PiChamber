@@ -23,18 +23,12 @@ export function useSessionNodeItemMetadata({
   projectId,
   secondaryMeta,
   pinnedSessionIds,
-  expandedParents,
-  expansionKey,
-  hasSessionSearchQuery,
 }: {
   node: SessionNode;
   groupDirectory?: string | null;
   projectId?: string | null;
   secondaryMeta?: SecondaryMeta | null;
   pinnedSessionIds: Set<string>;
-  expandedParents: Set<string>;
-  expansionKey: string;
-  hasSessionSearchQuery: boolean;
 }) {
   const session = node.session;
   const sessionDirectory =
@@ -117,7 +111,6 @@ export function useSessionNodeItemMetadata({
   const sessionTitle = getSessionDisplayTitle(session);
   const hasChildren = node.children.length > 0;
   const isPinnedSession = isSessionPinned(pinnedSessionIds, sessionDirectory, session.id);
-  const isExpanded = hasSessionSearchQuery ? true : expandedParents.has(expansionKey);
 
   const unseenCount = useSessionUnseenCount(session.id);
   const needsAttention = unseenCount > 0;
@@ -158,7 +151,6 @@ export function useSessionNodeItemMetadata({
     sessionTitle,
     hasChildren,
     isPinnedSession,
-    isExpanded,
     needsAttention,
     sessionCompactUpdatedLabel,
     forkSolid,

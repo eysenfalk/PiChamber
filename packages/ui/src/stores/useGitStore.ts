@@ -1,4 +1,3 @@
-import React from 'react';
 import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import type { GitLogResponse, GitStatus } from '@/lib/api/types';
@@ -922,29 +921,6 @@ export const useGitAllBranches = (enabled = true) => {
       result.set(dir, dirState.status?.current ?? null);
     }
     allBranchesCacheRef.current = result;
-    return result;
-  });
-};
-
-export const useGitRepoStatusMap = (directories: string[]) => {
-  const cacheRef = React.useRef<Map<string, { isGitRepo: boolean | null; branch: string | null }>>(new Map());
-  return useGitStore((state) => {
-    const prev = cacheRef.current;
-    let same = prev.size === directories.length;
-    if (same) {
-      for (const dir of directories) {
-        const d = state.directories.get(dir);
-        const pv = prev.get(dir);
-        if (!pv || (d?.isGitRepo ?? null) !== pv.isGitRepo || (d?.status?.current ?? null) !== pv.branch) { same = false; break; }
-      }
-    }
-    if (same) return prev;
-    const result = new Map<string, { isGitRepo: boolean | null; branch: string | null }>();
-    for (const dir of directories) {
-      const d = state.directories.get(dir);
-      result.set(dir, { isGitRepo: d?.isGitRepo ?? null, branch: d?.status?.current ?? null });
-    }
-    cacheRef.current = result;
     return result;
   });
 };

@@ -2,6 +2,8 @@ export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
   mobile: { width: 390, height: 844, mobile: true },
 };
+/** Keys a tour may press, with their Windows virtual key codes for CDP. */
+export const KEYS = { ArrowDown: 40, ArrowUp: 38, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, Enter: 13, Escape: 27 };
 export const validName = name => typeof name === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(name);
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 const keys = (value, allowed) => Object.keys(value).every(key => allowed.includes(key));
@@ -23,13 +25,16 @@ export function validateTour(tour) {
     for (const action of step.actions) {
       if (!action) fail();
       const schemas = {
-        navigate: ['type', 'path'], click: ['type', 'selector', 'text'], type: ['type', 'selector', 'value'],
+        navigate: ['type', 'path'], click: ['type', 'selector', 'text', 'button'], type: ['type', 'selector', 'value'],
+        press: ['type', 'key'], drag: ['type', 'from', 'to'],
         scroll: ['type', 'selector', 'x', 'y'], wait: ['type', 'ms', 'selector', 'text'],
         'set-theme': ['type', 'theme'], 'set-viewport': ['type', 'viewport'],
       };
       if (!Object.hasOwn(schemas, action.type) || !keys(action, schemas[action.type])) fail();
       if (action.type === 'navigate' && (typeof action.path !== 'string' || (/^[a-z]+:/i.test(action.path) || action.path.startsWith('//')))) fail();
-      if (action.type === 'click' && !target(action)) fail();
+      if (action.type === 'click' && (!target(action) || ![undefined, 'right'].includes(action.button))) fail();
+      if (action.type === 'press' && (typeof action.key !== 'string' || !Object.hasOwn(KEYS, action.key))) fail();
+      if (action.type === 'drag' && ![action.from, action.to].every(end => end && typeof end === 'object' && keys(end, ['selector', 'text']) && target(end))) fail();
       if (action.type === 'type' && (!nonempty(action.selector) || typeof action.value !== 'string')) fail();
       if (action.type === 'scroll' && (!nonempty(action.selector) || ((action.x !== undefined || action.y !== undefined) && (!finite(action.x ?? 0) || !finite(action.y ?? 0))))) fail();
       if (action.type === 'wait' && (action.ms !== undefined ? (!finite(action.ms) || action.ms < 0 || action.ms > 30000 || action.selector !== undefined || action.text !== undefined) : !target(action))) fail();
@@ -119,6 +124,8 @@ export function sidebarTreeTour(manifest) {
     { type: 'wait', text: label }, { type: 'click', text: label }, { type: 'wait', selector: main },
     { type: 'click', selector: main }, { type: 'wait', text: long.title },
   ];
+  const folder = '[role="treeitem"][aria-label="Reviews"]';
+  const nameField = 'input[aria-label="Folder name"]';
   const tree = [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }, { selector: `${main}[aria-expanded="true"]` },
     ...worktrees.map(worktree => ({ text: worktree.worktree })), { text: long.title }];
   return validateTour({ name: 'sidebar-tree', steps: [
@@ -131,17 +138,31 @@ export function sidebarTreeTour(manifest) {
       actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
         { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],
       evidence: [{ text: long.title }, { text: fork.title }, { text: forkChild.title }, { selector: '[aria-label="1 fork"]' }] },
+    { caption: 'Right-click a worktree for New folder. The folder is named in place and sits under main.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: main, button: 'right' }, { type: 'wait', text: 'New folder' }, { type: 'click', text: 'New folder' },
+        { type: 'wait', selector: nameField }, { type: 'type', selector: nameField, value: 'Reviews' }, { type: 'press', key: 'Enter' }, { type: 'wait', selector: folder }],
+      evidence: [{ selector: `${folder}[aria-level="3"]` }, { text: 'Reviews' }] },
+    { caption: `Dragging ${long.title} onto Reviews moves it into the folder; clicking the folder opens it.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'drag', from: { text: long.title }, to: { selector: folder } }, { type: 'wait', selector: `${folder}[aria-expanded]` },
+        // dnd-kit swallows clicks for a moment after a drop; a person never clicks that fast.
+        { type: 'wait', ms: 300 }, { type: 'click', text: 'Reviews' }, { type: 'wait', selector: `${folder}[aria-expanded="true"]` }],
+      evidence: [{ selector: `${folder}[aria-expanded="true"]` }, // The fork toggle proves the level without asking a deep, ellipsized title to fit.
+        { selector: `[role="treeitem"][aria-level="4"][aria-label="${long.title}"] [data-tree-toggle]` }] },
+    { caption: 'Arrow keys walk the tree: down to the session, left closes its forks, left again climbs to the folder and closes it.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'press', key: 'ArrowDown' }, { type: 'wait', selector: `[role="treeitem"][aria-label="${long.title}"]:focus` },
+        { type: 'press', key: 'ArrowLeft' }, { type: 'press', key: 'ArrowLeft' }, { type: 'press', key: 'ArrowLeft' }],
+      evidence: [{ selector: `${folder}[aria-expanded="false"]:focus` }, { text: 'Reviews' }] },
     { caption: 'Chats holds sessions started without a project, in the home directory.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', text: 'Chats' }, { type: 'wait', text: chat.title }],
       evidence: [{ selector: `${row('chats')}[aria-expanded="true"]` }, { text: chat.title }] },
     { caption: 'The same tree in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
-      evidence: [{ selector: 'html.dark [role="tree"]' }, { text: chat.title }, { text: long.title }] },
+      evidence: [{ selector: 'html.dark [role="tree"]' }, { text: chat.title }, { text: 'Reviews' }] },
     { caption: 'The hosted mobile drawer shows the same tree.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: '[data-mobile-sessions-drawer] [role="tree"]' }],
-      evidence: [{ selector: '[data-mobile-sessions-drawer] [role="tree"]' }, { text: 'Chats' }, { text: label }] },
+      evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: 'Chats' }, { text: label }] },
     { caption: 'Mobile in light theme.', viewport: 'mobile', theme: 'light', actions: [],
-      evidence: [{ selector: '[data-mobile-sessions-drawer] [role="tree"]' }, { text: label }] },
+      evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: label }] },
   ] });
 }
 

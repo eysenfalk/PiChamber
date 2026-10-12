@@ -31,12 +31,15 @@ describe('tours.mjs format', () => {
     const tour = copy();
     tour.steps[0].actions = [{ type: 'navigate', path: 'mobile.html' }, { type: 'click', text: 'Session' },
       { type: 'type', selector: '#input', value: '' }, { type: 'scroll', selector: '#scroll', y: 50 },
-      { type: 'wait', ms: 100 }, { type: 'wait', selector: '#ready' }, { type: 'set-theme', theme: 'dark' }, { type: 'set-viewport', viewport: 'mobile' }];
+      { type: 'wait', ms: 100 }, { type: 'wait', selector: '#ready' }, { type: 'set-theme', theme: 'dark' }, { type: 'set-viewport', viewport: 'mobile' },
+      { type: 'click', selector: '#row', button: 'right' }, { type: 'press', key: 'ArrowDown' }, { type: 'drag', from: { text: 'Row' }, to: { selector: '#folder' } }];
     expect(validateTour(tour)).toBe(tour);
     for (const action of [{ type: 'clic', selector: '#x' }, { type: 'wait', ms: 30001 }, { type: 'wait', ms: -1 },
       { type: 'wait', ms: 1, text: 'x' }, { type: 'click' }, { type: 'type', selector: '#x' },
       { type: 'scroll', selector: '#x', y: Infinity }, { type: 'set-theme', theme: 'system' },
-      { type: 'navigate', path: 'https://example.com' }, { type: 'navigate', path: '//example.com' }]) {
+      { type: 'navigate', path: 'https://example.com' }, { type: 'navigate', path: '//example.com' },
+      { type: 'click', text: 'x', button: 'middle' }, { type: 'press', key: 'a' }, { type: 'press' },
+      { type: 'drag', from: { text: 'x' } }, { type: 'drag', from: { text: 'x' }, to: { selector: '#y', text: 'y' } }]) {
       tour.steps[0].actions = [action]; expect(() => validateTour(tour)).toThrow('Invalid tour');
     }
   });

@@ -38,14 +38,16 @@ A tour is `{ name, steps }`. Names contain lowercase letters, digits and hyphens
 Actions execute in order:
 
 - `navigate`: relative `path` on the target origin.
-- `click`: exactly one `selector` or literal `text`.
+- `click`: exactly one `selector` or literal `text`; optional `button: 'right'` opens context menus.
+- `press`: one `key` from `KEYS` in `tours.mjs` (arrows, Home, End, Enter, Escape), sent to the focused element.
+- `drag`: `from` and `to`, each exactly one `selector` or `text`; holds the left button and moves in small steps so drag libraries activate.
 - `type`: `selector` and `value`, selects existing input and inserts the value.
 - `scroll`: `selector`, optional CSS pixel `x`/`y`. Without offsets, centers the first matching element.
 - `wait`: either `ms` (0..30000), a selector that must be attached, or visible text. Target waits expire after 15s.
 - `set-theme`: `theme` (light/dark).
 - `set-viewport`: `viewport` (desktop/mobile).
 
-Each step resets to its declared viewport/theme before actions. The final viewport action controls screenshot dimensions and caption planning. Unknown keys fail validation. Clicks require a visible, uncovered target; CDP delivers input rather than invoking React handlers. Mobile enables touch capability. Theme emulates the media query and sets the app's `themeMode` storage preference, dispatching the storage event consumed by ThemeSystemContext. Only the app's theme listener applies its classes; the recorder never toggles `html.dark`. The fixture has its own equivalent storage/media-query listener.
+Each step resets to its declared viewport/theme before actions. The final viewport action controls screenshot dimensions and caption planning. Unknown keys fail validation. Clicks require a visible, uncovered target; CDP delivers input rather than invoking React handlers. Mobile enables touch capability, which also gives `pointer: coarse` and `hover: none`. Chromium starts with a fine, hovering pointer (`--blink-settings`), because headless Chromium otherwise reports no hover and desktop steps would render touch affordances. Turning touch emulation off again restores headless's `hover: none`, so put desktop steps that depend on hover before mobile steps. Theme emulates the media query and sets the app's `themeMode` storage preference, dispatching the storage event consumed by ThemeSystemContext. Only the app's theme listener applies its classes; the recorder never toggles `html.dark`. The fixture has its own equivalent storage/media-query listener.
 
 The `lab` tour reads `lab/seed-manifest.json` by default. The lab owns project names/paths and sessions with `project`, `title` and `role` (long/short). Project names and the long title are visible text targets, never a session row index. Project display labels deterministically replace hyphens/underscores with spaces and capitalize word initials, matching the sidebar formatter, so `lab-alpha` becomes `Lab Alpha`. The tour opens the exact long session title and expands its visible `Expand activity` control before checking visible `Edit File` text within the first `[data-chat-activity-row]`, so a reasoning row cannot pass as that tool call; dark evidence also requires app-applied `html.dark`. The hosted mobile step opens `mobile.html` and its sessions drawer through the header button. Evidence scopes the selected drawer button and checks the readable short session title from the manifest; the long title is intentionally ellipsized in the narrow drawer, so it is proven in the desktop header instead. Checking the entire drawer would incorrectly claim all its overflowed content is visible. The integration recording checks these targets in the real seeded app, not just source code.
 

@@ -1,4 +1,3 @@
-import type { SessionRenderContext } from './sessionNodeTypes';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { getPinnedSessionKey } from '@/stores/useSessionPinnedStore';
 import type { SessionNode } from './types';
@@ -20,37 +19,6 @@ export type SessionNodeChildRenderExtras = {
 
 export type SessionNodeRenderExtras<TNode = SessionNode> = SessionNodeChildRenderExtras & {
   childRenderExtrasFor?: (child: TNode) => SessionNodeChildRenderExtras;
-};
-
-/**
- * Walk `nodes` and add `node.session.id` to `result` for every node
- * whose subtree contains `targetId`. This is used to precompute, once
- * per SessionGroupSection render, which rows need to update when
- * `editingId` changes. With M visible rows, this
- * turns an O(M × subtree-depth) walk inside `SessionNodeItem.areEqual`
- * into a single O(M) `Set.has` per row.
- */
-export const collectSubtreeContainingId = (
-  nodes: SessionNode[],
-  targetId: string | null,
-  result: Set<string>,
-): void => {
-  if (!targetId) return;
-
-  const visit = (node: SessionNode): boolean => {
-    let containsTarget = node.session.id === targetId;
-    for (const child of node.children) {
-      containsTarget = visit(child) || containsTarget;
-    }
-    if (containsTarget) {
-      result.add(node.session.id);
-    }
-    return containsTarget;
-  };
-
-  for (const node of nodes) {
-    visit(node);
-  }
 };
 
 export const nodeContainsSessionId = (node: SessionNode, sessionId: string | null): boolean => {
@@ -158,32 +126,4 @@ export const nodeHasPinnedMembershipChange = (
   };
 
   return visit(prevNode, nextNode);
-};
-
-/**
- * Resolve the session id whose sidebar menu is open, or null if no
- * menu is open. Only one row can have its menu open at a time.
- */
-export const resolveMenuOpenSessionId = (
-  nodes: SessionNode[],
-  menuKey: string | null,
-  renderContext: SessionRenderContext,
-  archivedBucket: boolean,
-): string | null => {
-  if (!menuKey) return null;
-  const bucketTag = archivedBucket ? 'archived' : 'active';
-  let result: string | null = null;
-  const visit = (node: SessionNode): boolean => {
-    const nodeMenuKey = `${renderContext}:${bucketTag}:${node.session.id}`;
-    if (nodeMenuKey === menuKey) {
-      result = node.session.id;
-      return true;
-    }
-    for (const child of node.children) {
-      if (visit(child)) return true;
-    }
-    return false;
-  };
-  nodes.forEach((node) => visit(node));
-  return result;
 };

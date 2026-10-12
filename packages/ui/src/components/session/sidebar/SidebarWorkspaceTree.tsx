@@ -1,30 +1,25 @@
 import React from 'react';
-import { AgentThinkingLoader } from '@/components/chat/AgentThinkingLoader';
 import { Icon } from '@/components/icon/Icon';
-import type { IconName } from '@/components/icon/icons';
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu';
 import type { GitWorktree } from '@/lib/api/types';
-import { cn } from '@/lib/utils';
-import { SessionUnreadDot } from './SessionUnreadDot';
+import { useDeviceInfo } from '@/lib/device';
+import { applyTreeDrop } from './applyTreeDrop';
+import { ContainerRow, TreeGuides } from './TreeContainerRow';
+import { nodeLabel } from './treeNodeLabel';
+import { TreeDndItem, TreeDndProvider, type TreeDragPayload } from './treeDnd';
+import type { TreeDropData } from './treeDrop';
+import { buildTreeNodeMenu, type TreeFolderActions } from './treeNodeMenu';
+import { useTreeKeyboard } from './hooks/useTreeKeyboard';
 import type { SessionNode } from './types';
-import { useLongPressMenu } from './hooks/useLongPressMenu';
 import { sidebarRowLabelClass } from './utils';
 import {
   visibleRows,
   type NodeKey,
   type TreeNode,
-  type TreeNodeKind,
   type TreeRow,
   type WorkspaceTree as WorkspaceTreeModel,
 } from './workspaceTree';
 
-export type RenderTreeSession = (
+type RenderTreeSession = (
   node: SessionNode,
   directory: string | null,
   projectId: string | null,
@@ -38,40 +33,15 @@ type Props = {
   onSelectNode: (key: NodeKey) => void;
   activeSessionId: string | null;
   renderSession: RenderTreeSession;
+  onOpenSession: (sessionId: string, directory: string | null) => void;
+  onNewSessionIn: (node: TreeNode) => void;
+  folders: TreeFolderActions;
   onOpenProjectEditDialog: (projectId: string) => void;
   onRemoveProject: (projectId: string) => void;
   onCloseWorktree: (projectId: string, worktree: GitWorktree) => void;
   onOpenDirectoryDialog?: () => void;
   emptyState?: React.ReactNode;
   mobileVariant: boolean;
-};
-
-const GUIDE_WIDTH_PX = 12;
-
-const KIND_ICON: Record<Exclude<TreeNodeKind, 'session'>, IconName> = {
-  chats: 'chat-3',
-  project: 'folder-3',
-  worktree: 'git-branch',
-  folder: 'folder',
-  more: 'more',
-  merged: 'git-merge',
-  other: 'folders',
-  otherFolder: 'folder',
-};
-
-const nodeLabel = (node: TreeNode): string => {
-  switch (node.kind) {
-    case 'chats':
-      return 'Chats';
-    case 'other':
-      return 'Other folders';
-    case 'more':
-      return `${node.children.length} more`;
-    case 'merged':
-      return `${node.children.length} merged`;
-    default:
-      return node.label;
-  }
 };
 
 /** SessionNodeItem consumes the older SessionNode shape; build it once per tree node. */
@@ -87,124 +57,44 @@ const toSessionNode = (node: TreeNode): SessionNode => {
   return converted;
 };
 
-const Guides: React.FC<{ row: TreeRow }> = ({ row }) => {
-  if (row.depth === 0) return null;
-  return (
-    <>
-      {Array.from({ length: row.depth }, (_, level) => {
-        const own = level === row.depth - 1;
-        const line = own ? (row.isLast ? 'half' : 'full') : row.guides[level + 1] ? 'full' : null;
-        return (
-          <span key={level} aria-hidden className="relative shrink-0 self-stretch" style={{ width: GUIDE_WIDTH_PX }}>
-            {line ? (
-              <span
-                className={cn('absolute left-1/2 w-px bg-border', line === 'full' ? 'inset-y-0' : 'top-0 h-1/2')}
-              />
-            ) : null}
-          </span>
-        );
-      })}
-    </>
-  );
+/** Sessions open in their container's directory; Chats and ownerless containers have none. */
+const containerDirectory = (container: TreeNode | undefined): string | null => (
+  container?.directory && container.directory !== '~' ? container.directory : null
+);
+
+const dropDataOf = (node: TreeNode): TreeDropData | null => {
+  if (node.kind !== 'project' && node.kind !== 'worktree' && node.kind !== 'folder') return null;
+  return {
+    key: node.key,
+    scopeKey: node.folderScopeKey ?? null,
+    folderId: node.kind === 'folder' ? node.folderId ?? null : null,
+    projectId: node.kind === 'project' ? node.projectId ?? null : null,
+  };
 };
 
-const CountSlot: React.FC<{ node: TreeNode; expanded: boolean }> = ({ node, expanded }) => {
-  const showRunning = node.rollup.running && !expanded;
-  const showUnseen = !showRunning && node.rollup.unseen && !expanded;
-  return (
-    <span className="ml-1 flex h-6 min-w-6 shrink-0 items-center justify-end gap-1 typography-micro text-muted-foreground">
-      {showRunning ? (
-        <AgentThinkingLoader
-          variant="inline"
-          text={null}
-          animationType="spinner"
-          speedMs={80}
-          className="text-primary text-xs shrink-0"
-        />
-      ) : null}
-      {showUnseen ? <SessionUnreadDot label="Unread sessions" /> : null}
-      {node.kind !== 'more' && node.sessionCount > 0 ? <span className="tabular-nums">{node.sessionCount}</span> : null}
-    </span>
-  );
-};
-
-type ContainerRowProps = {
-  row: TreeRow;
-  selected: boolean;
-  onActivate: (row: TreeRow) => void;
-  onToggle: (row: TreeRow) => void;
-  menu?: React.ReactNode;
-  mobileVariant: boolean;
-};
-
-const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, mobileVariant }) => {
-  const { node } = row;
-  const longPress = useLongPressMenu();
-  const expandable = node.kind !== 'more' && node.children.length > 0;
-  const label = nodeLabel(node);
-  const icon = node.kind === 'session' ? null : KIND_ICON[node.kind];
-
-  const body = (
-    <>
-      <Guides row={row} />
-      {/* Pointer shortcut only: the row button carries aria-expanded and toggles on a second activation. */}
-      <span
-        aria-hidden="true"
-        data-tree-toggle={expandable ? '' : undefined}
-        onClick={expandable ? (event) => {
-          event.stopPropagation();
-          onToggle(row);
-        } : undefined}
-        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-      >
-        {expandable ? <Icon name={row.expanded ? 'arrow-down-s' : 'arrow-right-s'} className="h-3 w-3" /> : null}
-      </span>
-      {icon ? <Icon name={icon} className="size-3.5 shrink-0 text-muted-foreground" /> : null}
-      <span className={cn(sidebarRowLabelClass(mobileVariant), 'flex-1 text-left', node.kind === 'more' && 'text-muted-foreground')}>
-        {label}
-      </span>
-      <CountSlot node={node} expanded={row.expanded} />
-    </>
-  );
-
-  const rowClass = cn(
-    'flex min-h-6 w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
-    selected ? 'bg-interactive-selection' : 'hover:bg-interactive-hover',
-  );
-
-  const button = (
-    <button
-      type="button"
-      data-tree-node={row.key}
-      aria-expanded={expandable ? row.expanded : undefined}
-      aria-current={selected ? 'true' : undefined}
-      title={node.directory && node.directory !== '~' ? node.directory : undefined}
-      onClick={() => {
-        if (longPress.open) return;
-        onActivate(row);
-      }}
-      {...(menu ? longPress.touchHandlers : {})}
-      style={{ touchAction: 'manipulation' }}
-      className={rowClass}
-    />
-  );
-
-  if (!menu) {
-    return React.cloneElement(button, undefined, body);
+const dragPayloadOf = (node: TreeNode, container: TreeNode | undefined): TreeDragPayload | null => {
+  if (node.kind === 'session' && node.session) {
+    return {
+      type: 'session',
+      sessionId: node.session.id,
+      scopeKey: container?.folderScopeKey ?? null,
+      label: node.session.title || 'Untitled session',
+    };
   }
-
-  return (
-    <ContextMenu open={longPress.open} onOpenChange={longPress.setOpen}>
-      <ContextMenuTrigger render={button}>{body}</ContextMenuTrigger>
-      <ContextMenuContent className="min-w-[160px]">{menu}</ContextMenuContent>
-    </ContextMenu>
-  );
+  if (node.kind === 'folder' && node.folderId && node.folderScopeKey) {
+    return { type: 'folder', key: node.key, folderId: node.folderId, scopeKey: node.folderScopeKey, label: node.label };
+  }
+  if (node.kind === 'project' && node.projectId) {
+    return { type: 'project', projectId: node.projectId, label: node.label };
+  }
+  return null;
 };
 
 /**
  * The sidebar workspace tree: one list for Chats, projects, worktrees, folders
  * and sessions. Rows only render what `buildWorkspaceTree` produced; selection
- * marks where new sessions land and never filters the tree.
+ * marks where new sessions land and never filters the tree. Rows drag and drop
+ * through `TreeDndProvider` and take arrow keys through `useTreeKeyboard`.
  */
 export const SidebarWorkspaceTree: React.FC<Props> = ({
   tree,
@@ -214,6 +104,9 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   onSelectNode,
   activeSessionId,
   renderSession,
+  onOpenSession,
+  onNewSessionIn,
+  folders,
   onOpenProjectEditDialog,
   onRemoveProject,
   onCloseWorktree,
@@ -221,6 +114,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   emptyState,
   mobileVariant,
 }) => {
+  const { hasTouchOnlyPointer } = useDeviceInfo();
   const [revealedMore, setRevealedMore] = React.useState<ReadonlySet<NodeKey>>(() => new Set());
 
   const activeMoreKey = React.useMemo(() => {
@@ -238,6 +132,20 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
 
   // A visible session row implies visible ancestors, so the row index finds its container.
   const rowNodeByKey = React.useMemo(() => new Map(rows.map((row) => [row.key, row.node])), [rows]);
+  const projectOrder = React.useMemo(
+    () => tree.roots.flatMap((root) => (root.kind === 'project' && root.projectId ? [root.projectId] : [])),
+    [tree.roots],
+  );
+
+  const containerOf = (key: NodeKey): TreeNode | undefined => {
+    let current = tree.parents.get(key);
+    while (current) {
+      const parent = rowNodeByKey.get(current);
+      if (parent && parent.kind !== 'session' && parent.kind !== 'more' && parent.kind !== 'merged') return parent;
+      current = tree.parents.get(current);
+    }
+    return undefined;
+  };
 
   const handleToggle = React.useCallback((row: TreeRow) => {
     setOpen(row.key, !row.expanded);
@@ -257,118 +165,148 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
     if (expandable && !row.expanded) setOpen(row.key, true);
   }, [onSelectNode, selectedNodeKey, setOpen]);
 
-  const menuFor = (node: TreeNode): React.ReactNode => {
-    if (node.kind === 'project' && node.projectId) {
-      const projectId = node.projectId;
-      return (
-        <>
-          <ContextMenuItem onClick={() => onOpenProjectEditDialog(projectId)}>
-            <Icon name="edit" className="mr-2 h-3.5 w-3.5" />
-            <span>{'Edit folder'}</span>
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => onRemoveProject(projectId)} className="text-destructive focus:text-destructive">
-            <Icon name="close" className="mr-2 h-3.5 w-3.5" />
-            <span>{'Close folder'}</span>
-          </ContextMenuItem>
-        </>
-      );
-    }
-    if (node.kind === 'worktree' && node.projectId && node.worktree) {
-      const projectId = node.projectId;
-      const worktree = node.worktree;
-      return (
-        <ContextMenuItem
-          title={node.rollup.running ? 'Stop the active session before closing this worktree.' : undefined}
-          onClick={() => onCloseWorktree(projectId, worktree)}
-          className="text-destructive focus:text-destructive"
-        >
-          <Icon name="close" className="mr-2 h-3.5 w-3.5" />
-          <span>{'Close worktree'}</span>
-        </ContextMenuItem>
-      );
-    }
-    return undefined;
+  const rowByKey = (key: NodeKey): TreeRow | undefined => rows.find((row) => row.key === key);
+
+  const { itemProps } = useTreeKeyboard({
+    rows,
+    parents: tree.parents,
+    onAction: (action) => {
+      const row = rowByKey(action.key);
+      if (!row) return;
+      if (action.type === 'expand') setOpen(action.key, true);
+      else if (action.type === 'collapse') setOpen(action.key, false);
+      else if (action.type === 'newSession') onNewSessionIn(row.node);
+      else if (row.node.kind === 'session' && row.node.session) {
+        onOpenSession(row.node.session.id, containerDirectory(containerOf(row.key)));
+      } else handleActivate(row);
+    },
+  });
+
+  const createFolderIn = (node: TreeNode) => {
+    if (!node.folderScopeKey) return;
+    // The new folder's name field lives inside the row's children, so open them.
+    setOpen(node.key, true);
+    folders.onCreateFolder(node.folderScopeKey, node.kind === 'folder' ? node.folderId ?? null : null);
   };
 
-  const containerOf = (key: NodeKey): TreeNode | undefined => {
-    let current = tree.parents.get(key);
-    while (current) {
-      const parent = rowNodeByKey.get(current);
-      if (parent && parent.kind !== 'session' && parent.kind !== 'more' && parent.kind !== 'merged') return parent;
-      current = tree.parents.get(current);
-    }
-    return undefined;
-  };
+  const menuFor = (node: TreeNode): React.ReactNode => buildTreeNodeMenu(node, {
+    folders,
+    onCreateFolder: createFolderIn,
+    onOpenProjectEditDialog,
+    onRemoveProject,
+    onCloseWorktree,
+  });
+
+  const renameFor = (node: TreeNode) => (
+    node.kind === 'folder' && node.folderId && node.folderId === folders.renamingFolderId
+      ? {
+          value: folders.renameDraft,
+          onChange: folders.onRenameDraftChange,
+          onSave: () => folders.onSaveRename(node),
+          onCancel: folders.onCancelRename,
+        }
+      : undefined
+  );
+
+  // The design system strips focus rings globally; data-focus-ring="accent" is its opt-in.
+  const treeItemClass = 'rounded-md';
 
   return (
-    <div role="tree" aria-label="Workspaces" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
-      {tree.sessionCount === 0 && emptyState ? emptyState : null}
-      {rows.map((row) => {
-        if (row.node.kind === 'session' && row.node.session) {
-          const container = containerOf(row.key);
-          const forks = row.node.children.length;
-          return (
-            <div
-              key={row.key}
-              role="treeitem"
-              data-tree-node={row.key}
-              aria-label={nodeLabel(row.node)}
-              aria-level={row.depth + 1}
-              aria-expanded={forks > 0 ? row.expanded : undefined}
-              className="flex min-h-6 min-w-0 items-center"
-            >
-              <Guides row={row} />
-              {forks > 0 ? (
-                <button
-                  type="button"
-                  data-tree-toggle=""
-                  onClick={() => handleToggle(row)}
-                  aria-label={row.expanded ? 'Collapse forks' : 'Expand forks'}
-                  className="inline-flex h-4 !min-h-0 w-4 !min-w-0 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+    <TreeDndProvider
+      parents={tree.parents}
+      projectOrder={projectOrder}
+      touchDrag={hasTouchOnlyPointer}
+      onDrop={applyTreeDrop}
+    >
+      <div role="tree" aria-label="Workspaces" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+        {tree.sessionCount === 0 && emptyState ? emptyState : null}
+        {rows.map((row) => {
+          const container = row.node.kind === 'session' ? containerOf(row.key) : undefined;
+          const drag = dragPayloadOf(row.node, container);
+          if (row.node.kind === 'session' && row.node.session) {
+            const forks = row.node.children.length;
+            return (
+              <TreeDndItem key={row.key} nodeKey={row.key} drag={drag} drop={null} handleLabel="Drag to move session">
+                <div
+                  {...itemProps(row.key)}
+                  role="treeitem"
+                  data-focus-ring="accent"
+                  data-tree-node={row.key}
+                  aria-label={nodeLabel(row.node)}
+                  aria-level={row.depth + 1}
+                  aria-expanded={forks > 0 ? row.expanded : undefined}
+                  className={`flex min-h-6 min-w-0 items-center pl-1.5 ${treeItemClass}`}
                 >
-                  <Icon name={row.expanded ? 'arrow-down-s' : 'arrow-right-s'} className="h-3 w-3" />
-                </button>
-              ) : null}
-              <div className="min-w-0 flex-1">
-                {renderSession(
-                  toSessionNode(row.node),
-                  container?.directory && container.directory !== '~' ? container.directory : null,
-                  container?.projectId ?? null,
-                )}
+                  <TreeGuides row={row} />
+                  {forks > 0 ? (
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      data-tree-toggle=""
+                      onClick={() => handleToggle(row)}
+                      aria-label={row.expanded ? 'Collapse forks' : 'Expand forks'}
+                      className="inline-flex h-4 !min-h-0 w-4 !min-w-0 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
+                    >
+                      <Icon name={row.expanded ? 'arrow-down-s' : 'arrow-right-s'} className="h-3 w-3" />
+                    </button>
+                  ) : (
+                    // Same chevron column as container rows, so siblings line up.
+                    <span aria-hidden className="h-4 w-4 shrink-0" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    {renderSession(toSessionNode(row.node), containerDirectory(container), container?.projectId ?? null)}
+                  </div>
+                  {forks > 0 ? (
+                    <span className="shrink-0 pl-1 typography-micro tabular-nums text-muted-foreground" aria-label={forks === 1 ? '1 fork' : `${forks} forks`}>
+                      {`⑂${forks}`}
+                    </span>
+                  ) : null}
+                </div>
+              </TreeDndItem>
+            );
+          }
+          return (
+            <TreeDndItem
+              key={row.key}
+              nodeKey={row.key}
+              drag={drag}
+              drop={dropDataOf(row.node)}
+              handleLabel={row.node.kind === 'project' ? 'Drag to reorder folder' : 'Drag to move folder'}
+            >
+              <div
+                {...itemProps(row.key)}
+                role="treeitem"
+                data-focus-ring="accent"
+                aria-level={row.depth + 1}
+                aria-expanded={row.node.children.length > 0 ? row.expanded : undefined}
+                aria-label={row.node.kind === 'folder' ? row.node.label : undefined}
+                className={treeItemClass}
+              >
+                <ContainerRow
+                  row={row}
+                  selected={selectedNodeKey === row.key}
+                  onActivate={handleActivate}
+                  onToggle={handleToggle}
+                  menu={menuFor(row.node)}
+                  rename={renameFor(row.node)}
+                  mobileVariant={mobileVariant}
+                />
               </div>
-              {forks > 0 ? (
-                <span className="shrink-0 pl-1 typography-micro tabular-nums text-muted-foreground" aria-label={forks === 1 ? '1 fork' : `${forks} forks`}>
-                  {`⑂${forks}`}
-                </span>
-              ) : null}
-            </div>
+            </TreeDndItem>
           );
-        }
-        return (
-          <div key={row.key} role="treeitem" aria-level={row.depth + 1} aria-expanded={row.node.children.length > 0 ? row.expanded : undefined}>
-            <ContainerRow
-              row={row}
-              selected={selectedNodeKey === row.key}
-              onActivate={handleActivate}
-              onToggle={handleToggle}
-              menu={menuFor(row.node)}
-              mobileVariant={mobileVariant}
-            />
-          </div>
-        );
-      })}
-      {onOpenDirectoryDialog ? (
-        <button
-          type="button"
-          onClick={onOpenDirectoryDialog}
-          className="mt-1 flex h-6 w-full items-center gap-1 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-        >
-          <span className="inline-flex h-4 w-4 shrink-0" />
-          <Icon name="add" className="size-3.5 shrink-0" />
-          <span className={sidebarRowLabelClass(mobileVariant)}>{'Add folder'}</span>
-        </button>
-      ) : null}
-    </div>
+        })}
+        {onOpenDirectoryDialog ? (
+          <button
+            type="button"
+            onClick={onOpenDirectoryDialog}
+            className="mt-1 flex h-6 w-full items-center gap-1 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+          >
+            <span className="inline-flex h-4 w-4 shrink-0" />
+            <Icon name="add" className="size-3.5 shrink-0" />
+            <span className={sidebarRowLabelClass(mobileVariant)}>{'Add folder'}</span>
+          </button>
+        ) : null}
+      </div>
+    </TreeDndProvider>
   );
 };

@@ -20,7 +20,7 @@ import { normalizeDirectoryPathKey } from '@/lib/directoryPathKey';
  *   accessed branches evict first.
  * - Keeps the existing exported API (`getGitHubPrStatusKey`, `usePrVisualSummary`, `results`,
  *   `refresh`/`load`, `resetForRuntimeSwitch`) used by SessionSidebar,
- *   SessionGroupSection, and useSessionNodeItemMetadata.
+ *   and useSessionNodeItemMetadata.
  */
 
 export type GitHubPrStatusEntry = {

@@ -26,6 +26,8 @@ interface SessionFoldersActions {
   getFoldersForScope: (scopeKey: string) => SessionFolder[];
   createFolder: (scopeKey: string, name: string, parentId?: string | null) => SessionFolder;
   renameFolder: (scopeKey: string, folderId: string, name: string) => void;
+  /** Reparents a folder within its scope; `parentId: null` makes it top level. Refuses self and descendant targets. */
+  moveFolder: (scopeKey: string, folderId: string, parentId: string | null) => boolean;
   deleteFolder: (scopeKey: string, folderId: string) => void;
   addSessionToFolder: (scopeKey: string, folderId: string, sessionId: string) => void;
   addSessionsToFolder: (scopeKey: string, folderId: string, sessionIds: string[]) => void;
@@ -378,6 +380,30 @@ export const useSessionFoldersStore = create<SessionFoldersStore>()(
         const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
         set({ foldersMap: nextMap });
         persistState(nextMap, get().collapsedFolderIds);
+      },
+
+      moveFolder: (scopeKey: string, folderId: string, parentId: string | null): boolean => {
+        if (!scopeKey || !folderId || parentId === folderId) return false;
+        const current = get().foldersMap;
+        const scopeFolders = current[scopeKey];
+        const folder = scopeFolders?.find((entry) => entry.id === folderId);
+        if (!scopeFolders || !folder) return false;
+        if ((folder.parentId ?? null) === parentId) return true;
+        if (parentId !== null) {
+          const byId = new Map(scopeFolders.map((entry) => [entry.id, entry]));
+          if (!byId.has(parentId)) return false;
+          // The new parent must not sit below the moved folder.
+          const seen = new Set<string>();
+          for (let ancestor = byId.get(parentId); ancestor && !seen.has(ancestor.id); ancestor = ancestor.parentId ? byId.get(ancestor.parentId) : undefined) {
+            if (ancestor.id === folderId) return false;
+            seen.add(ancestor.id);
+          }
+        }
+        const nextFolders = scopeFolders.map((entry) => (entry.id === folderId ? { ...entry, parentId } : entry));
+        const nextMap: SessionFoldersMap = { ...current, [scopeKey]: nextFolders };
+        set({ foldersMap: nextMap });
+        persistState(nextMap, get().collapsedFolderIds);
+        return true;
       },
 
       deleteFolder: (scopeKey: string, folderId: string): void => {
