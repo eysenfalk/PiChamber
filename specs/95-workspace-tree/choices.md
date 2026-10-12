@@ -32,3 +32,17 @@ Decisions the implementing agent took without asking, per slice. The owner can o
 
 | Every tree row draws its guides as one span and reserves the 16 px chevron column, also session rows without forks and rows without a touch drag handle. | The unprimed critique found session rows under-indented next to folders at the same level, and mobile counts jumping where a handle was missing. One column grid keeps siblings aligned at any depth. | Rows lose a few pixels of title width at deep levels; the deep-session tour evidence checks the fork toggle instead of an ellipsized title. |
 | Tree items opt into the design system's focus ring with `data-focus-ring="accent"` instead of Tailwind `focus-visible:ring`. | `styles/design-system.css` strips every focus ring with `!important`; `data-focus-ring` is its only opt-in, so keyboard focus was invisible before. | If the design system changes the opt-in, tree focus goes invisible again; frame 06 of the tour shows it. |
+
+## Slice 4. Visibility filter and quick search
+
+| Choice | Why | Cost if wrong |
+|---|---|---|
+| The visibility checklist is a dropdown menu with checkbox items behind an eye button (eye-off plus a count badge when projects are hidden), with Show all and Hide all at the bottom. | It reuses the dropdown primitives the header already has and keeps the header one row tall; the badge says something is hidden without opening the menu. | A long project list would want a scrolling popover with its own search. |
+| Search runs on the existing 120 ms debounce, highlights matches with the existing mark style and shows the match count from the tree model. | Same feel as the old session search, one source for the count. | None found; the dark mark is loud, but it was already the session search style. |
+| A query only narrows the tree while the search box is open; Escape clears text first, a second Escape closes the box. | A closed box with leftover text would filter the tree invisibly. | Somebody who wants to keep a filter while the box is closed loses it. |
+| The search box no longer closes on a click outside it; the outside click listener and the rAF focus hook are deleted, `autoFocus` focuses the input. | Clicking a result in the narrowed tree would otherwise close the search and throw the view away. | Search stays open until the person closes it. |
+| "Add folder" is hidden while a query is active. | Search results are a view, not a place to add projects. | None expected. |
+| Hidden projects that match a search show an eye-off mark (an image with the label "Hidden from the sidebar"). | The person has to see why a project appears that they hid. | None expected. |
+| No virtualization. A match-everything query renders the full tree, the same rows as no query, which slice 2 measured. | Search only removes rows. | Very large real trees would need virtualization regardless of search. |
+| The tour addresses lab projects by their real id `path_<base64url of the path>`. | Projects added by path get that id; `lab/start.mjs` names are only labels. | A changed id scheme breaks the tour, loudly. |
+

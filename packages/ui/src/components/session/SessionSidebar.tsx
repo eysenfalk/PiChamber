@@ -24,7 +24,6 @@ import { useSidebarSpaceStore } from '@/stores/useSidebarSpaceStore';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { ProjectSessionSelectionEffect } from './sidebar/hooks/useProjectSessionSelection';
 import { canShowQuickArchiveAction } from './sidebar/sessionQuickActions';
-import { useSessionSearchEffects } from './sidebar/hooks/useSessionSearchEffects';
 import { useSessionActions } from './sidebar/hooks/useSessionActions';
 import { useAuthoritativeSessionCleanup } from './sidebar/hooks/useAuthoritativeSessionCleanup';
 import { createSessionOwnershipIndex } from './sidebar/sessionOwnership';
@@ -33,7 +32,8 @@ import { SidebarNav } from './sidebar/SidebarNav';
 import { SidebarFooter } from './sidebar/SidebarFooter';
 import { isKnownActiveSessionDirectory } from './sidebar/sessionOwnership';
 import { SidebarWorkspaceTree } from './sidebar/SidebarWorkspaceTree';
-import { useWorkspaceTreeModel } from './sidebar/hooks/useWorkspaceTreeModel';
+import { treeProjectLabel, useWorkspaceTreeModel } from './sidebar/hooks/useWorkspaceTreeModel';
+import { CHATS_VISIBILITY_ID, useProjectVisibilityStore } from '@/stores/useProjectVisibilityStore';
 import { useWorkspaceTreeExpansion } from './sidebar/hooks/useWorkspaceTreeExpansion';
 import { folderScopesByProject, sessionsByProject, type NodeKey, type TreeNode } from './sidebar/workspaceTree';
 import { GLOBAL_PROJECT_ID } from '@/components/chat/composer/state/draftTargetProjects';
@@ -103,7 +103,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   streamPerfCount(`ui.session_sidebar.render.${isVisible ? 'visible' : 'hidden'}`);
   const [isSessionSearchOpen, setIsSessionSearchOpen] = React.useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = React.useState('');
-  const sessionSearchContainerRef = React.useRef<HTMLDivElement | null>(null);
   const sessionSearchInputRef = React.useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editTitle, setEditTitle] = React.useState('');
@@ -188,9 +187,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const setShowDeletionDialog = useUIStore((state) => state.setShowDeletionDialog);
 
   const debouncedSessionSearchQuery = useDebouncedValue(sessionSearchQuery, 120);
+  // A closed search box never narrows the tree, even if it still holds text.
   const normalizedSessionSearchQuery = React.useMemo(
-    () => debouncedSessionSearchQuery.trim().toLowerCase(),
-    [debouncedSessionSearchQuery],
+    () => (isSessionSearchOpen ? debouncedSessionSearchQuery.trim().toLowerCase() : ''),
+    [debouncedSessionSearchQuery, isSessionSearchOpen],
   );
 
   const hasSessionSearchQuery = normalizedSessionSearchQuery.length > 0;
@@ -207,13 +207,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const removeSessionsFromFolders = useSessionFoldersStore((state) => state.removeSessionsFromFolders);
   const getSessionFolderId = useSessionFoldersStore((state) => state.getSessionFolderId);
 
-  useSessionSearchEffects({
-    enabled: isVisible,
-    isSessionSearchOpen,
-    setIsSessionSearchOpen,
-    sessionSearchInputRef,
-    sessionSearchContainerRef,
-  });
+  const hiddenProjectIds = useProjectVisibilityStore((state) => state.hiddenProjectIds);
+  const setProjectHidden = useProjectVisibilityStore((state) => state.setHidden);
+  const showAllProjects = useProjectVisibilityStore((state) => state.showAll);
+  const hideAllProjects = useProjectVisibilityStore((state) => state.hideAll);
 
 
   const { git } = useRuntimeAPIs();
@@ -329,15 +326,27 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     return map;
   }, [orderedSessions, pinnedSessionIds, sessionOrderRanks]);
 
-  const emptyState = React.useMemo(() => (
-    <SidebarSessionLikeButton
-      icon="chat-new"
-      mobileVariant={mobileVariant}
-      onClick={() => openNewSessionDraftFromTree()}
-    >
-      {"New session"}
-    </SidebarSessionLikeButton>
-  ), [mobileVariant, openNewSessionDraftFromTree]);
+  const emptyState = React.useMemo(() => {
+    if (hasSessionSearchQuery) {
+      return <p className="px-3 py-2 typography-ui-label text-muted-foreground">{"No matches"}</p>;
+    }
+    if (hiddenProjectIds.size > 0) {
+      return (
+        <SidebarSessionLikeButton icon="eye" mobileVariant={mobileVariant} onClick={showAllProjects}>
+          {"Show hidden projects"}
+        </SidebarSessionLikeButton>
+      );
+    }
+    return (
+      <SidebarSessionLikeButton
+        icon="chat-new"
+        mobileVariant={mobileVariant}
+        onClick={() => openNewSessionDraftFromTree()}
+      >
+        {"New session"}
+      </SidebarSessionLikeButton>
+    );
+  }, [hasSessionSearchQuery, hiddenProjectIds.size, mobileVariant, openNewSessionDraftFromTree, showAllProjects]);
 
   const editingProject = React.useMemo(
     () => projects.find((project) => project.id === editingProjectDialogId) ?? null,
@@ -522,8 +531,21 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     runningSessionIds: activeSessionIdSet,
     unseenSessionIds: unreadSessionIdSet,
     discoveryComplete: worktreeTopologyState.complete,
+    hidden: hiddenProjectIds,
+    query: normalizedSessionSearchQuery,
   });
-  const workspaceTreeExpansion = useWorkspaceTreeExpansion(workspaceTreeModel.tree, currentSessionId);
+  const workspaceTreeExpansion = useWorkspaceTreeExpansion(workspaceTreeModel.tree, currentSessionId, normalizedSessionSearchQuery);
+  const visibilityEntries = React.useMemo(
+    () => [
+      { id: CHATS_VISIBILITY_ID, label: 'Chats' },
+      ...normalizedProjects.map((project) => ({ id: project.id, label: treeProjectLabel(project) })),
+    ],
+    [normalizedProjects],
+  );
+  const handleHideAllProjects = React.useCallback(
+    () => hideAllProjects(visibilityEntries.map((entry) => entry.id)),
+    [hideAllProjects, visibilityEntries],
+  );
   const handleSelectTreeNode = React.useCallback((key: NodeKey) => {
     selectNode(key);
     const projectId = workspaceTreeModel.nodesByKey.get(key)?.projectId;
@@ -543,14 +565,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     const normalizedPath = normalizePath(worktreePath);
     return Boolean(normalizedPath && workspaceTreeModel.nodesByKey.get(`w:${normalizedPath}`)?.rollup.running);
   }, [workspaceTreeModel.nodesByKey]);
-  const searchMatchCount = React.useMemo(() => {
-    if (!hasSessionSearchQuery) return 0;
-    return sessions.filter((session) => {
-      const directory = (session as Session & { directory?: string | null }).directory ?? '';
-      return (session.title ?? '').toLowerCase().includes(normalizedSessionSearchQuery)
-        || directory.toLowerCase().includes(normalizedSessionSearchQuery);
-    }).length;
-  }, [hasSessionSearchQuery, normalizedSessionSearchQuery, sessions]);
+  const searchMatchCount = workspaceTreeModel.tree.matchCount;
 
   const treeFolderActions = React.useMemo<TreeFolderActions>(() => ({
     renamingFolderId,
@@ -795,7 +810,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     // Header/action tooltips only. Session rows do not use hover/hold tooltips.
     <TooltipProvider delay={400} closeDelay={150} timeout={600}>
     <div
-      ref={sessionSearchContainerRef}
       className={cn(
         'relative flex h-full flex-col text-foreground overflow-x-hidden',
         mobileVariant ? '' : 'bg-transparent',
@@ -840,6 +854,11 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         setSessionSearchQuery={setSessionSearchQuery}
         hasSessionSearchQuery={hasSessionSearchQuery}
         searchMatchCount={searchMatchCount}
+        visibilityEntries={visibilityEntries}
+        hiddenProjectIds={hiddenProjectIds}
+        onSetProjectHidden={setProjectHidden}
+        onShowAllProjects={showAllProjects}
+        onHideAllProjects={handleHideAllProjects}
         selectionModeEnabled={selectionModeEnabled}
         onToggleSelectionMode={handleToggleSelectionMode}
         mobileVariant={mobileVariant}
@@ -871,6 +890,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         onOpenDirectoryDialog={hideDirectoryControls ? undefined : handleOpenDirectoryDialog}
         emptyState={emptyState}
         mobileVariant={mobileVariant}
+        query={normalizedSessionSearchQuery}
       />
 
       {/* Dedicated mobile: the new-session action floats above the session
