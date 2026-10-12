@@ -13,6 +13,7 @@ import {
   createOrchestrationService,
 } from './orchestration-service.js';
 import { createOrchestrationRegistryStore } from './registry-store.js';
+import { findPersistedSessionByOperation } from './session-lookup.js';
 
 const ROLES = {
   'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
@@ -701,6 +702,26 @@ describe('orchestration service', () => {
     expect(deps.onDeliveryFailed).not.toHaveBeenCalled();
   });
 
+  it.each(['stop', 'takeover'])('takes the recipient of a result retry from the registry (%s while the retry waits)', async (change) => {
+    const waiting = deferred();
+    const backoff = deferred();
+    const harness = createHarness({ delay: async () => { waiting.resolve(); await backoff.promise; } });
+    const successor = harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    harness.runtimes.delete('orch');
+    harness.deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'RUNTIME_UNAVAILABLE' }));
+    const settling = harness.settle('worker-1', 'the result');
+    await waiting.promise;
+    harness.runtimes.set('orch', harness.orchestrator);
+    if (change === 'stop') await harness.service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    else await harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' });
+    backoff.resolve();
+    await settling;
+    expect(harness.orchestrator.delivered).toHaveLength(0);
+    expect(successor.delivered.map((entry) => entry.message.content))
+      .toEqual(change === 'stop' ? [] : [expect.stringContaining('the result')]);
+  });
+
   it('rejects unknown models, retired roles and relative directories', async () => {
     const { service } = createHarness();
     for (const role of ['implementation', 'implement', 'task']) {
@@ -843,8 +864,8 @@ describe('orchestration review fixes (#125)', () => {
 
   it('does not send the task again when a crash followed its acceptance', async () => {
     const first = createHarness();
-    first.deps.sendInput.mockImplementationOnce(async ({ sessionId }) => {
-      first.runtimes.get(sessionId).session.messages.push({ role: 'user', content: 'task' });
+    first.deps.sendInput.mockImplementationOnce(async ({ sessionId, text }) => {
+      first.runtimes.get(sessionId).session.messages.push({ role: 'user', content: [{ type: 'text', text }] });
       return new Promise(() => {});
     });
     void first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
@@ -874,6 +895,83 @@ describe('orchestration review fixes (#125)', () => {
     await restarted.service.call('orch', 'orchestration_capabilities');
     const opId = (await restarted.registry.read()).requestKeys['orch:job-1'];
     expect((await restarted.registry.read()).operations[opId].state).toBe('reserved');
+  });
+
+  it('keeps a resumed start open instead of sending again when the transcript cannot be checked', async () => {
+    const first = createHarness();
+    first.deps.sendInput.mockImplementationOnce(async ({ sessionId, text }) => {
+      first.runtimes.get(sessionId).session.messages.push({ role: 'user', content: [{ type: 'text', text }] });
+      return new Promise(() => {});
+    });
+    void first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    await vi.waitFor(() => expect(first.deps.sendInput).toHaveBeenCalled());
+    const worker = first.runtimes.get('worker-1');
+
+    first.crash();
+    const restarted = createHarness({ file: first.file, workerPrefix: 'after' });
+    restarted.fileStates.set('worker-1', 'present');
+    // The worker is briefly resident elsewhere; the next check would succeed.
+    restarted.deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('in use'), { code: 'SESSION_IN_USE' }));
+    await expectCode(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }), 'ORCHESTRATION_START_UNDECIDED');
+    restarted.add(worker);
+    await expect(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'worker-1' });
+    expect(restarted.deps.sendInput).not.toHaveBeenCalled();
+    expect(restarted.deps.createWorkerSession).not.toHaveBeenCalled();
+  });
+
+  it('sends the task of a resumed start when the transcript holds only another user message', async () => {
+    const first = createHarness();
+    first.deps.sendInput.mockImplementationOnce(async ({ sessionId }) => {
+      first.runtimes.get(sessionId).session.messages.push({ role: 'user', content: 'a different prompt' });
+      return new Promise(() => {});
+    });
+    void first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    await vi.waitFor(() => expect(first.deps.sendInput).toHaveBeenCalled());
+    const worker = first.runtimes.get('worker-1');
+
+    first.crash();
+    const restarted = createHarness({ file: first.file, workerPrefix: 'after' });
+    restarted.add(worker);
+    restarted.fileStates.set('worker-1', 'present');
+    await expect(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'worker-1' });
+    expect(restarted.deps.sendInput).toHaveBeenCalledTimes(1);
+    expect(restarted.deps.sendInput.mock.calls[0][0].text).toBe(first.deps.sendInput.mock.calls[0][0].text);
+  });
+
+  it('holds a start whose session file has an unreadable lineage entry and adopts the session once it is readable', async () => {
+    const first = createHarness();
+    const hang = deferred();
+    first.deps.createWorkerSession.mockImplementationOnce(() => hang.promise);
+    void first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }).catch(() => {});
+    await vi.waitFor(() => expect(first.deps.createWorkerSession).toHaveBeenCalled());
+    const opId = (await first.registry.read()).requestKeys['orch:job-1'];
+    const path = join(mkdtempSync(join(tmpdir(), 'pichamber-orchestration-jsonl-')), 'persisted-1.jsonl');
+    const lineage = JSON.stringify({ type: 'custom', customType: LINEAGE_ENTRY, data: { parentSessionId: 'orch', opId } });
+    const header = JSON.stringify({ type: 'session', id: 'persisted-1' });
+    const user = JSON.stringify({ type: 'message', message: { role: 'user', content: 'hello' } });
+    writeFileSync(path, `${header}\n${lineage.slice(0, -8)}\n${user}\n`);
+
+    first.crash();
+    const restarted = createHarness({ file: first.file });
+    restarted.deps.findSessionByOperation.mockImplementation(({ opId: wanted, cwd }) => findPersistedSessionByOperation({
+      opId: wanted,
+      cwd,
+      listSessions: async () => [{ id: 'persisted-1', path }],
+      lineageType: LINEAGE_ENTRY,
+    }));
+    await restarted.service.call('orch', 'orchestration_capabilities');
+    expect((await restarted.registry.read()).operations[opId].state).toBe('reserved');
+    await expectCode(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }), 'SESSION_LOOKUP_FAILED');
+    expect(restarted.deps.createWorkerSession).not.toHaveBeenCalled();
+
+    writeFileSync(path, `${header}\n${lineage}\n${user}\n`);
+    restarted.add(createRuntime({ sessionId: 'persisted-1', cwd: '/work/a', lineage: { parentSessionId: 'orch', opId } }));
+    await expect(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }))
+      .resolves.toMatchObject({ sessionId: 'persisted-1' });
+    expect(restarted.deps.createWorkerSession).not.toHaveBeenCalled();
+    expect(restarted.deps.sendInput).toHaveBeenCalledTimes(1);
   });
 
   it('does not release a reserved start another process claimed while the check ran', async () => {
@@ -1033,6 +1131,55 @@ describe('orchestration takeover', () => {
       .toEqual([['abandoned', 'orch'], ['created', 'orch-2']]);
     expect(Object.keys(document.workers)).toEqual(['new-1']);
     expect(document.workers['new-1'].orchestratorSessionId).toBe('orch-2');
+  });
+
+  it('fences a stop that was authorized before a takeover', async () => {
+    const harness = createHarness();
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'idle now');
+    // Hold the old stop between its policy check and its claim.
+    const reached = deferred();
+    const release = deferred();
+    const update = harness.registry.update.bind(harness.registry);
+    let held = false;
+    vi.spyOn(harness.registry, 'update').mockImplementation(async (change) => {
+      if (!held) {
+        const probe = structuredClone(await harness.registry.read());
+        try { change(probe); } catch { /* the probe only looks for the claim */ }
+        if (probe.workers['worker-1']?.stopping) {
+          held = true;
+          reached.resolve();
+          await release.promise;
+        }
+      }
+      return update(change);
+    });
+    const stopping = harness.service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    await reached.promise;
+    await harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' });
+    release.resolve();
+    await expectCode(stopping, 'ORCHESTRATION_OWNER_CHANGED');
+    expect(harness.deps.abortSession).not.toHaveBeenCalled();
+    const worker = (await harness.workers())['worker-1'];
+    expect(worker).toMatchObject({ orchestratorSessionId: 'orch-2' });
+    expect(worker.state).not.toBe('stopped');
+    expect(worker.stopping).toBeUndefined();
+  });
+
+  it('refuses a takeover while a stop of the old orchestrator is aborting', async () => {
+    const harness = createHarness();
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'idle now');
+    const abort = deferred();
+    harness.deps.abortSession.mockImplementationOnce(() => abort.promise);
+    const stopping = harness.service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    await vi.waitFor(() => expect(harness.deps.abortSession).toHaveBeenCalled());
+    await expectCode(harness.service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' }), 'ORCHESTRATION_TAKEOVER_BUSY');
+    abort.resolve();
+    await expect(stopping).resolves.toMatchObject({ stopped: ['worker-1'] });
+    expect((await harness.workers())['worker-1']).toMatchObject({ orchestratorSessionId: 'orch', state: 'stopped' });
   });
 
   it('imports the workers of a JSONL-only orchestrator once', async () => {

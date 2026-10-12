@@ -292,8 +292,9 @@ export const importLineage = (document, orchestratorSessionId, children, at) => 
  * to `to`, with retry keys for the new owner. A caller key that already maps
  * to another operation refuses the whole takeover before any change (R3-S2).
  */
-export const takeOver = (document, { from, to, at, isRunning = () => false }) => {
-  // `isRunning(opId, operation)` says whether the step's process still runs it.
+export const takeOver = (document, { from, to, at, isRunning = () => false, isStopping = () => false }) => {
+  // `isRunning(opId, operation)` says whether the step's process still runs it,
+  // `isStopping(stamp)` whether a worker's stop claim is still being carried out.
   const operations = Object.entries(document.operations)
     .filter(([, operation]) => operation.orchestratorSessionId === from
       && (OPEN_OPERATION_STATES.has(operation.state) || operation.state === 'created'));
@@ -317,6 +318,10 @@ export const takeOver = (document, { from, to, at, isRunning = () => false }) =>
   }
   const workers = Object.entries(document.workers)
     .filter(([, worker]) => worker.orchestratorSessionId === from && worker.state !== 'removed');
+  const stopping = workers.filter(([, worker]) => isStopping(worker.stopping));
+  if (stopping.length > 0) {
+    throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', 'A stop of that orchestrator is still running; retry when it finished.', { sessionIds: stopping.map(([sessionId]) => sessionId) });
+  }
   for (const [, worker] of workers) worker.orchestratorSessionId = to;
   for (const [opId, operation] of operations) {
     operation.orchestratorSessionId = to;

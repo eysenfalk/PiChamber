@@ -6,8 +6,13 @@ import { createInterface } from 'node:readline';
 // read, and of each only the entries before its first message: the lineage
 // entry is written when the session is created, before any prompt.
 
+// The lineage opId of one session file; undefined when its prefix has none,
+// UNREADABLE when an entry of the prefix could not be parsed and may have been it.
+const UNREADABLE = Symbol('unreadable');
+
 const lineageOpIdOf = async (file, lineageType) => {
   const lines = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  let unreadable = false;
   try {
     for await (const line of lines) {
       if (!line.trim()) continue;
@@ -15,14 +20,15 @@ const lineageOpIdOf = async (file, lineageType) => {
       try {
         entry = JSON.parse(line);
       } catch {
+        unreadable = true;
         continue;
       }
-      if (entry?.type === 'message') return undefined;
+      if (entry?.type === 'message') break;
       if (entry?.type === 'custom' && entry.customType === lineageType && typeof entry.data?.opId === 'string') {
         return entry.data.opId;
       }
     }
-    return undefined;
+    return unreadable ? UNREADABLE : undefined;
   } finally {
     lines.close();
   }
@@ -30,11 +36,13 @@ const lineageOpIdOf = async (file, lineageType) => {
 
 /**
  * The persisted session whose lineage names `opId`, or undefined after every
- * session of `cwd` was read. A failed read throws, so the caller cannot take
- * an unreadable store for a negative answer.
+ * session of `cwd` was read. A failed read, or a session whose prefix holds
+ * an entry that cannot be parsed, throws SESSION_LOOKUP_FAILED (incomplete)
+ * when no session matched, so the caller cannot take it for a negative answer.
  */
 export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions, lineageType }) => {
   const sessions = await listSessions({ cwd });
+  const unreadable = [];
   for (const session of Array.isArray(sessions) ? sessions : []) {
     if (typeof session?.path !== 'string' || typeof session.id !== 'string') continue;
     let found;
@@ -46,6 +54,14 @@ export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions,
       throw error;
     }
     if (found === opId) return { sessionId: session.id, cwd, sessionFile: session.path };
+    if (found === UNREADABLE) unreadable.push(session.id);
+  }
+  if (unreadable.length > 0) {
+    throw Object.assign(new Error('Some sessions could not be read to find the start operation.'), {
+      code: 'SESSION_LOOKUP_FAILED',
+      incomplete: true,
+      sessionIds: unreadable,
+    });
   }
   return undefined;
 };
