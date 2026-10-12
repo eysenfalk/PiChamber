@@ -371,8 +371,9 @@ type QueryResult = {
 
 /**
  * Keeps the nodes whose label matches the lowercase `query` and their ancestors in one walk.
- * "N more" cuts are dissolved so every match shows, and a matching container keeps only the
- * descendants that match too. `sessionCount` counts the sessions that are kept; rollups and
+ * "N more" cuts are dissolved so every match shows. A match without matching descendants keeps its
+ * whole subtree, collapsed, so a branch hit still leads to its sessions; a match with matching
+ * descendants narrows to those. `sessionCount` counts the sessions that are kept; rollups and
  * `lastActivity` keep the unfiltered values, which are live status and not a display count.
  */
 const narrowToQuery = (roots: readonly TreeNode[], query: string, hidden: ReadonlySet<string>): QueryResult => {
@@ -398,6 +399,7 @@ const narrowToQuery = (roots: readonly TreeNode[], query: string, hidden: Readon
     }
     if (!own && kept.length === 0) return null;
     if (own) matchCount += 1;
+    if (own && kept.length === 0) return node;
     if (kept.length > 0) searchExpanded.add(node.key);
     let sessionCount = 0;
     for (const child of kept) sessionCount += child.kind === 'session' ? 1 + child.sessionCount : child.sessionCount;

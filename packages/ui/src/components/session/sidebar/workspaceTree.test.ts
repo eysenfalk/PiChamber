@@ -318,6 +318,8 @@ describe('sessionsByProject', () => {
     expect(ids).not.toContain('chat-a');
     expect(ids).not.toContain('scratch');
     expect(ids).toContain('perm');
+  });
+});
 
 describe('buildWorkspaceTree hidden projects', () => {
   test('omits hidden projects and Chats from the roots and from the session count', () => {
@@ -370,25 +372,25 @@ describe('buildWorkspaceTree query', () => {
     expect(tree.sessionCount).toBe(3);
   });
 
-  test('finds a worktree by branch, without its non-matching sessions', () => {
+  test('finds a worktree by branch and keeps its sessions collapsed under it', () => {
     const tree = search(' 45-perm ');
-    expect(render(tree, tree.searchExpanded)).toBe(['▾ PiChamber  0', '  45-permissions  0'].join('\n'));
+    expect(render(tree, tree.searchExpanded)).toBe(['▾ PiChamber  1', '  ▸ 45-permissions  1'].join('\n'));
     expect(tree.matchCount).toBe(1);
   });
 
   test('finds a project by label, a session folder by name, and an other folder by directory', () => {
-    expect(render(search('NOTES'), [])).toBe('notes  0');
+    expect(render(search('NOTES'), [])).toBe('▸ notes  1');
 
     const folders = { '/wt/39-reload-restart': [{ id: 'review', name: 'Review', sessionIds: ['reload'], createdAt: 1 }] };
     const byFolder = search('review', { foldersByScope: folders });
     expect(render(byFolder, byFolder.searchExpanded)).toBe([
-      '▾ PiChamber  0',
-      '  ▾ 39-reload-restart  0',
-      '    Review  0',
+      '▾ PiChamber  4',
+      '  ▾ 39-reload-restart  4',
+      '    ▸ Review  4',
     ].join('\n'));
 
     const byDirectory = search('/tmp/scr');
-    expect(render(byDirectory, byDirectory.searchExpanded)).toBe(['▾ Other folders  0', '  /tmp/scratch  0'].join('\n'));
+    expect(render(byDirectory, byDirectory.searchExpanded)).toBe(['▾ Other folders  1', '  ▸ /tmp/scratch  1'].join('\n'));
   });
 
   test('reveals sessions behind a "N more" cut and drops the cut row', () => {
