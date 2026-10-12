@@ -164,6 +164,8 @@ export function createOrchestrationService(deps) {
   const runningOperations = new Map();
   // Inputs on their way per session; the slot decision waits for the last.
   const inputGates = new Map();
+  // Stops running in this service per worker; a second stop shares the first.
+  const stopsInFlight = new Map();
   const imported = new Set();
 
   const stateOf = (sessionId) => {
@@ -618,8 +620,26 @@ export function createOrchestrationService(deps) {
   // running, so a retry can finish the stop.
   // The claim is fenced: it is taken only while `owner` still owns the worker,
   // and only the claim's own token may finish or release it.
+  // A stop of a worker that this service is already stopping shares that
+  // stop instead of replacing its claim; the caller gets its outcome.
   const stopTree = async (sessionId, owner, result) => {
     if (result.stopped.includes(sessionId)) return true;
+    let running = stopsInFlight.get(sessionId);
+    if (running && (await registry.read()).workers[sessionId]?.orchestratorSessionId !== owner) {
+      throw new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'This worker now belongs to another orchestrator.', { sessionId });
+    }
+    if (!running) {
+      running = stopOne(sessionId, owner).finally(() => stopsInFlight.delete(sessionId));
+      stopsInFlight.set(sessionId, running);
+    }
+    const outcome = await running;
+    for (const id of outcome.stopped) if (!result.stopped.includes(id)) result.stopped.push(id);
+    result.failed.push(...outcome.failed);
+    return outcome.ok;
+  };
+
+  const stopOne = async (sessionId, owner) => {
+    const result = { stopped: [], failed: [] };
     const claim = { ...self, token: randomUUID() };
     const children = await registry.update((document) => {
       const worker = document.workers[sessionId];
@@ -627,16 +647,27 @@ export function createOrchestrationService(deps) {
         if (worker.orchestratorSessionId !== owner) {
           throw new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'This worker now belongs to another orchestrator.', { sessionId });
         }
+        // A live claim of another service is a stop still running there and
+        // is never replaced. A dead one is reconcile's; one of this service
+        // without a running stop is stale.
+        if (worker.stopping && worker.stopping.service !== self.service && belongsToLiveProcess(worker.stopping)) return null;
         worker.stopping = claim;
       }
       return workersOf(document, sessionId, { includeStopped: false }).map(([childId]) => childId);
     });
+    if (children === null) {
+      result.failed.push({ sessionId, code: 'ORCHESTRATION_STOP_BUSY' });
+      return { ok: false, ...result };
+    }
     const holdsClaim = (worker) => worker?.stopping?.token === claim.token;
     let failure;
     for (const childId of children) {
       if (!await stopTree(childId, sessionId, result)) failure = 'ORCHESTRATION_DESCENDANT_STOP_FAILED';
     }
     if (!failure) {
+      // Inputs that passed the gate before the claim finish first, so a run
+      // one of them starts is aborted too; later inputs are refused.
+      while (inputGates.has(sessionId)) await inputGates.get(sessionId).done;
       try {
         await withSession(sessionId, () => abortSession(sessionId));
       } catch (error) {
@@ -649,20 +680,27 @@ export function createOrchestrationService(deps) {
         const worker = document.workers[sessionId];
         if (holdsClaim(worker)) delete worker.stopping;
       });
-      return false;
+      return { ok: false, ...result };
     }
-    pendingRuns.delete(sessionId);
-    await registry.update((document) => {
+    // Only the claim's holder marks the worker stopped and reports it.
+    const marked = await registry.update((document) => {
       const worker = document.workers[sessionId];
-      if (!worker || !holdsClaim(worker)) return;
+      if (!worker) return true;
+      if (!holdsClaim(worker)) return false;
       delete worker.stopping;
       delete worker.doneReported;
       delete worker.gate;
       worker.state = 'stopped';
       worker.stateSince = now();
+      return true;
     });
+    if (!marked) {
+      result.failed.push({ sessionId, code: 'ORCHESTRATION_STOP_CLAIM_LOST' });
+      return { ok: false, ...result };
+    }
+    pendingRuns.delete(sessionId);
     result.stopped.push(sessionId);
-    return true;
+    return { ok: true, ...result };
   };
 
   const stop = async (callerSessionId, args) => {
@@ -784,39 +822,65 @@ export function createOrchestrationService(deps) {
     return { owner, cwd, worker };
   };
 
-  // A parent that cannot be reached is retried with backoff; a deleted parent
-  // drops the result, and a final failure is reported through onDeliveryFailed.
-  // An owner change while the parent activated retries at once with the new one.
+  // A parent that cannot be reached is retried with backoff. Every decision
+  // after a failed attempt is taken against the registry as it is then: a
+  // stopped or removed worker ends the delivery silently, an owner change
+  // retries at once with the new owner and its own attempts, a deleted
+  // current owner drops the result, and a final failure is reported for the
+  // current owner through onDeliveryFailed. Owner changes are bounded too.
   const deliverWithRetry = async (sessionId, result, lineage) => {
     let owner;
     let ownerCwd;
-    for (let attempt = 1; ; attempt += 1) {
-      let retryAtOnce = false;
+    let attempts = 0;
+    let ownerChanges = 0;
+    for (;;) {
+      let failure;
+      let recipient;
       try {
-        const recipient = await resultRecipient(sessionId, lineage);
-        if (!recipient) return;
-        ({ owner, cwd: ownerCwd } = recipient);
-        // The owner's guard covers its activation and the send until Pi
-        // accepted it, but not the backoff between attempts.
-        await withSession(owner, async () => {
-          const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
-          const current = await resultRecipient(sessionId, lineage);
-          if (!current) return;
-          if (current.owner !== owner) {
-            retryAtOnce = true;
-            throw new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker changed its owner during delivery.', { sessionId });
-          }
-          await deliverResult(parent, sessionId, result, current.worker);
-        });
-        return;
+        recipient = await resultRecipient(sessionId, lineage);
       } catch (error) {
-        if (isGone(error)) return;
-        if (attempt >= DELIVERY_ATTEMPTS) {
-          onDeliveryFailed({ sessionId, parentSessionId: owner, parentDirectory: ownerCwd, error });
+        failure = error;
+      }
+      if (!failure) {
+        if (!recipient) return;
+        if (owner !== undefined && recipient.owner !== owner) {
+          ownerChanges += 1;
+          attempts = 0;
+        }
+        ({ owner, cwd: ownerCwd } = recipient);
+        if (ownerChanges > DELIVERY_ATTEMPTS) {
+          onDeliveryFailed({ sessionId, parentSessionId: owner, parentDirectory: ownerCwd, error: new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker kept changing its owner during delivery.', { sessionId }) });
           return;
         }
-        if (!retryAtOnce) await delay(DELIVERY_RETRY_MS * 2 ** (attempt - 1));
+        try {
+          // The owner's guard covers its activation and the send until Pi
+          // accepted it, but not the backoff between attempts.
+          const settled = await withSession(owner, async () => {
+            const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
+            const current = await resultRecipient(sessionId, lineage);
+            if (!current) return true;
+            if (current.owner !== owner) return false;
+            await deliverResult(parent, sessionId, result, current.worker);
+            return true;
+          });
+          if (settled) return;
+          continue;
+        } catch (error) {
+          failure = error;
+        }
+        // The failed attempt says something about `owner` only while it is
+        // still the recipient.
+        const current = await resultRecipient(sessionId, lineage).catch(() => recipient);
+        if (!current) return;
+        if (current.owner !== owner) continue;
+        if (isGone(failure)) return;
       }
+      attempts += 1;
+      if (attempts >= DELIVERY_ATTEMPTS) {
+        onDeliveryFailed({ sessionId, parentSessionId: owner, parentDirectory: ownerCwd, error: failure });
+        return;
+      }
+      await delay(DELIVERY_RETRY_MS * 2 ** (attempts - 1));
     }
   };
 
@@ -882,10 +946,18 @@ export function createOrchestrationService(deps) {
    * is live (steer and follow-up need no slot). The returned ticket goes back
    * to `afterSessionInput` once the input started a run or ended without one.
    */
+  // The inputs of one session between the gate and their outcome. `done`
+  // resolves once the last of them finished and the gate closed.
+  const openGate = () => {
+    let drained;
+    const done = new Promise((resolve) => { drained = resolve; });
+    return { inputs: 0, token: null, started: false, done, drained };
+  };
+
   const beforeSessionInput = async (sessionId) => {
     // A gate that is deciding keep or release finishes before a new input joins.
     while (inputGates.get(sessionId)?.closing) await inputGates.get(sessionId).closing;
-    const gate = inputGates.get(sessionId) ?? { inputs: 0, token: null, started: false };
+    const gate = inputGates.get(sessionId) ?? openGate();
     gate.inputs += 1;
     inputGates.set(sessionId, gate);
     try {
@@ -902,6 +974,11 @@ export function createOrchestrationService(deps) {
       if (!document.workers[sessionId]) return {};
       await reconciled();
       const worker = (await registry.read()).workers[sessionId];
+      // A stop that claimed the worker waits for the inputs it let in; a new
+      // one must not start a run behind it.
+      if (worker?.stopping) {
+        throw new OrchestrationError('ORCHESTRATION_WORKER_STOPPING', 'This worker is being stopped; retry once session_stop has finished.', { sessionId });
+      }
       if (gate.token || !worker || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return {};
       const { workerLimit } = await readSettings();
       const token = await registry.update((current) => reserveForInput(current, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
@@ -931,6 +1008,7 @@ export function createOrchestrationService(deps) {
       : Promise.resolve()
     ).finally(() => {
       if (inputGates.get(sessionId) === gate) inputGates.delete(sessionId);
+      gate.drained();
     });
     await gate.closing;
   };
