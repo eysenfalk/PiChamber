@@ -54,7 +54,7 @@ const PORTABLE_FIELDS = new Set([
 // portable file.
 const LOCAL_FIELDS = new Set([
   'lastDirectory', 'homeDirectory', 'projects', 'activeProjectId',
-  'securityScopedBookmarks', 'pinnedDirectories', 'openInAppId',
+  'securityScopedBookmarks', 'pinnedDirectories', 'hiddenProjectIds', 'openInAppId',
   'terminalShell', 'terminalLoginShells', 'desktopLanAccessEnabled',
   'desktopKeepAwakeEnabled', 'desktopProcessPerformanceRecordingEnabled',
   'desktopMinimizeToTrayEnabled', 'desktopCloseToTrayEnabled', 'desktopMacMenuBarEnabled',
@@ -178,6 +178,11 @@ export const createPiUiSettingsStore = ({
         && changes[field] !== 'rc') {
         throw new Error('UI_SETTINGS_INVALID');
       }
+    }
+    if (Object.hasOwn(changes, 'hiddenProjectIds')
+      && (!Array.isArray(changes.hiddenProjectIds)
+        || changes.hiddenProjectIds.some((id) => typeof id !== 'string'))) {
+      throw new Error('UI_SETTINGS_INVALID');
     }
     return runMutation(async () => {
       const current = await readLocked();

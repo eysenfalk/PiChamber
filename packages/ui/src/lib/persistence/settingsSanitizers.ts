@@ -140,6 +140,10 @@ export const sanitizeWebSettings = (payload: unknown): DesktopSettings | null =>
       )
     );
   }
+  const hiddenProjectIds = sanitizeStringArray(candidate.hiddenProjectIds);
+  if (hiddenProjectIds) {
+    result.hiddenProjectIds = hiddenProjectIds;
+  }
   if (Array.isArray(candidate.draftStarters)) {
     result.draftStarters = sanitizeStarterRefs(candidate.draftStarters);
   }

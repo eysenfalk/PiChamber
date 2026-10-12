@@ -149,6 +149,19 @@ describe('Pi UI settings store', () => {
     await expect(store.read()).resolves.toMatchObject({ desktopUpdateChannel: 'rc', serverUpdateChannel: 'stable' });
   });
 
+  it('keeps hidden sidebar projects with the host and rejects a malformed list', async () => {
+    const { file, runtimeFile, store } = await makeStore();
+
+    await store.write({ themeId: 'dark', hiddenProjectIds: ['path_abc', 'chats'] });
+    await expect(readJson(file)).resolves.toEqual({ __pichamberSettingsScope: 'portable-v1', themeId: 'dark' });
+    await expect(readJson(runtimeFile)).resolves.toEqual({ hiddenProjectIds: ['path_abc', 'chats'] });
+    await expect(store.read()).resolves.toMatchObject({ hiddenProjectIds: ['path_abc', 'chats'] });
+
+    await expect(store.write({ hiddenProjectIds: 'path_abc' })).rejects.toThrow('UI_SETTINGS_INVALID');
+    await expect(store.write({ hiddenProjectIds: ['path_abc', 4] })).rejects.toThrow('UI_SETTINGS_INVALID');
+    await expect(store.read()).resolves.toMatchObject({ hiddenProjectIds: ['path_abc', 'chats'] });
+  });
+
   it('rejects prototype-polluting keys', async () => {
     const { store } = await makeStore();
     const changes = JSON.parse('{"__proto__":{"polluted":true}}');

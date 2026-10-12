@@ -318,5 +318,121 @@ describe('sessionsByProject', () => {
     expect(ids).not.toContain('chat-a');
     expect(ids).not.toContain('scratch');
     expect(ids).toContain('perm');
+
+describe('buildWorkspaceTree hidden projects', () => {
+  test('omits hidden projects and Chats from the roots and from the session count', () => {
+    const tree = buildWorkspaceTree(world({ hidden: new Set(['notes', 'chats']) }));
+    expect(render(tree, [])).toBe(['▸ PiChamber  7', '▸ Other folders  1'].join('\n'));
+    expect(tree.sessionCount).toBe(8);
+  });
+
+  test('an empty or unmatched hidden set changes nothing', () => {
+    const plain = render(buildWorkspaceTree(world()), ['p:pichamber']);
+    expect(render(buildWorkspaceTree(world({ hidden: new Set() })), ['p:pichamber'])).toBe(plain);
+    expect(render(buildWorkspaceTree(world({ hidden: new Set(['gone']) })), ['p:pichamber'])).toBe(plain);
+  });
+
+  test('keeps sessions of hidden projects placed, so the catalog and later searches still see them', () => {
+    const tree = buildWorkspaceTree(world({ hidden: new Set(['notes']) }));
+    expect(tree.placement.get('note')).toBe('p:notes');
+    expect(tree.parents.get('s:note')).toBe('p:notes');
+  });
+});
+
+describe('buildWorkspaceTree query', () => {
+  const search = (query: string, overrides: WorldOverrides = {}) => buildWorkspaceTree(world({ query, ...overrides }));
+
+  test('an empty or blank query is the normal tree, hidden projects still omitted', () => {
+    const normal = buildWorkspaceTree(world({ hidden: new Set(['notes']) }));
+    for (const query of ['', '   ']) {
+      const tree = search(query, { hidden: new Set(['notes']) });
+      expect(render(tree, ['p:pichamber'])).toBe(render(normal, ['p:pichamber']));
+      expect(tree.sessionCount).toBe(normal.sessionCount);
+      expect(tree.searchExpanded.size).toBe(0);
+      expect(tree.matchCount).toBe(0);
+    }
+    expect(buildWorkspaceTree(world()).searchExpanded.size).toBe(0);
+  });
+
+  test('finds a session title with its ancestors and expands exactly those', () => {
+    const tree = search('FORK-1a');
+    expect(render(tree, tree.searchExpanded)).toBe([
+      '▾ PiChamber  3',
+      '  ▾ 39-reload-restart  3',
+      '    ▾ reload  ⑂2',
+      '      ▾ reload-fork-1  ⑂1',
+      '        reload-fork-1a',
+    ].join('\n'));
+    expect([...tree.searchExpanded].sort()).toEqual(
+      ['p:pichamber', 's:reload', 's:reload-fork-1', 'w:/wt/39-reload-restart'],
+    );
+    expect(tree.matchCount).toBe(1);
+    expect(tree.sessionCount).toBe(3);
+  });
+
+  test('finds a worktree by branch, without its non-matching sessions', () => {
+    const tree = search(' 45-perm ');
+    expect(render(tree, tree.searchExpanded)).toBe(['▾ PiChamber  0', '  45-permissions  0'].join('\n'));
+    expect(tree.matchCount).toBe(1);
+  });
+
+  test('finds a project by label, a session folder by name, and an other folder by directory', () => {
+    expect(render(search('NOTES'), [])).toBe('notes  0');
+
+    const folders = { '/wt/39-reload-restart': [{ id: 'review', name: 'Review', sessionIds: ['reload'], createdAt: 1 }] };
+    const byFolder = search('review', { foldersByScope: folders });
+    expect(render(byFolder, byFolder.searchExpanded)).toBe([
+      '▾ PiChamber  0',
+      '  ▾ 39-reload-restart  0',
+      '    Review  0',
+    ].join('\n'));
+
+    const byDirectory = search('/tmp/scr');
+    expect(render(byDirectory, byDirectory.searchExpanded)).toBe(['▾ Other folders  0', '  /tmp/scratch  0'].join('\n'));
+  });
+
+  test('reveals sessions behind a "N more" cut and drops the cut row', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) => session(`n${index + 1}`, '/src/notes', index + 1));
+    const tree = search('n7', { sessions });
+    expect(render(tree, tree.searchExpanded)).toBe(['▾ notes  1', '  n7'].join('\n'));
+    expect(allKeys(tree).some((key) => key.startsWith('more:'))).toBe(false);
+  });
+
+  test('includes hits in hidden projects and Chats and marks only those roots', () => {
+    const tree = search('note', { hidden: new Set(['notes', 'chats']) });
+    expect(tree.roots.map((node) => [node.key, node.hiddenMatch === true])).toEqual([['p:notes', true]]);
+    expect(render(tree, tree.searchExpanded)).toBe(['▾ notes  1', '  note'].join('\n'));
+    expect(tree.matchCount).toBe(2);
+
+    const chats = search('chat-b', { hidden: new Set(['chats']) });
+    expect(chats.roots.map((node) => [node.key, node.hiddenMatch === true])).toEqual([['chats', true]]);
+
+    const visible = search('note');
+    expect(visible.roots.every((node) => node.hiddenMatch === undefined)).toBe(true);
+  });
+
+  test('does not show a hidden project without a hit', () => {
+    const tree = search('reload', { hidden: new Set(['notes']) });
+    expect(tree.roots.map((node) => node.key)).toEqual(['p:pichamber']);
+  });
+
+  test('returns an empty tree for a query that matches nothing', () => {
+    const tree = search('zzz');
+    expect(tree.roots).toEqual([]);
+    expect(tree.matchCount).toBe(0);
+    expect(tree.sessionCount).toBe(0);
+  });
+
+  test('leaves parents, placement and the unfiltered tree alone', () => {
+    const normal = buildWorkspaceTree(world());
+    const tree = search('reload');
+    expect(tree.parents).toEqual(normal.parents);
+    expect(tree.placement).toEqual(normal.placement);
+  });
+
+  test('a query that matches everything keeps every active session once', () => {
+    const tree = search('e', { hidden: new Set(['notes']) });
+    const active = baseSessions.filter((entry) => !entry.time?.archived && entry.title?.includes('e'));
+    expect(sessionIdsInTree(tree).sort()).toEqual(active.map((entry) => entry.id).sort());
   });
 });

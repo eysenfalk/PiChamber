@@ -599,6 +599,7 @@ export interface SettingsPayload {
   activeProjectId?: string;
   securityScopedBookmarks?: string[];
   pinnedDirectories?: string[];
+  hiddenProjectIds?: string[];
   showDeletionDialog?: boolean;
   nativeNotificationsEnabled?: boolean;
   notificationMode?: 'always' | 'hidden-only';
