@@ -21,6 +21,8 @@ type Props = {
   setSessionSearchQuery: (value: string) => void;
   hasSessionSearchQuery: boolean;
   searchMatchCount: number;
+  /** Hidden projects that appear because they hold a match. */
+  hiddenProjectMatchCount: number;
   visibilityEntries: readonly ProjectVisibilityEntry[];
   hiddenProjectIds: ReadonlySet<string>;
   onSetProjectHidden: (id: string, hidden: boolean) => void;
@@ -50,6 +52,7 @@ export function SidebarHeader(props: Props): React.ReactNode {
     setSessionSearchQuery,
     hasSessionSearchQuery,
     searchMatchCount,
+    hiddenProjectMatchCount,
     visibilityEntries,
     hiddenProjectIds,
     onSetProjectHidden,
@@ -215,13 +218,6 @@ export function SidebarHeader(props: Props): React.ReactNode {
 
         {isSessionSearchOpen ? (
           <div className={cn(mobileVariant ? 'pb-2' : 'pb-1')}>
-            <div className="mb-1 flex items-center justify-between px-0.5 typography-micro text-muted-foreground/80">
-              {hasSessionSearchQuery ? (
-                <span>{searchMatchCount === 1
-                  ? `${searchMatchCount} match`
-                  : `${searchMatchCount} matches`}</span>
-              ) : <span />}
-            </div>
             <div className="relative">
               <Icon name="search" className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -254,6 +250,22 @@ export function SidebarHeader(props: Props): React.ReactNode {
                 </button>
               ) : null}
             </div>
+            {hasSessionSearchQuery ? (
+              <div role="status" className="mt-1 flex items-center justify-between px-1 typography-micro text-muted-foreground">
+                <span>{searchMatchCount === 1 ? '1 match' : `${searchMatchCount} matches`}</span>
+                {hiddenProjectMatchCount > 0 ? (
+                  <span
+                    role="img"
+                    aria-label={hiddenProjectMatchCount === 1 ? 'Matches in 1 hidden project' : `Matches in ${hiddenProjectMatchCount} hidden projects`}
+                    title={hiddenProjectMatchCount === 1 ? 'Matches in 1 hidden project' : `Matches in ${hiddenProjectMatchCount} hidden projects`}
+                    className="inline-flex items-center gap-1"
+                  >
+                    <Icon name="eye-off" className="size-3" />
+                    {hiddenProjectMatchCount}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

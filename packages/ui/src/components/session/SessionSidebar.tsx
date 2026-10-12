@@ -566,6 +566,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     return Boolean(normalizedPath && workspaceTreeModel.nodesByKey.get(`w:${normalizedPath}`)?.rollup.running);
   }, [workspaceTreeModel.nodesByKey]);
   const searchMatchCount = workspaceTreeModel.tree.matchCount;
+  const hiddenProjectMatchCount = React.useMemo(
+    () => workspaceTreeModel.tree.roots.filter((root) => root.hiddenMatch).length,
+    [workspaceTreeModel.tree.roots],
+  );
 
   const treeFolderActions = React.useMemo<TreeFolderActions>(() => ({
     renamingFolderId,
@@ -854,6 +858,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         setSessionSearchQuery={setSessionSearchQuery}
         hasSessionSearchQuery={hasSessionSearchQuery}
         searchMatchCount={searchMatchCount}
+        hiddenProjectMatchCount={hiddenProjectMatchCount}
         visibilityEntries={visibilityEntries}
         hiddenProjectIds={hiddenProjectIds}
         onSetProjectHidden={setProjectHidden}

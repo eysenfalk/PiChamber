@@ -24,7 +24,7 @@ export const renderHighlightedText = (text: string, query: string): React.ReactN
     parts.push(
       <mark
         key={`${matchIndex}-${matchText}`}
-        className="bg-primary text-primary-foreground ring-1 ring-primary/90"
+        className="rounded-[2px] bg-primary/20 text-foreground"
       >
         {matchText}
       </mark>,
