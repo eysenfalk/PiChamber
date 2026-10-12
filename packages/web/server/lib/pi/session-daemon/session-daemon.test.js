@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { appendFile, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createConnection } from 'node:net';
@@ -1063,6 +1063,45 @@ describe('Pi session daemon spike', () => {
     await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(runtimes[2].disposed).toBe(true);
+    await client.close();
+  });
+
+  it('keeps a target an orchestration abort activated alive until the abort ended, then disposes it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-abort-'));
+    const endpoint = testDaemonEndpoint(root);
+    const callerFile = join(root, 'caller.jsonl');
+    const targetFile = join(root, 'target.jsonl');
+    await writeFile(callerFile, `{"type":"session","id":"caller","cwd":"${root}"}\n`);
+    await writeFile(targetFile, `{"type":"session","id":"target","cwd":"${root}"}\n`);
+    const target = new FakeSession('target', targetFile);
+    let finishAbort;
+    target.abort = () => new Promise((resolve) => { finishAbort = resolve; });
+    const runtimes = [
+      new FakeRuntime({ cwd: root, session: new FakeSession('caller', callerFile) }),
+      new FakeRuntime({ cwd: root, session: target }),
+    ];
+    let created = 0;
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      idleTimeoutMs: 10,
+      listSessions: async () => [{ path: callerFile, id: 'caller', cwd: root }, { path: targetFile, id: 'target', cwd: root }],
+      createRuntime: async () => runtimes[created++],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    const interrupted = client.request('orchestration.call', { sessionId: 'caller', tool: 'session_interrupt', args: { sessionId: 'target' } });
+    await vi.waitFor(() => expect(finishAbort).toBeTypeOf('function'));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[1].disposed).toBe(false);
+    finishAbort();
+    await expect(interrupted).resolves.toMatchObject({ result: { value: { sessionId: 'target', interrupted: true } } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[0].disposed).toBe(true);
+    expect(runtimes[1].disposed).toBe(true);
     await client.close();
   });
 

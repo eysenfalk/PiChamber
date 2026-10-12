@@ -39,7 +39,7 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
   return runtime;
 };
 
-const createHarness = ({ workerLimit = 4, activity = new Map(), now, delay = async () => {} } = {}) => {
+const createHarness = ({ workerLimit = 4, activity = new Map(), now, delay = async () => {}, holdSession } = {}) => {
   const runtimes = new Map();
   const states = new Map();
   const add = (runtime) => { runtimes.set(runtime.session.sessionId, runtime); return runtime; };
@@ -73,6 +73,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, delay = asy
     onDeliveryFailed: vi.fn(),
     delay: vi.fn(delay),
     now,
+    ...(holdSession ? { holdSession } : {}),
   };
   const service = createOrchestrationService(deps);
   const settle = async (sessionId, assistant) => {
@@ -456,6 +457,29 @@ describe('orchestration service', () => {
     await settle('worker-1', 'second');
     expect(deps.delay).toHaveBeenCalledTimes(4);
     expect(deps.onDeliveryFailed).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'worker-1', parentSessionId: 'orch' }));
+  });
+
+  it('holds the parent guard for each delivery until it is accepted, but not across the backoff', async () => {
+    const held = new Map();
+    const heldDuring = { sends: [], backoffs: [] };
+    const { service, deps, orchestrator, settle } = createHarness({
+      delay: async () => { heldDuring.backoffs.push(held.get('orch') ?? 0); },
+      holdSession: (sessionId) => {
+        held.set(sessionId, (held.get(sessionId) ?? 0) + 1);
+        return () => held.set(sessionId, held.get(sessionId) - 1);
+      },
+    });
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const send = orchestrator.session.sendCustomMessage;
+    orchestrator.session.sendCustomMessage = async (...args) => {
+      heldDuring.sends.push(held.get('orch') ?? 0);
+      if (heldDuring.sends.length === 1) throw Object.assign(new Error('closed'), { code: 'RUNTIME_DISPOSED' });
+      return send.apply(orchestrator.session, args);
+    };
+    await settle('worker-1', 'result');
+    expect(heldDuring).toEqual({ sends: [1, 1], backoffs: [0] });
+    expect(held.get('orch')).toBe(0);
+    expect(deps.onDeliveryFailed).not.toHaveBeenCalled();
   });
 
   it('drops the result of a worker whose parent was deleted', async () => {

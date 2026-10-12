@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,7 @@ import {
   listPiSessionJsonlDirectory,
   matchesPiSessionJsonlName,
   normalizeWindowsShellPath,
+  scanPiSessionJsonlHeaders,
   validatePiSessionJsonlDirectory,
   validatePiSessionJsonlFile,
 } from './session-jsonl.js';
@@ -22,6 +23,45 @@ const validHeader = (cwd) => JSON.stringify({
   id: 'session-one',
   timestamp: '2026-01-01T00:00:00.000Z',
   cwd,
+});
+
+describe('Pi session header scan', () => {
+  const store = async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), 'pichamber-pi-header-scan-'));
+    const storeA = join(agentDir, 'sessions', 'a');
+    const storeB = join(agentDir, 'sessions', 'b');
+    await mkdir(storeA, { recursive: true });
+    await mkdir(storeB, { recursive: true });
+    await writeFile(join(storeB, 'renamed.jsonl'), `${JSON.stringify({ type: 'session', id: 'caller', cwd: '/work/b' })}\n`);
+    return { agentDir, storeA };
+  };
+
+  it('goes on with the other stores when one vanished during the scan', async () => {
+    const { agentDir, storeA } = await store();
+    const readDirectory = async (path, options) => {
+      if (path === storeA) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+      const entries = await readdir(path, options);
+      return path === join(agentDir, 'sessions') ? entries.sort((x, y) => x.name.localeCompare(y.name)) : entries;
+    };
+    await expect(scanPiSessionJsonlHeaders({ sessionId: 'caller', agentDir, readDirectory }))
+      .resolves.toEqual({ match: { path: join(agentDir, 'sessions', 'b', 'renamed.jsonl'), cwd: '/work/b' }, incomplete: false });
+  });
+
+  it('reports a store it could not read as incomplete, not as absence', async () => {
+    const { agentDir, storeA } = await store();
+    const readDirectory = async (path, options) => {
+      if (path === storeA) throw Object.assign(new Error('io'), { code: 'EIO' });
+      return readdir(path, options);
+    };
+    await expect(scanPiSessionJsonlHeaders({ sessionId: 'other', agentDir, readDirectory }))
+      .resolves.toEqual({ match: null, incomplete: true });
+  });
+
+  it('treats a missing sessions root as absence', async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), 'pichamber-pi-header-scan-empty-'));
+    await expect(scanPiSessionJsonlHeaders({ sessionId: 'caller', agentDir }))
+      .resolves.toEqual({ match: null, incomplete: false });
+  });
 });
 
 describe('Pi session JSONL validation', () => {

@@ -178,6 +178,61 @@ export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath 
   return null;
 }
 
+const isMissing = (error) => error?.code === 'ENOENT';
+
+/**
+ * Find a session by the header of every JSONL file in every directory store,
+ * for files Pi did not name `<timestamp>_<sessionId>.jsonl`. Only a missing
+ * sessions root, store or file counts as absent; any other failure sets
+ * `incomplete`, because the session may sit behind it. A store that vanished
+ * during the scan is skipped and the scan goes on with the others.
+ *
+ * @returns {Promise<{ match: { path: string, cwd: string } | null, incomplete: boolean }>}
+ */
+export async function scanPiSessionJsonlHeaders({ sessionId, agentDir, readDirectory = readdir }) {
+  let incomplete = false;
+  const sessionsRoot = join(agentDir, 'sessions');
+  let dirEntries;
+  try {
+    dirEntries = await readDirectory(sessionsRoot, { withFileTypes: true });
+  } catch (error) {
+    return { match: null, incomplete: !isMissing(error) };
+  }
+  for (const dirEntry of dirEntries) {
+    if (!dirEntry.isDirectory()) continue;
+    const dirPath = join(sessionsRoot, dirEntry.name);
+    let files;
+    try {
+      files = await readDirectory(dirPath, { withFileTypes: true });
+    } catch (error) {
+      if (!isMissing(error)) incomplete = true;
+      continue;
+    }
+    for (const file of files) {
+      if (!file.name.endsWith('.jsonl')) continue;
+      const fullPath = join(dirPath, file.name);
+      try {
+        const input = createReadStream(fullPath, { encoding: 'utf8' });
+        const lines = createInterface({ input, crlfDelay: Infinity });
+        let header;
+        for await (const line of lines) {
+          if (!line.trim()) continue;
+          header = JSON.parse(line);
+          break;
+        }
+        lines.close();
+        if (header?.type === 'session' && header.id === sessionId && header.cwd) {
+          return { match: { path: fullPath, cwd: header.cwd }, incomplete };
+        }
+      } catch (error) {
+        // A header that is not JSON is no session file.
+        if (!(error instanceof SyntaxError) && !isMissing(error)) incomplete = true;
+      }
+    }
+  }
+  return { match: null, incomplete };
+}
+
 export async function validatePiSessionJsonlFile(filePath) {
   let sawHeader = false;
   try {

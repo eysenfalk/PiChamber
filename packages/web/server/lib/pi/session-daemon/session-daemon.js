@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { chmod, link, mkdir, lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { chmod, link, mkdir, lstat, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { hasTrustRequiringProjectResources } from '@earendil-works/pi-coding-agent';
 import { StringDecoder } from 'node:string_decoder';
@@ -51,6 +50,7 @@ import { withCrossProcessLock } from '../../server/cross-process-lock.js';
 import {
   findPiSessionJsonlById,
   getPiSessionDirectory,
+  scanPiSessionJsonlHeaders,
   createPiSessionListCache,
   listPiSessionJsonlDirectory,
   validatePiSessionJsonlDirectory,
@@ -1415,47 +1415,21 @@ export function createSessionDaemon({
       if (target) return target;
     }
 
-    // If not found in candidateDirs, scan all directory stores under agentDir/sessions
-    try {
-      const sessionsRoot = join(agentDir, 'sessions');
-      const dirEntries = await readdir(sessionsRoot, { withFileTypes: true });
-      for (const dirEntry of dirEntries) {
-        if (!dirEntry.isDirectory()) continue;
-        const dirPath = join(sessionsRoot, dirEntry.name);
-        const files = await readdir(dirPath, { withFileTypes: true });
-        for (const file of files) {
-          if (!file.name.endsWith('.jsonl')) continue;
-          const fullPath = join(dirPath, file.name);
-          try {
-            const input = createReadStream(fullPath, { encoding: 'utf8' });
-            const lines = createInterface({ input, crlfDelay: Infinity });
-            let sessionCwd = null;
-            let fileId = null;
-            for await (const line of lines) {
-              if (!line.trim()) continue;
-              const header = JSON.parse(line);
-              if (header?.type === 'session' && typeof header.id === 'string') {
-                fileId = header.id;
-                sessionCwd = header.cwd;
-              }
-              break;
-            }
-            lines.close();
-            if (fileId === sessionId && sessionCwd) {
-              await validatePiSessionJsonlFile(fullPath);
-              const validated = await resolveDirectory(sessionCwd);
-              knownDirectories.add(validated);
-              return { target: { id: sessionId, path: fullPath }, directory: validated };
-            }
-          } catch (error) {
-            // A file whose header is not JSON is no session; any other
-            // failure may hide the one being looked up.
-            if (!(error instanceof SyntaxError)) incomplete = true;
-          }
-        }
+    // Last resort for non-standard filenames: read the header of every
+    // file in every directory store under agentDir/sessions.
+    const scanned = await scanPiSessionJsonlHeaders({ sessionId, agentDir });
+    if (scanned.incomplete) incomplete = true;
+    if (scanned.match) {
+      try {
+        await validatePiSessionJsonlFile(scanned.match.path);
+        const validated = await resolveDirectory(scanned.match.cwd);
+        knownDirectories.add(validated);
+        return { target: { id: sessionId, path: scanned.match.path }, directory: validated };
+      } catch {
+        // The header names this session; a file that does not validate now
+        // is no proof that the session is gone.
+        incomplete = true;
       }
-    } catch (error) {
-      if (error?.code !== 'ENOENT') incomplete = true;
     }
 
     throw Object.assign(
@@ -3856,15 +3830,12 @@ export function createSessionDaemon({
   };
 
   const orchestration = createOrchestrationService({
-    // Sessions a tool activates hold the idle guard like a direct request, so
-    // a dormant target that was opened only for a read is disposed again.
-    activateSession: async (sessionId, requestedDirectory) => {
+    activateSession,
+    // Every session a tool uses holds the idle guard like a direct request,
+    // so it is not disposed mid-use and is disposed again once idle.
+    holdSession: (sessionId) => {
       const guard = acquireSessionAccess(sessionId);
-      try {
-        return await activateSession(sessionId, requestedDirectory);
-      } finally {
-        releaseSessionAccess(guard);
-      }
+      return () => releaseSessionAccess(guard);
     },
     getLiveRuntime: (sessionId) => runtimeRegistry?.findBySessionId(sessionId),
     listLiveRuntimes: () => runtimeRegistry?.listAll() ?? [],

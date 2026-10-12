@@ -118,6 +118,7 @@ export function createOrchestrationService(deps) {
     hostStatus,
     resolveBranch = async () => undefined,
     getSessionActivity = () => ({}),
+    holdSession = () => () => {},
     canonicalDirectory = async (directory) => resolve(directory),
     onDeliveryFailed = () => {},
     delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
@@ -147,6 +148,17 @@ export function createOrchestrationService(deps) {
   const isSettled = (sessionId) => {
     const state = stateOf(sessionId);
     return state === 'idle' || state === 'dormant';
+  };
+
+  // Holds a target session's idle guard for the whole use, so a session
+  // opened here is not disposed mid-use and is disposed again when idle.
+  const withSession = async (sessionId, use) => {
+    const release = holdSession(sessionId);
+    try {
+      return await use();
+    } finally {
+      release();
+    }
   };
 
   const notifyWaiters = () => {
@@ -430,7 +442,9 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const read = async (_callerSessionId, args) => {
+  const read = (callerSessionId, args) => withSession(args.sessionId, () => readSession(callerSessionId, args));
+
+  const readSession = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const limit = args.limit ?? 10;
     const messages = (runtime.session.messages ?? [])
@@ -452,7 +466,9 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const send = async (_callerSessionId, args) => {
+  const send = (callerSessionId, args) => withSession(args.sessionId, () => sendSession(callerSessionId, args));
+
+  const sendSession = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const receipt = await startTask(runtime.session.sessionId, args.text, args.delivery ?? 'prompt', args.clientRequestId);
     return {
@@ -466,7 +482,7 @@ export function createOrchestrationService(deps) {
   const wait = async (_callerSessionId, args, options = {}) => {
     const sessionIds = [...new Set(args.sessionIds)];
     for (const sessionId of sessionIds) {
-      if (!getLiveRuntime(sessionId)) await activateSession(sessionId);
+      if (!getLiveRuntime(sessionId)) await withSession(sessionId, () => activateSession(sessionId));
     }
     const cap = Math.min(options.maxWaitMs ?? MAX_WAIT_MS, MAX_WAIT_MS);
     const timeoutMs = Math.min(args.timeoutMs ?? DEFAULT_WAIT_MS, cap);
@@ -500,7 +516,7 @@ export function createOrchestrationService(deps) {
   };
 
   const interrupt = async (_callerSessionId, args) => {
-    await abortSession(args.sessionId);
+    await withSession(args.sessionId, () => abortSession(args.sessionId));
     return { sessionId: args.sessionId, interrupted: true };
   };
 
@@ -524,7 +540,7 @@ export function createOrchestrationService(deps) {
         return false;
       }
       try {
-        await abortSession(sessionId);
+        await withSession(sessionId, () => abortSession(sessionId));
       } catch (error) {
         if (!isGone(error)) {
           result.failed.push({ sessionId, code: typeof error?.code === 'string' ? error.code : 'ABORT_FAILED' });
@@ -647,7 +663,9 @@ export function createOrchestrationService(deps) {
     };
     for (let attempt = 1; ; attempt += 1) {
       try {
-        await deliverResult(sessionId, result, lineage);
+        // The parent's guard covers activation and the send until it is
+        // accepted, but not the backoff between attempts.
+        await withSession(lineage.parentSessionId, () => deliverResult(sessionId, result, lineage));
         return;
       } catch (error) {
         if (isGone(error)) return;
