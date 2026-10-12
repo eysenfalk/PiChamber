@@ -9,7 +9,7 @@ You are a worker session, spawned by the orchestrator session <orchestrator sess
 
 Issue: #<n> <url>
 Worktree: <path>, branch <branch> from origin/dev. Work only there.
-Role: <role, for implementation work with its level, and the one line reason from the When column>
+Role: <role; for a task-* its level and the one line reason from the When column>
 
 Goal: <what is missing and how we know it is done, in a few sentences>
 
