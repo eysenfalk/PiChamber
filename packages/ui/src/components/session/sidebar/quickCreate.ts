@@ -2,7 +2,7 @@ import { GLOBAL_PROJECT_ID } from '@/components/chat/composer/state/draftTargetP
 import type { TreeNode } from './workspaceTree';
 
 /** The part of a tree row a new session needs. */
-type QuickCreateTarget = Pick<TreeNode, 'kind' | 'projectId' | 'directory'>;
+type QuickCreateTarget = Pick<TreeNode, 'key' | 'kind' | 'projectId' | 'directory'>;
 
 /**
  * Rows that take a new session with one click: Chats, every worktree, and a flat
@@ -27,6 +27,12 @@ export type CreateSessionInWorkspaceDeps = {
   /** Leaves any full-page surface (settings, archive, ...). */
   closeMainSurfaces: () => void;
   showChat: () => void;
+  /**
+   * Selects the target row and activates its project, as a click on the row does. The composer
+   * pulls an open draft back to the active project (`useDraftTarget`), so a draft in another
+   * project needs it active first, and the header button then keeps creating in the same row.
+   */
+  selectTarget: (target: QuickCreateTarget) => void;
   openNewSessionDraft: (options?: { selectedProjectId?: string | null; directoryOverride?: string | null }) => void;
   /** Closes the mobile sessions drawer or switches a compact layout to chat. */
   onNavigateAway?: () => void;
@@ -44,6 +50,7 @@ export type CreateSessionInWorkspaceDeps = {
 export const createSessionInWorkspace = (target: QuickCreateTarget | undefined, deps: CreateSessionInWorkspaceDeps): void => {
   deps.closeMainSurfaces();
   deps.showChat();
+  if (target) deps.selectTarget(target);
   if (target?.projectId && target.directory) {
     deps.openNewSessionDraft({ selectedProjectId: target.projectId, directoryOverride: target.directory });
   } else if (target?.kind === 'chats') {

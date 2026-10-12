@@ -126,6 +126,7 @@ describe('createSessionInWorkspace', () => {
     createSessionInWorkspace(target, {
       closeMainSurfaces: () => calls.push('closeMainSurfaces'),
       showChat: () => calls.push('showChat'),
+      selectTarget: (target) => calls.push(`select:${target.key}`),
       openNewSessionDraft: (options) => calls.push(`draft:${JSON.stringify(options ?? null)}`),
       onNavigateAway: () => calls.push('navigateAway'),
       focusComposer: () => calls.push('focusComposer'),
@@ -135,25 +136,27 @@ describe('createSessionInWorkspace', () => {
   };
 
   test('a worktree opens a draft in its own directory, then focuses the composer', () => {
-    expect(run({ kind: 'worktree', projectId: 'multi', directory: '/wt/feature' })).toEqual([
+    expect(run({ key: 'w:/wt/feature', kind: 'worktree', projectId: 'multi', directory: '/wt/feature' })).toEqual([
       'closeMainSurfaces',
       'showChat',
+      'select:w:/wt/feature',
       'draft:{"selectedProjectId":"multi","directoryOverride":"/wt/feature"}',
       'navigateAway',
       'focusComposer',
     ]);
   });
 
-  test('a flat project opens a draft in its root', () => {
-    expect(run({ kind: 'project', projectId: 'flat', directory: '/src/flat' })).toContain(
-      'draft:{"selectedProjectId":"flat","directoryOverride":"/src/flat"}',
-    );
+  test('a flat project selects its row, then opens a draft in its root', () => {
+    const calls = run({ key: 'p:flat', kind: 'project', projectId: 'flat', directory: '/src/flat' });
+    expect(calls.indexOf('select:p:flat')).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf('select:p:flat')).toBeLessThan(calls.indexOf('draft:{"selectedProjectId":"flat","directoryOverride":"/src/flat"}'));
   });
 
   test('Chats starts a draft without a folder', () => {
-    const calls = run({ kind: 'chats', projectId: undefined, directory: '~' });
+    const calls = run({ key: 'chats', kind: 'chats', projectId: undefined, directory: '~' });
     expect(calls).toContain('draft:{"selectedProjectId":"__home__"}');
     expect(calls.some((call) => call.includes('directoryOverride'))).toBe(false);
+    expect(calls).toContain('select:chats');
   });
 
   test('no target starts a plain draft', () => {
@@ -161,6 +164,6 @@ describe('createSessionInWorkspace', () => {
   });
 
   test('the composer is left alone where the caller withholds focus', () => {
-    expect(run({ kind: 'chats', projectId: undefined, directory: '~' }, { focusComposer: undefined })).not.toContain('focusComposer');
+    expect(run({ key: 'chats', kind: 'chats', projectId: undefined, directory: '~' }, { focusComposer: undefined })).not.toContain('focusComposer');
   });
 });

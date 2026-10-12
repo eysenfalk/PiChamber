@@ -720,12 +720,13 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
           setSessionSwitcherOpen(false);
         }
       },
+      selectTarget: (target) => handleSelectTreeNode(target.key),
       openNewSessionDraft,
       onNavigateAway,
       // Dedicated mobile leaves the composer alone: focusing it would raise the keyboard.
       focusComposer: mobileVariant ? undefined : () => { requestAnimationFrame(focusChatInput); },
     });
-  }, [mobileVariant, onNavigateAway, openNewSessionDraft, setActiveMainTab, setSessionSwitcherOpen]);
+  }, [handleSelectTreeNode, mobileVariant, onNavigateAway, openNewSessionDraft, setActiveMainTab, setSessionSwitcherOpen]);
 
   const handleOpenNewSessionDraftFromHeader = React.useCallback(() => {
     startNewSessionIn(selectedNodeKey ? workspaceTreeModel.nodesByKey.get(selectedNodeKey as NodeKey) : undefined);

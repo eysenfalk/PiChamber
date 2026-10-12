@@ -39,6 +39,8 @@ Actions execute in order:
 
 - `navigate`: relative `path` on the target origin.
 - `click`: exactly one `selector` or literal `text`; optional `button: 'right'` opens context menus.
+- `hover`: exactly one `selector` or `text`; moves the pointer onto it without pressing, for controls that appear on hover.
+- `long-press`: exactly one `selector` or `text`, only in a mobile step; holds a touch for 700 ms, past the 500 ms long press menus wait for.
 - `press`: one `key` from `KEYS` in `tours.mjs` (arrows, Home, End, Enter, Escape), sent to the focused element.
 - `drag`: `from` and `to`, each exactly one `selector` or `text`; holds the left button and moves in small steps so drag libraries activate.
 - `type`: `selector` and `value`, selects existing input and inserts the value.

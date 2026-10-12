@@ -60,6 +60,7 @@ function targetPoint(target) {
   const normalize = text => text.replace(/\s+/g, ' ').trim();
   const elements = target.selector ? [...document.querySelectorAll(target.selector)] : [...document.querySelectorAll('body *')]
     .filter(element => normalize(element.textContent) === normalize(target.text) && ![...element.children].some(child => normalize(child.textContent) === normalize(target.text)));
+  let covered = '';
   for (const element of elements) {
     const box = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -68,9 +69,10 @@ function targetPoint(target) {
       const x = box.left + box.width / 2, y = box.top + box.height / 2;
       const top = document.elementFromPoint(x, y);
       if (top && (element.contains(top) || top.contains(element))) return { x, y };
+      covered = top ? ` (covered by ${top.tagName.toLowerCase()}${top.getAttribute('aria-label') ? ` "${top.getAttribute('aria-label')}"` : ''})` : '';
     }
   }
-  throw new Error('Action target is missing, offscreen or covered');
+  throw new Error('Action target is missing, offscreen or covered' + covered);
 }
 
 export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputRoot = join(root, '.proof'), holdMs = 1200, signal, checkout, runtime = runtimeDefaults } = {}) {
@@ -197,6 +199,16 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
             await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
             await send('Input.insertText', { text: action.value });
           }
+        } else if (action.type === 'hover') {
+          // Moves the pointer without pressing, so :hover styles and pointer-enter handlers apply.
+          const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+        } else if (action.type === 'long-press') {
+          // A held finger on a touch viewport, longer than the 500 ms long press menus wait for.
+          const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
+          await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+          await runtime.wait(700);
+          await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         } else if (action.type === 'press') {
           const key = { key: action.key, code: action.key, windowsVirtualKeyCode: KEYS[action.key] };
           await send('Input.dispatchKeyEvent', action.key === 'Enter' ? { type: 'keyDown', ...key, text: '\r' } : { type: 'rawKeyDown', ...key });
