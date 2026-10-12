@@ -29,5 +29,8 @@ export const SEED_MANIFEST = {
     { project: 'lab-alpha', name: 'quick-find', git: 'ahead-behind' },
     // A rebase onto main stopped on a conflict.
     { project: 'lab-alpha', name: 'rebase-stop', git: 'rebase' },
+    // Tracks a branch on a local bare remote (slice 6 of #95). The remote has one commit
+    // the worktree has not fetched, so no `↓` shows until a fetch happens.
+    { project: 'lab-alpha', name: 'fetch-me', git: 'remote-ahead' },
   ],
 };

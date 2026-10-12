@@ -991,6 +991,8 @@ describe('chat fixed defaults: retired settings cannot override through UIStore'
       gitmojiEnabled: true,
       diffLayoutPreference: 'side-by-side',
       gitChangesViewMode: 'tree',
+      gitAutoFetchEnabled: true,
+      gitAutoFetchIntervalMinutes: 30,
     }) as unknown as Record<string, unknown> | null;
     expect(sanitized).not.toBe(null);
     for (const key of [
@@ -1008,5 +1010,26 @@ describe('chat fixed defaults: retired settings cannot override through UIStore'
     }
     expect(sanitized?.['diffLayoutPreference']).toBe('side-by-side');
     expect(sanitized?.['gitChangesViewMode']).toBe('tree');
+    expect(sanitized?.['gitAutoFetchEnabled']).toBe(true);
+    expect(sanitized?.['gitAutoFetchIntervalMinutes']).toBe(30);
+  });
+
+  test('web-settings sanitizer keeps only allowed Auto fetch values', () => {
+    for (const interval of [0, 10, 45, 61, '15', null, 15.5]) {
+      const sanitized = sanitizeWebSettings({
+        gitAutoFetchEnabled: 'yes',
+        gitAutoFetchIntervalMinutes: interval,
+      }) as unknown as Record<string, unknown> | null;
+      expect(sanitized?.['gitAutoFetchEnabled']).toBe(undefined);
+      expect(sanitized?.['gitAutoFetchIntervalMinutes']).toBe(undefined);
+    }
+    for (const interval of [5, 15, 30, 60]) {
+      const sanitized = sanitizeWebSettings({
+        gitAutoFetchEnabled: false,
+        gitAutoFetchIntervalMinutes: interval,
+      }) as unknown as Record<string, unknown> | null;
+      expect(sanitized?.['gitAutoFetchEnabled']).toBe(false);
+      expect(sanitized?.['gitAutoFetchIntervalMinutes']).toBe(interval);
+    }
   });
 });

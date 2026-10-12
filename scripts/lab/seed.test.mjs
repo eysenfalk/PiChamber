@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 // PiChamber's parent may point PI_PACKAGE_DIR into an Electron asar.
 const packageDir = process.env.PI_PACKAGE_DIR;
 delete process.env.PI_PACKAGE_DIR;
-const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES } = await import('./seed.mjs');
+const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES, remotePath } = await import('./seed.mjs');
 if (packageDir !== undefined) process.env.PI_PACKAGE_DIR = packageDir;
 
 test('SDK-written fixtures round trip, list per project, link a subsession and keep recency order', async () => {
@@ -60,6 +60,19 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
       const branchLine = spawnSync('git', ['-C', path, 'status', '--short', '--branch'], { encoding: 'utf8' }).stdout.split('\n')[0];
       if (worktree.git === 'dirty') expect(branchLine).toBe(`## ${worktree.name}...main [behind 1]`);
       if (worktree.git === 'ahead-behind') expect(branchLine).toBe(`## ${worktree.name}...main [ahead 2, behind 1]`);
+      if (worktree.git === 'remote-ahead') {
+        // Tracks the bare remote and shows neither ahead nor behind: the remote's extra commit is not fetched yet.
+        expect(branchLine).toBe(`## ${worktree.name}...origin/${worktree.name}`);
+        const remote = remotePath(root, worktree.project);
+        const remoteHead = spawnSync('git', ['-C', remote, 'rev-parse', `refs/heads/${worktree.name}`], { encoding: 'utf8' }).stdout.trim();
+        const trackingHead = spawnSync('git', ['-C', path, 'rev-parse', `refs/remotes/origin/${worktree.name}`], { encoding: 'utf8' }).stdout.trim();
+        expect(remoteHead).not.toBe(trackingHead);
+        expect(spawnSync('git', ['-C', remote, 'rev-list', '--count', `${trackingHead}..${remoteHead}`], { encoding: 'utf8' }).stdout.trim()).toBe('1');
+        // The fetch Auto fetch runs makes the remote commit visible as one behind.
+        expect(spawnSync('git', ['-C', alpha.path, 'fetch', '--quiet', 'origin'], { encoding: 'utf8' }).status).toBe(0);
+        expect(spawnSync('git', ['-C', path, 'status', '--short', '--branch'], { encoding: 'utf8' }).stdout.split('\n')[0])
+          .toBe(`## ${worktree.name}...origin/${worktree.name} [behind 1]`);
+      }
       const session = seed.sessions.find((s) => s.worktree === worktree.name);
       if (!session) continue;
       expect(session.directory).toBe(path);

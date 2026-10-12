@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { GitStatus } from '@/lib/api/types';
 import type { PrVisualSummary } from '@/stores/useGitHubPrStatusStore';
-import { buildWorktreePills, summarizeProjectDirty, type WorktreeStatusRecord } from './worktreePills';
+import { buildWorktreePills, formatAutoFetchNote, summarizeProjectDirty, type WorktreeStatusRecord } from './worktreePills';
 
 const status = (overrides: Partial<GitStatus> = {}): GitStatus => ({
   current: 'feature',
@@ -130,5 +130,23 @@ describe('summarizeProjectDirty', () => {
 
   test('is zero for no records', () => {
     expect(summarizeProjectDirty([])).toEqual({ dirtyWorktrees: 0, unknownWorktrees: 0 });
+  });
+});
+
+describe('formatAutoFetchNote', () => {
+  const time = (at: number) => `t${at}`;
+
+  test('is empty while Auto fetch has not run', () => {
+    expect(formatAutoFetchNote(undefined, time)).toBe('');
+    expect(formatAutoFetchNote({ lastFetchedAt: null, lastError: null, lastAttemptAt: 1 }, time)).toBe('');
+  });
+
+  test('shows the last fetch time after a success', () => {
+    expect(formatAutoFetchNote({ lastFetchedAt: 7, lastError: null, lastAttemptAt: 7 }, time)).toBe(' · Last fetch t7');
+  });
+
+  test('shows the failure, even when an earlier fetch succeeded', () => {
+    expect(formatAutoFetchNote({ lastFetchedAt: 7, lastError: 'credentials required', lastAttemptAt: 9 }, time))
+      .toBe(' · Auto fetch failed: credentials required');
   });
 });

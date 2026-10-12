@@ -203,6 +203,8 @@ describe('Pi UI settings store', () => {
       draftStartersVisible: false,
       expandToolCallsByDefault: true,
       gitChangesViewMode: 'tree',
+      gitAutoFetchEnabled: true,
+      gitAutoFetchIntervalMinutes: 30,
       autoCreateWorktree: true,
       ...retiredPortable,
       ...retiredLocal,
@@ -222,6 +224,8 @@ describe('Pi UI settings store', () => {
     expect(readBack.draftStartersVisible).toBe(false);
     expect(readBack.expandToolCallsByDefault).toBe(true);
     expect(readBack.gitChangesViewMode).toBe('tree');
+    expect(readBack.gitAutoFetchEnabled).toBe(true);
+    expect(readBack.gitAutoFetchIntervalMinutes).toBe(30);
     expect(readBack.autoCreateWorktree).toBe(true);
     // Retired keys never reach either backing file.
     const portable = await readJson(file);

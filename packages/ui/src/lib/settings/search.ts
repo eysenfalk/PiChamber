@@ -397,6 +397,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['ignored', 'files', 'gitignore'],
   },
   {
+    id: 'git.auto-fetch',
+    page: 'git',
+    title: "Auto fetch",
+    description: "Fetches the remotes of the repositories in the sidebar in the background.",
+    keywords: ['fetch', 'remote', 'ahead', 'behind', 'sync', 'background', 'pull'],
+  },
+  {
+    id: 'git.auto-fetch-interval',
+    page: 'git',
+    title: "Auto fetch interval",
+    description: "5, 15, 30 or 60 minutes between fetches.",
+    keywords: ['fetch', 'interval', 'minutes', 'hour', 'frequency'],
+  },
+  {
     id: 'projects.name',
     page: 'projects',
     title: "Name",
