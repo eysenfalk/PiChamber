@@ -40,21 +40,26 @@ Look at what the running workers do. Builds and full test runs of several worker
 
 The owner set these roles (as of October 2026). They are the defaults in the PiChamber settings; `orchestration_capabilities` returns the assignment in force, and the owner changes it in the settings. Spawn with what the tool returns, not with this table from memory. Never substitute a model when an assignment is unavailable: report it to the owner. An explicit owner choice for one task wins over the role.
 
-| Role | Model | Thinking | Use it for |
+| Role | Model | Thinking | When |
 |---|---|---|---|
 | `orchestrate` | `claude-opus-5-5` | `high` | an orchestrator session itself, including spawning another orchestrator |
 | `plan` | `claude-opus-5-5` | `high` | architecture, spec, the plan in a draft pull request |
 | `oracle` | `gpt-6.1-sol` | `high` | a second opinion or advice before a decision; changes no code |
 | `debug` | `claude-opus-5-5` | `xhigh` | a bug that resists, with an unclear cause or a long investigation |
-| `implement` | `claude-opus-5-5` | `high` | multi step implementation in a worktree, large refactorings |
-| `task` | `claude-sonnet-5-5` | `high` | clearly scoped everyday work: bug fix with a known cause, small feature, docs, catching up tests |
+| `implement-easy` | `claude-sonnet-5-5` | `medium` | clearly specified, one to three files, an existing pattern, no contract changes |
+| `implement-medium` | `claude-sonnet-5-5` | `high` | a clear goal, several files in one package, new tests, small design decisions |
+| `implement-hard` | `claude-opus-5-5` | `high` | across packages, a contract change, sync, runtime or security, failure paths to think through |
+| `implement-extreme` | `claude-opus-5-5` | `xhigh` | hours long: large refactorings, several slices, state machines, concurrency |
+| `task` | `claude-sonnet-5-5` | `high` | work without code: docs, issues, pull request texts |
 | `research` | `claude-sonnet-5-5` | `medium` | codebase or web research, comparison, summary with sources; changes nothing |
 | `small` | `claude-haiku-5-5` | `medium` | short and mechanical: searching, renaming, summarizing, classifying |
 | `review` | `gpt-6.1-sol` | `high` | checking finished work, in a fresh session every round |
 
+Implementation work always gets a level. Pick it from the When column by the highest criterion the work meets: one contract change makes it `implement-hard` even in two files. Name the level and the reason in the brief.
+
 `oracle` and `review` stay `gpt-6.1-sol` at `high` whichever model did the work; if the settings say otherwise, tell the owner. Use `oracle` before a decision, `review` after the work is done.
 
-When work turns out harder than briefed, escalate one role up instead of letting the worker guess on: `small` to `task`, `task` to `implement`, a stuck bug to `debug`. Hand it to a new spawn in that role and tell the owner. The brief asks the worker to report `QUESTION` in that case.
+When work turns out harder than briefed, escalate instead of letting the worker guess on: implementation goes one level up (easy, medium, hard, extreme), a stuck bug goes to `debug`, and `small` work that grows moves to the role that fits it now. Hand it to a new spawn in that role and tell the owner. The brief asks the worker to report `QUESTION` in that case.
 
 Background for the thinking levels: Anthropic's effort guidance (https://platform.claude.com/docs/en/build-with-claude/effort). The values are the owner's. Revisit the table with the owner when new models arrive or the enabled models change.
 
