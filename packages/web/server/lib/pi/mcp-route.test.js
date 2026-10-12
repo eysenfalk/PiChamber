@@ -17,11 +17,18 @@ const close = (server) => new Promise((resolve) => (server ? server.close(() => 
 
 const createRuntime = () => {
   const calls = [];
+  // Sessions the daemon no longer has, e.g. removed by its idle cleanup.
+  const gone = new Set(['never-existed']);
   return {
     calls,
+    gone,
     request: async (command, payload) => {
       calls.push({ command, payload });
       if (command === 'sessions.delete') return { deleted: true };
+      if (gone.has(payload.sessionId) && command.startsWith('orchestration.')) {
+        return { error: { code: 'ORCHESTRATION_CALLER_GONE', message: 'The calling session no longer exists.' } };
+      }
+      if (command === 'orchestration.caller') return { value: { sessionId: payload.sessionId } };
       if (command !== 'orchestration.call') throw Object.assign(new Error('unexpected'), { code: 'UNSUPPORTED' });
       if (payload.tool === 'session_stop') {
         return { error: { code: 'ORCHESTRATION_NOT_DESCENDANT', message: 'Not your worker.' } };
@@ -123,6 +130,25 @@ describe('orchestration MCP route', () => {
     expect((await fetch(`${base}/api/pi/sessions/deleted-session`, { method: 'DELETE' })).status).toBe(204);
     expect((await rpc(deleted.token, ping)).status).toBe(401);
     expect((await rpc(kept.token, ping)).status).toBe(200);
+  });
+
+  it('mints only for existing sessions and ends a credential whose session the daemon deleted on its own', async () => {
+    const { mint, rpc, runtime, base } = await start();
+    const unknown = await fetch(`${base}/api/pi/sessions/never-existed/orchestration-credential`, { method: 'POST' });
+    expect(unknown.status).toBe(404);
+
+    const removed = await mint('ephemeral');
+    const kept = await mint('kept-session');
+    // Idle cleanup inside the daemon: no HTTP DELETE reaches this server.
+    runtime.gone.add('ephemeral');
+    const call = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'session_read', arguments: { sessionId: 'kept-session' } } };
+    const refused = await (await rpc(removed.token, call)).json();
+    expect(refused.result.isError).toBe(true);
+    expect(JSON.parse(refused.result.content[0].text)).toMatchObject({ code: 'ORCHESTRATION_CALLER_GONE' });
+    expect((await rpc(removed.token, { jsonrpc: '2.0', id: 2, method: 'ping' })).status).toBe(401);
+
+    const allowed = await (await rpc(kept.token, call)).json();
+    expect(allowed.result.isError).toBeUndefined();
   });
 
   it('lets only POSTs to the MCP path with an orchestration bearer past the API gate', () => {

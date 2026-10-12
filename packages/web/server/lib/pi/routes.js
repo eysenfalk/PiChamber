@@ -1729,13 +1729,24 @@ export const registerPiRuntimeRoutes = (app, {
   // Mints an MCP credential that acts as this one session (Adapter B). Only an
   // authenticated client reaches here: the /api gate lets orchestration
   // credentials through to `/api/pi/mcp` alone. The raw token is returned once.
-  app.post('/api/pi/sessions/:sessionId/orchestration-credential', (req, res) => {
+  app.post('/api/pi/sessions/:sessionId/orchestration-credential', async (req, res) => {
     const sessionId = sessionIdFrom(req);
     if (!sessionId) {
       res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
       return;
     }
     res.setHeader('Cache-Control', 'no-store');
+    // A credential acts as one existing session; never mint for an unknown id.
+    try {
+      const verified = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.caller', { sessionId });
+      if (verified?.error) {
+        res.status(verified.error.code === 'ORCHESTRATION_CALLER_GONE' ? 404 : 503).json({ error: { code: verified.error.code } });
+        return;
+      }
+    } catch (error) {
+      writeDaemonError(res, error);
+      return;
+    }
     const { token, expiresAt, idleTimeoutMs } = orchestrationCredentialStore.mint(sessionId);
     res.status(201).json({ token, sessionId, expiresAt, idleTimeoutMs, url: '/api/pi/mcp', server: 'pichamber' });
   });

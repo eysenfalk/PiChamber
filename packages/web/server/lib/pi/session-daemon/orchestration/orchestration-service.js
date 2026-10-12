@@ -1,5 +1,6 @@
-import { isAbsolute } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
+import { schemaViolation } from './contract-validator.js';
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
 
 // Daemon-owned orchestration: tool semantics, permissions, limits, lineage,
@@ -15,12 +16,22 @@ import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.
 export const LINEAGE_ENTRY = 'pichamber.orchestration.lineage';
 export const CHILD_ENTRY = 'pichamber.orchestration.child';
 const STOPPED_ENTRY = 'pichamber.orchestration.stopped';
+const TASK_REJECTED = 'task_rejected';
 export const RESULT_MESSAGE = 'pichamber.orchestration.result';
 
 const RESULT_TEXT_LIMIT = 16 * 1024;
 const READ_TEXT_LIMIT = 8 * 1024;
 const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 3_600_000;
+// Result delivery retries a parent that cannot be reached: 1s, 2s, 4s, then
+// the failure is reported instead of dropped silently.
+const DELIVERY_ATTEMPTS = 4;
+const DELIVERY_RETRY_MS = 1_000;
+// Codes with which the daemon reports a session that no longer exists.
+const GONE_CODES = new Set(['INVALID_SESSION', 'SESSION_NOT_FOUND']);
+const isGone = (error) => GONE_CODES.has(error?.code);
+// The session a call acts as was deleted; adapters revoke its credentials.
+export const CALLER_GONE = 'ORCHESTRATION_CALLER_GONE';
 
 export class OrchestrationError extends Error {
   constructor(code, message, details) {
@@ -38,13 +49,21 @@ const customEntries = (runtime, customType) => {
 
 const lineageOf = (runtime) => customEntries(runtime, LINEAGE_ENTRY).at(-1)?.data;
 
-/** Worker records of a parent, in spawn order, with their stopped flag. */
+/**
+ * Worker records of a parent, in spawn order, with their stopped flag. A
+ * worker whose first task Pi rejected is stopped and `rejected`: it holds no
+ * slot and a spawn retry with the same key starts a new worker.
+ */
 export const childRecordsOf = (runtime) => {
-  const stopped = new Set(customEntries(runtime, STOPPED_ENTRY).map((entry) => entry.data?.sessionId));
+  const stopped = new Map(customEntries(runtime, STOPPED_ENTRY).map((entry) => [entry.data?.sessionId, entry.data]));
   return customEntries(runtime, CHILD_ENTRY)
     .map((entry) => entry.data)
     .filter((data) => data && typeof data.sessionId === 'string')
-    .map((data) => ({ ...data, stopped: stopped.has(data.sessionId) }));
+    .map((data) => ({
+      ...data,
+      stopped: stopped.has(data.sessionId),
+      ...(stopped.get(data.sessionId)?.reason === TASK_REJECTED ? { rejected: true } : {}),
+    }));
 };
 
 const truncate = (text, limit) => {
@@ -97,6 +116,9 @@ export function createOrchestrationService(deps) {
     hostStatus,
     resolveBranch = async () => undefined,
     getSessionActivity = () => ({}),
+    canonicalDirectory = async (directory) => resolve(directory),
+    onDeliveryFailed = () => {},
+    delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
     now = () => Date.now(),
   } = deps;
 
@@ -106,6 +128,12 @@ export function createOrchestrationService(deps) {
   const pendingRuns = new Set();
   const waiters = new Set();
   const inflightSpawns = new Map();
+  // Admission reservations of spawns between their checks and their first
+  // accepted task: worker slots per parent and canonical directories.
+  const reservedSlots = new Map();
+  const reservedDirectories = new Set();
+  // Workers whose stop is aborting them; their settle is not reported back.
+  const stopping = new Set();
 
   const stateOf = (sessionId) => {
     const state = getSessionState(sessionId);
@@ -122,7 +150,15 @@ export function createOrchestrationService(deps) {
   };
 
   const callerRuntime = async (callerSessionId) => {
-    const runtime = getLiveRuntime(callerSessionId) ?? await activateSession(callerSessionId);
+    let runtime = getLiveRuntime(callerSessionId);
+    if (!runtime) {
+      try {
+        runtime = await activateSession(callerSessionId);
+      } catch (error) {
+        if (isGone(error)) throw new OrchestrationError(CALLER_GONE, 'The calling session no longer exists.');
+        throw error;
+      }
+    }
     if (!runtime) throw new OrchestrationError('SESSION_NOT_FOUND', 'The calling session is not available.');
     return runtime;
   };
@@ -212,10 +248,18 @@ export function createOrchestrationService(deps) {
     };
   };
 
+  // A run counts as pending from the send until its settle. A deduplicated
+  // receipt starts no run, so it only keeps a pending flag an earlier send set.
   const startTask = async (sessionId, text, delivery, operationId) => {
+    const wasPending = pendingRuns.has(sessionId);
     pendingRuns.add(sessionId);
     try {
-      return await sendInput({ sessionId, text, delivery, operationId });
+      const receipt = await sendInput({ sessionId, text, delivery, operationId });
+      if (receipt?.deduplicated && !wasPending) {
+        pendingRuns.delete(sessionId);
+        notifyWaiters();
+      }
+      return receipt;
     } catch (error) {
       pendingRuns.delete(sessionId);
       notifyWaiters();
@@ -223,52 +267,79 @@ export function createOrchestrationService(deps) {
     }
   };
 
+  const releaseAdmission = (callerSessionId, cwd) => {
+    const slots = (reservedSlots.get(callerSessionId) ?? 1) - 1;
+    if (slots > 0) reservedSlots.set(callerSessionId, slots);
+    else reservedSlots.delete(callerSessionId);
+    reservedDirectories.delete(cwd);
+  };
+
   const spawnOnce = async (callerSessionId, runtime, args) => {
     if (typeof args.cwd !== 'string' || !isAbsolute(args.cwd)) {
       throw new OrchestrationError('INVALID_ARGUMENT', 'cwd must be an absolute directory.');
     }
     const settings = await readSettings();
+    const cwd = await canonicalDirectory(args.cwd);
+    // Admission is synchronous from here to the reservation: no await may sit
+    // between the checks and the reservation, or two concurrent spawns pass
+    // the same free slot or directory.
     const workers = activeWorkers(runtime);
-    if (workers.length >= settings.workerLimit) {
+    if (workers.length + (reservedSlots.get(callerSessionId) ?? 0) >= settings.workerLimit) {
       throw new OrchestrationError('ORCHESTRATION_LIMIT', `All ${settings.workerLimit} worker slots are in use; stop a finished worker first.`, {
         workerLimit: settings.workerLimit,
         workers: await Promise.all(workers.map(describeWorker)),
       });
     }
-    const busyHere = managedRuntimes().find((candidate) => candidate.cwd === args.cwd
-      && !isSettled(candidate.session.sessionId));
-    if (busyHere) {
+    const busyId = reservedDirectories.has(cwd)
+      ? undefined
+      : managedRuntimes().find((candidate) => resolve(candidate.cwd) === cwd
+        && !isSettled(candidate.session.sessionId))?.session.sessionId;
+    if (reservedDirectories.has(cwd) || busyId) {
       throw new OrchestrationError('ORCHESTRATION_CWD_BUSY', 'A managed worker is busy in this directory; use another worktree.', {
-        sessionId: busyHere.session.sessionId,
+        ...(busyId ? { sessionId: busyId } : {}),
       });
     }
-    const { model, thinking } = await resolveModel(args, settings);
-    const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
-    const lineage = {
-      parentSessionId: callerSessionId,
-      parentDirectory: runtime.cwd,
-      ...(args.role ? { role: args.role } : {}),
-    };
-    const created = await createWorkerSession({
-      cwd: args.cwd,
-      title,
-      ...(model ? { model } : {}),
-      ...(thinking ? { thinking } : {}),
-      parentSessionPath: runtime.session.sessionFile,
-      lineage,
-    });
-    const record = {
-      sessionId: created.sessionId,
-      cwd: created.cwd,
-      title,
-      ...(args.role ? { role: args.role } : {}),
-      ...(model ? { model } : {}),
-      ...(args.clientRequestId ? { clientRequestId: args.clientRequestId } : {}),
-      createdAt: now(),
-    };
-    runtime.session.sessionManager.appendCustomEntry(CHILD_ENTRY, record);
-    await startTask(created.sessionId, args.task, 'prompt', args.clientRequestId ? `${args.clientRequestId}.task` : undefined);
-    return record;
+    reservedSlots.set(callerSessionId, (reservedSlots.get(callerSessionId) ?? 0) + 1);
+    reservedDirectories.add(cwd);
+    try {
+      const { model, thinking } = await resolveModel(args, settings);
+      const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
+      const lineage = {
+        parentSessionId: callerSessionId,
+        parentDirectory: runtime.cwd,
+        ...(args.role ? { role: args.role } : {}),
+      };
+      const created = await createWorkerSession({
+        cwd,
+        title,
+        ...(model ? { model } : {}),
+        ...(thinking ? { thinking } : {}),
+        parentSessionPath: runtime.session.sessionFile,
+        lineage,
+      });
+      const record = {
+        sessionId: created.sessionId,
+        cwd: created.cwd,
+        title,
+        ...(args.role ? { role: args.role } : {}),
+        ...(model ? { model } : {}),
+        ...(args.clientRequestId ? { clientRequestId: args.clientRequestId } : {}),
+        createdAt: now(),
+      };
+      runtime.session.sessionManager.appendCustomEntry(CHILD_ENTRY, record);
+      try {
+        await startTask(created.sessionId, args.task, 'prompt', args.clientRequestId ? `${args.clientRequestId}.task` : undefined);
+      } catch (error) {
+        // Pi persisted nothing for the rejected first prompt, so the idle
+        // ephemeral cleanup removes the worker session. The record frees its
+        // slot and a retry with the same key starts a new worker.
+        runtime.session.sessionManager.appendCustomEntry(STOPPED_ENTRY, { sessionId: created.sessionId, stoppedAt: now(), reason: TASK_REJECTED });
+        throw error;
+      }
+      return record;
+    } finally {
+      releaseAdmission(callerSessionId, cwd);
+    }
   };
 
   const spawn = async (callerSessionId, args, options) => {
@@ -277,7 +348,7 @@ export function createOrchestrationService(deps) {
     let record;
     let deduplicated = false;
     if (args.clientRequestId) {
-      const existing = childRecordsOf(runtime).find((candidate) => candidate.clientRequestId === args.clientRequestId);
+      const existing = childRecordsOf(runtime).find((candidate) => candidate.clientRequestId === args.clientRequestId && !candidate.rejected);
       const key = `${callerSessionId}\u0000${args.clientRequestId}`;
       if (existing) {
         record = existing;
@@ -418,20 +489,40 @@ export function createOrchestrationService(deps) {
     return { sessionId: args.sessionId, interrupted: true };
   };
 
-  const stopTree = async (parentRuntime, sessionId, stopped) => {
-    if (stopped.includes(sessionId)) return;
-    stopped.push(sessionId);
-    pendingRuns.delete(sessionId);
-    // Mark first: an abort settles the run, and a stopped worker must not
-    // report that settle back to its parent.
-    parentRuntime.session.sessionManager.appendCustomEntry(STOPPED_ENTRY, { sessionId, stoppedAt: now() });
-    const child = getLiveRuntime(sessionId);
-    if (child) {
-      for (const grandchild of childRecordsOf(child).filter((record) => !record.stopped)) {
-        await stopTree(child, grandchild.sessionId, stopped);
+  // Stops the worker and its own workers, deepest first. A worker counts as
+  // stopped only after its abort succeeded or it no longer exists; until then
+  // `stopping` holds back the result the abort settles. A failed abort keeps
+  // the worker's slot, and its ancestors stay running so a retry can finish.
+  const stopTree = async (parentRuntime, sessionId, result) => {
+    if (result.stopped.includes(sessionId)) return true;
+    stopping.add(sessionId);
+    try {
+      const child = getLiveRuntime(sessionId);
+      let descendantsStopped = true;
+      if (child) {
+        for (const grandchild of childRecordsOf(child).filter((record) => !record.stopped)) {
+          if (!await stopTree(child, grandchild.sessionId, result)) descendantsStopped = false;
+        }
       }
+      if (!descendantsStopped) {
+        result.failed.push({ sessionId, code: 'ORCHESTRATION_DESCENDANT_STOP_FAILED' });
+        return false;
+      }
+      try {
+        await abortSession(sessionId);
+      } catch (error) {
+        if (!isGone(error)) {
+          result.failed.push({ sessionId, code: typeof error?.code === 'string' ? error.code : 'ABORT_FAILED' });
+          return false;
+        }
+      }
+      pendingRuns.delete(sessionId);
+      parentRuntime.session.sessionManager.appendCustomEntry(STOPPED_ENTRY, { sessionId, stoppedAt: now() });
+      result.stopped.push(sessionId);
+      return true;
+    } finally {
+      stopping.delete(sessionId);
     }
-    await abortSession(sessionId).catch(() => {});
   };
 
   const stop = async (callerSessionId, args) => {
@@ -442,10 +533,16 @@ export function createOrchestrationService(deps) {
       throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', 'Only your own workers can be stopped.');
     }
     if (record.stopped) return { sessionId: args.sessionId, stopped: [], alreadyStopped: true };
-    const stopped = [];
-    await stopTree(runtime, args.sessionId, stopped);
+    const result = { stopped: [], failed: [] };
+    await stopTree(runtime, args.sessionId, result);
     notifyWaiters();
-    return { sessionId: args.sessionId, stopped };
+    if (result.failed.length > 0) {
+      throw new OrchestrationError('ORCHESTRATION_STOP_FAILED', 'Some workers could not be aborted and keep running; retry session_stop.', {
+        sessionId: args.sessionId,
+        ...result,
+      });
+    }
+    return { sessionId: args.sessionId, stopped: result.stopped };
   };
 
   const handlers = {
@@ -460,33 +557,46 @@ export function createOrchestrationService(deps) {
   };
 
   /**
-   * Execute one tool as `callerSessionId`. Arguments are validated by the
-   * adapter against the shared JSON Schema contracts.
+   * Execute one tool as `callerSessionId`. The arguments are validated here
+   * against the shared contracts, so both adapters get the same bounds, and
+   * the caller must still exist for every tool: a credential of a deleted
+   * session cannot act on other sessions.
    */
   const call = async (callerSessionId, toolName, args = {}, options = {}) => {
-    if (!toolByName.has(toolName)) {
+    const tool = toolByName.get(toolName);
+    if (!tool) {
       throw new OrchestrationError('UNKNOWN_TOOL', `Unknown orchestration tool: ${toolName}`);
     }
     if (typeof callerSessionId !== 'string' || callerSessionId.length === 0) {
       throw new OrchestrationError('SESSION_NOT_FOUND', 'The calling session is unknown.');
     }
-    return handlers[toolName](callerSessionId, args ?? {}, options);
+    const input = args ?? {};
+    const violation = schemaViolation(tool.parameters, input);
+    if (violation) throw new OrchestrationError('INVALID_ARGUMENT', violation);
+    await callerRuntime(callerSessionId);
+    return handlers[toolName](callerSessionId, input, options);
+  };
+
+  /** Confirms that a session exists before a credential is issued for it. */
+  const verifyCaller = async (callerSessionId) => {
+    await callerRuntime(callerSessionId);
+    return { sessionId: callerSessionId };
   };
 
   /**
-   * Called by the daemon for every agent_settled. Resolves waits and delivers
-   * a worker's result to its parent as a custom message that starts a parent
-   * turn, or queues as follow-up while the parent is busy.
+   * Called by the daemon when a send finished without an agent turn (a
+   * handled extension command), so no agent_settled follows.
    */
-  const onSessionSettled = async (sessionId, runtime) => {
-    pendingRuns.delete(sessionId);
+  const onInputCompleted = (sessionId) => {
+    if (!pendingRuns.delete(sessionId)) return;
     notifyWaiters();
-    const lineage = lineageOf(runtime);
-    if (!lineage?.parentSessionId) return;
+  };
+
+  const deliverResult = async (sessionId, runtime, lineage) => {
     const parent = getLiveRuntime(lineage.parentSessionId)
       ?? await activateSession(lineage.parentSessionId, lineage.parentDirectory);
     const record = childRecordsOf(parent).find((candidate) => candidate.sessionId === sessionId);
-    if (!record || record.stopped) return;
+    if (!record || record.stopped || stopping.has(sessionId)) return;
     const assistant = lastAssistant(runtime);
     const outcome = outcomeOf(assistant);
     const reply = truncate(textOf(assistant?.content), RESULT_TEXT_LIMIT);
@@ -500,9 +610,39 @@ export function createOrchestrationService(deps) {
     }, { triggerTurn: true, deliverAs: 'followUp' });
   };
 
+  /**
+   * Called by the daemon for every agent_settled. Resolves waits and delivers
+   * a worker's result to its parent as a custom message that starts a parent
+   * turn, or queues as follow-up while the parent is busy. A parent that
+   * cannot be reached is retried with backoff; a deleted parent drops the
+   * result, and a final failure is reported through `onDeliveryFailed`.
+   */
+  const onSessionSettled = async (sessionId, runtime) => {
+    pendingRuns.delete(sessionId);
+    notifyWaiters();
+    if (stopping.has(sessionId)) return;
+    const lineage = lineageOf(runtime);
+    if (!lineage?.parentSessionId) return;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await deliverResult(sessionId, runtime, lineage);
+        return;
+      } catch (error) {
+        if (isGone(error)) return;
+        if (attempt >= DELIVERY_ATTEMPTS) {
+          onDeliveryFailed({ sessionId, parentSessionId: lineage.parentSessionId, parentDirectory: lineage.parentDirectory, error });
+          return;
+        }
+        await delay(DELIVERY_RETRY_MS * 2 ** (attempt - 1));
+      }
+    }
+  };
+
   return {
     call,
     onSessionSettled,
+    onInputCompleted,
+    verifyCaller,
     isWorker: (sessionManager) => Boolean(lineageOf({ session: { sessionManager } })),
     toolNames: ORCHESTRATION_TOOL_NAMES,
   };

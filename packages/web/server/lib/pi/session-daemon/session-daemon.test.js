@@ -1216,6 +1216,52 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('lists the parent of a worker whose parent lives in another directory or is unpersisted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-foreign-parent-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(worktree);
+    const endpoint = testDaemonEndpoint(root);
+    // The orchestrator is live in `root` and has not written its file yet.
+    const liveParentFile = join(root, 'sessions', 'not-yet-written.jsonl');
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      createRuntime: async () => {
+        const runtime = new FakeRuntime({ cwd: root, session: new FakeSession('pi-session-live-parent', liveParentFile) });
+        runtime.newSession = async () => ({ cancelled: false });
+        return runtime;
+      },
+      listSessions: async ({ cwd }) => cwd !== worktree ? [] : [
+        {
+          path: join(worktree, 'a.jsonl'), id: 'worker-of-persisted', cwd: worktree,
+          parentSessionPath: join(root, 'sessions', '2026-01-01T00-00-00-000Z_pi-session-orchestrator.jsonl'),
+          created: new Date('2026-01-01T00:00:00.000Z'), modified: new Date('2026-01-01T00:00:01.000Z'),
+        },
+        {
+          path: join(worktree, 'b.jsonl'), id: 'worker-of-live', cwd: worktree, parentSessionPath: liveParentFile,
+          created: new Date('2026-01-01T00:00:00.000Z'), modified: new Date('2026-01-01T00:00:01.000Z'),
+        },
+        {
+          path: join(worktree, 'c.jsonl'), id: 'worker-of-unknown', cwd: worktree, parentSessionPath: join(root, 'renamed.jsonl'),
+          created: new Date('2026-01-01T00:00:00.000Z'), modified: new Date('2026-01-01T00:00:01.000Z'),
+        },
+      ],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+    await client.request('sessions.create', { cwd: root });
+
+    // Each worker sits in its own worktree, so its parent is not in this listing.
+    const listed = await client.request('sessions.list', { directory: worktree });
+    const parentOf = (id) => listed.result.sessions.find((item) => item.session.id === id)?.session.parentId;
+    expect(parentOf('worker-of-persisted')).toBe('pi-session-orchestrator');
+    expect(parentOf('worker-of-live')).toBe('pi-session-live-parent');
+    expect(parentOf('worker-of-unknown')).toBeUndefined();
+    await client.close();
+  });
+
   it('handles every session command with path-selected identities and preserves busy-session configuration on rejection', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
     const endpoint = testDaemonEndpoint(root);

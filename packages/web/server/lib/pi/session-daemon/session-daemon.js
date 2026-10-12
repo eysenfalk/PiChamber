@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { chmod, link, mkdir, lstat, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, lstat, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createReadStream, existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -1262,8 +1262,22 @@ export function createSessionDaemon({
       }
     }
 
+    // A parent can live in another directory (a worker in its own worktree)
+    // or be unpersisted itself, so the local listing alone does not resolve
+    // it. A live runtime owns its file path; otherwise Pi names every session
+    // file `<timestamp>_<sessionId>.jsonl`.
+    const parentIdOf = (parentPath) => {
+      if (typeof parentPath !== 'string' || parentPath.length === 0) return undefined;
+      const listed = idByPath.get(parentPath);
+      if (listed) return listed;
+      const live = (runtimeRegistry?.listAll?.() ?? (runtime ? [runtime] : []))
+        .find((entry) => entry?.session?.sessionManager?.getSessionFile?.() === parentPath)?.session?.sessionId;
+      if (typeof live === 'string' && live.length > 0) return live;
+      return /^[^_]+_([^/\\]+)\.jsonl$/.exec(basename(parentPath))?.[1];
+    };
     const allSessions = [...extra, ...uncorrupted];
     return allSessions.map((session) => {
+      const parentId = parentIdOf(session.parentSessionPath);
       const createdAt = session?.created instanceof Date ? session.created.getTime() : (typeof session?.createdAt === 'number' ? session.createdAt : NaN);
       const updatedAt = session?.modified instanceof Date ? session.modified.getTime() : (typeof session?.updatedAt === 'number' ? session.updatedAt : NaN);
       if (typeof session?.id !== 'string' || session.id.length === 0 || !Number.isFinite(createdAt) || !Number.isFinite(updatedAt)) {
@@ -1278,9 +1292,7 @@ export function createSessionDaemon({
           id: session.id,
           directory: targetDir,
           ...(title ? { title } : {}),
-          ...(typeof session.parentSessionPath === 'string' && idByPath.get(session.parentSessionPath)
-            ? { parentId: idByPath.get(session.parentSessionPath) }
-            : {}),
+          ...(parentId ? { parentId } : {}),
           createdAt,
           updatedAt,
           ...(Number.isSafeInteger(session.messageCount) && session.messageCount >= 0 ? { messageCount: session.messageCount } : {}),
@@ -3359,6 +3371,7 @@ export function createSessionDaemon({
       // emits no agent_settled event. Close the optimistic browser lifecycle
       // when the command promise itself is the authoritative completion edge.
       publish('session.lifecycle', { state: 'idle', serverNow: Date.now() }, payload.sessionId, activeRuntime.cwd);
+      orchestration.onInputCompleted(payload.sessionId);
       completeRequestedShutdown(payload.sessionId);
     }).catch((error) => {
       removeUserStart(payload.sessionId, generation);
@@ -3863,6 +3876,13 @@ export function createSessionDaemon({
     }))),
     hostStatus: readHostStatus,
     resolveBranch: readGitBranch,
+    // Symlinks and `.` segments must not let two workers share a worktree.
+    // A missing directory keeps its lexical form; worker creation rejects it.
+    canonicalDirectory: (directory) => realpath(directory).catch(() => resolve(directory)),
+    onDeliveryFailed: ({ sessionId, parentSessionId, parentDirectory, error }) => {
+      const message = `The result of worker ${sessionId} could not be delivered: ${redactAttachmentPaths(error?.message ?? String(error))}`;
+      publish('session.error', { code: 'ORCHESTRATION_RESULT_UNDELIVERED', message }, parentSessionId, parentDirectory);
+    },
   });
   const orchestrationExtension = createOrchestrationExtension(orchestration);
 
@@ -4240,6 +4260,15 @@ export function createSessionDaemon({
       }
       case 'orchestration.call': {
         const result = await callOrchestration(message.payload);
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.caller': {
+        if (typeof message.payload?.sessionId !== 'string' || message.payload.sessionId.length === 0) {
+          throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'A session id is required.');
+        }
+        const result = await orchestration.verifyCaller(message.payload.sessionId)
+          .then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
         return;
       }

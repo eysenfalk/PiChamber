@@ -20,7 +20,9 @@ revoked or globally invalidated.
 - `orchestration-credentials.js`: session-scoped bearer credentials for the
   orchestration MCP endpoint `POST /api/pi/mcp` (`pcorch_…`). In memory only,
   SHA-256 hashed, eight hour lifetime, 30 minute idle expiry, at most 256
-  (oldest gives way), revoked when the session is deleted and on server
+  (oldest gives way), minted only for a session the daemon confirms, revoked
+  when the session is deleted (also on the first call after the daemon
+  removed it on its own) and on server
   restart. The raw token is returned once by the mint route and never logged.
   The global `/api` gate lets such a bearer reach that one path (POST, outside
   the tunnel scope); the route verifies it. See [ADR 0010](../../../../../docs/adr/0010-orchestration-through-daemon-tools.md).

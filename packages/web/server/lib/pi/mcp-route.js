@@ -10,6 +10,7 @@
  */
 
 import { ORCHESTRATION_MCP_SERVER, ORCHESTRATION_TOOLS } from './session-daemon/orchestration/tool-contracts.js';
+import { CALLER_GONE } from './session-daemon/orchestration/orchestration-service.js';
 import { ORCHESTRATION_MCP_PATH, bearerTokenFrom } from '../client-auth/orchestration-credentials.js';
 
 const MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -40,7 +41,13 @@ export const registerOrchestrationMcpRoute = (app, { getDaemonRuntime, credentia
     }
     try {
       const response = await getDaemonRuntime().request('orchestration.call', { sessionId, tool: name, args });
-      if (response?.error) return textResult(response.error, true);
+      if (response?.error) {
+        // The daemon checks the bound session on every call, so a deletion
+        // this server never saw (idle cleanup, a missed event) still ends
+        // the credential on its next use.
+        if (response.error.code === CALLER_GONE) credentialStore.revokeSession(sessionId);
+        return textResult(response.error, true);
+      }
       return textResult(response?.value ?? null);
     } catch (error) {
       const code = typeof error?.code === 'string' ? error.code : 'DAEMON_REQUEST_FAILED';
