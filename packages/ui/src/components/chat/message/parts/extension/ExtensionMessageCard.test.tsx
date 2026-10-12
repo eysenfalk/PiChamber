@@ -215,7 +215,7 @@ describe('ExtensionMessageCard orchestration results', () => {
         title: 'Fix the parser',
         cwd: '/work/repo',
         outcome: 'completed',
-        role: 'implement',
+        role: 'implement-medium',
         ...overrides,
     });
     const resultText = 'Worker "Fix the parser" (worker-1) finished.\n\nParser fixed.\nAll tests pass.';
@@ -226,7 +226,7 @@ describe('ExtensionMessageCard orchestration results', () => {
         expect(markup).toContain('Fix the parser');
         expect(markup).toContain('finished');
         expect(markup).toContain('Parser fixed.');
-        expect(markup).toContain('implement');
+        expect(markup).toContain('implement-medium');
         expect(markup).toContain('aria-label="Open worker Fix the parser"');
         expect(markup).toContain('aria-expanded="false"');
         expect(markup).not.toContain('All tests pass.');

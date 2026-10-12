@@ -74,7 +74,7 @@ const normalizeRetryLimit = (value) => {
   return value;
 };
 
-export const ORCHESTRATION_ROLES = Object.freeze(['orchestrate', 'plan', 'oracle', 'debug', 'implement', 'task', 'research', 'small', 'review']);
+export const ORCHESTRATION_ROLES = Object.freeze(['orchestrate', 'plan', 'oracle', 'debug', 'implement-easy', 'implement-medium', 'implement-hard', 'implement-extreme', 'task', 'research', 'small', 'review']);
 const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
 const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
 
@@ -89,7 +89,10 @@ export const DEFAULT_ORCHESTRATION_SETTINGS = Object.freeze({
     plan: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
     oracle: Object.freeze({ modelId: 'gpt-6.1-sol', thinking: 'high' }),
     debug: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'xhigh' }),
-    implement: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    'implement-easy': Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'medium' }),
+    'implement-medium': Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'high' }),
+    'implement-hard': Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    'implement-extreme': Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'xhigh' }),
     task: Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'high' }),
     research: Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'medium' }),
     small: Object.freeze({ modelId: 'claude-haiku-5-5', thinking: 'medium' }),

@@ -533,7 +533,9 @@ export interface PiSettingsSnapshot {
   orchestration: PiOrchestrationSettings;
 }
 
-export type PiOrchestrationRole = 'orchestrate' | 'plan' | 'oracle' | 'debug' | 'implement' | 'task' | 'research' | 'small' | 'review';
+export type PiOrchestrationRole = 'orchestrate' | 'plan' | 'oracle' | 'debug'
+  | 'implement-easy' | 'implement-medium' | 'implement-hard' | 'implement-extreme'
+  | 'task' | 'research' | 'small' | 'review';
 
 /** A role names a model id; the provider is resolved from the live catalog when it is omitted. */
 export interface PiOrchestrationRoleModel {

@@ -167,7 +167,7 @@ describe('Pi settings sidecar', () => {
     const resolved = resolveOrchestrationSettings(stored);
     expect(resolved.workerLimit).toBe(2);
     expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'medium' });
-    expect(resolved.roles.implement).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
+    expect(resolved.roles['implement-hard']).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
 
     // A role set to null returns to its default; null clears every override.
     await store.update({ orchestration: { roles: { small: null } } });
@@ -175,13 +175,16 @@ describe('Pi settings sidecar', () => {
     await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
   });
 
-  it('defaults the nine roles to the owner\'s models and thinking levels, never off', () => {
+  it('defaults the twelve roles to the owner\'s models and thinking levels, never off', () => {
     expect(DEFAULT_ORCHESTRATION_SETTINGS.roles).toEqual({
       orchestrate: { modelId: 'claude-opus-5-5', thinking: 'high' },
       plan: { modelId: 'claude-opus-5-5', thinking: 'high' },
       oracle: { modelId: 'gpt-6.1-sol', thinking: 'high' },
       debug: { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
-      implement: { modelId: 'claude-opus-5-5', thinking: 'high' },
+      'implement-easy': { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
+      'implement-medium': { modelId: 'claude-sonnet-5-5', thinking: 'high' },
+      'implement-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
+      'implement-extreme': { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
       task: { modelId: 'claude-sonnet-5-5', thinking: 'high' },
       research: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
       small: { modelId: 'claude-haiku-5-5', thinking: 'medium' },
@@ -204,6 +207,7 @@ describe('Pi settings sidecar', () => {
       { workerLimit: 2.5 },
       { roles: { planner: { modelId: 'x' } } },
       { roles: { implementation: { modelId: 'x' } } },
+      { roles: { implement: { modelId: 'x' } } },
       { roles: { small: { modelId: '' } } },
       { roles: { small: { modelId: 'x', thinking: 'loud' } } },
       { roles: [] },
