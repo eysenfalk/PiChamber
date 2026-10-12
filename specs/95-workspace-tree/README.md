@@ -72,7 +72,7 @@ The order follows the owner's choice: the tree first, then the filter he called 
 
 Every implementing pass keeps these. A slice that needs to break one updates this list first.
 
-- **Where a session belongs:** `buildSessionOwnershipIndex` (`sidebar/sessionOwnership.ts`) only. It returns ownerless sessions as `unownedSessions` instead of dropping them.
+- **Where a session belongs:** `createSessionOwnershipIndex` (`sidebar/sessionOwnership.ts`) only. It returns ownerless sessions as `unownedSessions` and home sessions as `globalSessions` instead of dropping them.
 - **Tree shape, order, the five-row cut and rollups:** `sidebar/workspaceTree.ts` only. Renderers never sort or filter.
 - **Running and waiting:** the live status index, never persisted history.
 - **Selected node:** `useSidebarSpaceStore`, as `selectedNodeKey`. It no longer filters sessions; the All sessions state disappears.

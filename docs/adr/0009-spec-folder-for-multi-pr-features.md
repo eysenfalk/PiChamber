@@ -1,8 +1,7 @@
 # 0009. A feature delivered in several pull requests gets a temporary spec folder
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-12
-- Waits for: the owner to confirm the spec folder and its deletion by the last pull request of the feature
 
 ## Context
 

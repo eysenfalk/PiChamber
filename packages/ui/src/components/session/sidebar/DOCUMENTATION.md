@@ -27,7 +27,8 @@
 - `ConfirmDialogs.tsx`: Shared confirm dialog wrappers for session delete, folder delete, and worktree close flows. Worktree close checks Git status before enabling the destructive action, requires explicit acknowledgement for dirty files, preserves the local branch, and refuses active worktrees.
 - `sortableItems.tsx`: DnD sortable wrappers for project and group ordering.
 - `sessionFolderDnd.tsx`: Folder/session DnD scope and wrappers for dropping/moving sessions into folders.
-- `sessionOwnership.ts`: Resolves session directories once into shared project/worktree ownership and folder-scope indexes. Worktree ownership comes from Git discovery, not filesystem containment beneath the project path.
+- `sessionOwnership.ts`: Resolves session directories once into shared project/worktree ownership and folder-scope indexes. Worktree ownership comes from Git discovery, not filesystem containment beneath the project path. Home sessions come back as `globalSessions` and sessions no project owns as `unownedSessions`, so callers can account for every session.
+- `workspaceTree.ts`: Pure model of the upcoming workspace tree (spec `specs/95-workspace-tree/`): Chats, projects with worktrees, folders and forks, Other folders; order, the five-session cut, rollups and default expansion. Every active session lands in exactly one node. Not rendered yet.
 
 ### Hooks
 
