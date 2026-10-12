@@ -224,13 +224,13 @@ signing is not configured.
 To start version `X.Y.Z`:
 
 1. Cut a temporary branch `release/X.Y.Z` from `main`. It lives until the
-   stable release publishes, then delete it. `main` keeps moving meanwhile;
+   stable release publishes, then delete it. `dev` keeps moving meanwhile;
    expect small manual resolution when forward-porting fixes.
-2. Never merge the release branch back into `main`: that would drag `-rc`
+2. Never merge the release branch back into `dev` or `main`: that would drag `-rc`
    versions and RC changelog sections along. Forward-port fixes with
    cherry-picks instead (see Stable release below).
 3. Stabilize with release candidates on that branch, then finish the stable
-   release on `main`.
+   release on `dev` and promote it to `main`.
 
 A tag builds and uploads desktop artifacts and Android artifacts. To publish the
 npm package, dispatch the workflow with `publish_npm=true`. To build Android
@@ -283,16 +283,17 @@ prerelease; iOS TestFlight remains a separate manual workflow.
 
 ### Stable release
 
-1. Forward-port the fix commits from `release/X.Y.Z` to `main` with
-   cherry-picks (not a merge). Resolve drift manually.
-2. On `main`, run `bun run version:bump X.Y.Z` and write the consolidated
+1. Forward-port the fix commits from `release/X.Y.Z` to `dev` with
+   cherry-picks (not a merge), through a pull request. Resolve drift manually.
+2. In a pull request to `dev`, run `bun run version:bump X.Y.Z` and write the consolidated
    `## [X.Y.Z] - YYYY-MM-DD` changelog section covering the release plus
    stabilization fixes. Move applicable notes from `CHANGELOG.md` under
    `[Unreleased]` into that dated heading, exactly named. RC sections stay
-   on the release branch; `main` gets one final section.
+   on the release branch; `dev` gets one final section.
 3. Run `bun run release:prepare`, `bun run docs:validate`, and the focused
    release checks for the platforms being published.
-4. Merge the stable release commit to `main`.
+4. Merge that pull request into `dev`, then fast-forward `main` to the
+   release commit: `git push origin <commit>:main`.
 5. Push `vX.Y.Z` from `main`, or dispatch the **Release** workflow with
    `version=X.Y.Z` from `main`. Delete the temporary `release/X.Y.Z`
    branch after the stable release publishes.
