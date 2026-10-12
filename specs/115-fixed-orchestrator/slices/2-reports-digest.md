@@ -37,7 +37,7 @@ New tool, orchestrator only:
 orchestration_digest { sessionIds?: string[] } → {
   at,
   limit: { workerLimit, used },
-  operations: [{ opId, kind, state, step, error, since }],   // operations in `reserved` or `failed`, e.g. a start that failed before it had a worker
+  operations: [{ opId, kind, state, step, error, since, remains? }],   // `reserved`, `failed`, and `abandoned` ones with `remains: { branch?, worktree?, sessionId? }` (slice 8) until those are removed after a merge
   workers: [{
     sessionId, title, role, issue, branch, worktree, pullRequest,
     lifecycle, lifecycleSince,            // registry state ('starting', 'active', 'done', ...) and since

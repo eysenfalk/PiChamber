@@ -53,6 +53,8 @@ State transitions (the only ones):
 | `starting` | a settle or the restart check finds it positively absent | worker removed, op back to `reserved` at step `session`, slot kept; a retry or restart recreates the session in the same place |
 | `starting` | the check is unknown | stays `starting`, shown in the digest, checked again on the next tick |
 | `active` | the run in which the worker reported `done` settles (slice 2) | `done` |
+| `starting` | the first durable run, in which the worker reported `done`, settles | `done`: the same settle applies the JSONL check and then the `done` rule, so the slot is not held for a second settle that never comes (R3-S1) |
+| `active` (set by the input gate) | the input ends without starting a turn and the worker has no live run | back to the state before the gate, slot released (R3-S1) |
 | `active` | `session_stop`, after its abort settled | `stopped` |
 | `done` | `session_stop` | `stopped` |
 | `done`, `stopped` | any input that starts a run | `active`, in the same `update` as the limit check; otherwise refused with `ORCHESTRATION_LIMIT` |
@@ -60,13 +62,13 @@ State transitions (the only ones):
 
 The limit counts operations in `reserved` plus workers in `starting` and `active`, across the daemon. A `done` report does not free a slot: the run that made it may still call tools; the slot frees when that run settles (B2). An idle `active` worker keeps its slot.
 
-Input gate: the daemon's `runSessionInput` is the one path for UI prompts and `session_send` alike. Before it activates a session, it calls `orchestration.beforeSessionInput(sessionId)`; for a registered worker in `done` or `stopped` that one `update` reserves the slot and moves it to `active`, or refuses. Steer and follow-up into a running worker need no slot.
+Input gate: the daemon's `runSessionInput` is the one path for UI prompts and `session_send` alike. Before it activates a session, it calls `orchestration.beforeSessionInput(sessionId)`; for a registered worker in `done` or `stopped` that one `update` reserves the slot, moves it to `active`, records the previous state and returns a token, or refuses. Steer and follow-up into a running worker need no slot. When `runSessionInput` ends without starting a turn (activation, model choice or SDK preflight refused, or the input was an extension command that ran no turn), it calls `orchestration.afterSessionInput(sessionId, token)`; in one `update` that returns the worker to the recorded state only if the token still holds the slot and the worker has no live run, so a parallel input that did start a run keeps it (R3-S1).
 
 Retry and restart: a call with a `clientRequestId` looks up `requestKeys['<caller>:<clientRequestId>']` and resumes that operation at its first unfinished step. Every step's write checks that the operation still belongs to the caller; after a takeover a late write of the old call fails with `ORCHESTRATION_OWNER_CHANGED` and that call stops. On restart: a `reserved` operation whose `opId` is in some session's lineage adopts that session, otherwise its reservation is released (spawn) or kept for a retry (start, slice 8); `starting` workers are checked as in the table. `inflightSpawns` stays only as an in-process guard against concurrent calls with the same key.
 
 Policy in `orchestration/policy.js`, called by the service for every tool after schema validation and before any side effect: caller kind (worker by lineage, orchestrator otherwise), tool's allowed caller kinds, and ownership of a target `sessionId` in the registry. `session_send` and `session_interrupt` keep #107's broad reach to any session; `session_stop` and every tool added by this epic need ownership.
 
-New tool `orchestration_takeover { fromSessionId, clientRequestId? }`, orchestrator only. Refused with `ORCHESTRATION_TAKEOVER_BUSY` while `fromSessionId` is running, while a step of one of its operations runs in this process, or (slice 3) while a delivery to it runs. Otherwise, in one `update`: import `fromSessionId`'s JSONL child entries if not yet imported, move every worker not `removed` and every open operation to the caller, add `requestKeys` for the caller with the same `clientRequestId` and the same `opId`, bump both owners' generation, and (slice 3) move pending events.
+New tool `orchestration_takeover { fromSessionId, clientRequestId? }`, orchestrator only. Refused with `ORCHESTRATION_TAKEOVER_BUSY` while `fromSessionId` is running, while a step of one of its operations runs in this process, or (slice 3) while a delivery to it runs. Otherwise, in one `update`: import `fromSessionId`'s JSONL child entries if not yet imported, move every worker not `removed` and every open operation to the caller, add `requestKeys` for the caller with the same `clientRequestId` and the same `opId`, bump both owners' generation, and (slice 3) move pending events. Before any change the `update` checks every alias: a caller key that already exists and points to a different `opId` refuses the whole takeover with `ORCHESTRATION_TAKEOVER_KEY_CONFLICT` and the conflicting keys, and nothing changes; an existing key with the same `opId` is fine (R3-S2).
 
 Import of #107 JSONL child entries happens once per orchestrator, on its first use or on takeover, whichever comes first; stopped entries become `stopped`, the others `active`.
 
@@ -81,6 +83,9 @@ No UI change. Daemon tests with the faux provider and the real session manager:
 - a crash after the worker write and before the first assistant message: after restart the JSONL is absent, the operation is `reserved` again with its slot, a retry gives one durable worker;
 - a `done` report while the turn is held open by a blocked tool, and a concurrent spawn for the last slot: refused until the turn settles;
 - a UI prompt and a `session_send` to two `done` workers racing for the last slot: one starts, one is refused;
+- through the real daemon input: an input to a `done` worker refused by preflight, and an extension command that runs no turn, both leave the worker `done` and the slot free; the same with a parallel input that starts a run keeps the slot;
+- a worker that reports `done` in its first durable turn is `done` with its slot free after that one settle;
+- takeover where the caller already has `job-1` for another open operation: refused with `ORCHESTRATION_TAKEOVER_KEY_CONFLICT`, both retry mappings, workers, generations and events unchanged;
 - restart keeps workers and roles;
 - takeover moves an idle and a `done` worker; `session_stop` from the old orchestrator is then refused over the inline and the MCP adapter; a worker calling an orchestrator-only tool is refused over both;
 - a partial start, takeover, a retry from the new owner with the same `clientRequestId` and a late write of the old call: one operation, the old write refused;

@@ -4,7 +4,7 @@ Part of #118. Depends on slice 6. Proposed role: `task-extreme`.
 
 ## Contract
 
-Starting a worker for an issue is one call: branch, worktree, session, brief. A failure leaves a named, resumable record; a retry continues; abandoning removes only what this start created and only through the deletion guard.
+Starting a worker for an issue is one call: branch, worktree, session, brief. A failure leaves a named, resumable record; a retry continues; abandoning stops the work and releases the slot but removes nothing (owner rule, slice 9).
 
 ## API seam
 
@@ -23,11 +23,11 @@ worker_start { clientRequestId, issue: { repo, number }, role, branchName, title
 
 A retry with the same key resumes at the first unfinished step; a step whose effect already exists is adopted only if it matches the recorded intent (a session is found by the unique worktree cwd and the operation id in its lineage). A failed step sets the operation `failed`, keeps `error: { step, message, at }` and emits `start_failed` to the operation (`emit({ opId }, ...)`, slice 3), because before step `session` there is no worker to name. The digest lists it under `operations` (slice 2) until it is retried or abandoned.
 
-`worker_abandon { clientRequestId }` removes in reverse order only what `steps` says this operation created, each removal through `cleanup-guard.js`, and releases the reservation. This slice creates the guard with its no pull request rule; slice 9 adds the merged rules. A missing pull request in the registry means unknown, not absent (R2-B3). This slice accepts one proof that no pull request can be open for the branch: `git ls-remote --exit-code origin refs/heads/<branch>` exits 2, so the branch was never pushed or is gone, and a pull request needs its head branch on the remote. The branch is then removed only with no commits beyond `origin/dev` and a clean worktree. A pushed branch, or any other `ls-remote` result, refuses the branch removal with the reason (`ORCHESTRATION_GUARD_UNKNOWN_PR`); the worktree and session follow the same rule, and the worker stays for `worker_cleanup` in slice 9, which can ask GitHub.
+`worker_abandon { clientRequestId }` stops a running worker through `session_stop`, sets the operation `abandoned`, the worker (if any) `stopped`, and releases the reservation in the same `update`. It removes no branch, worktree or session: by the owner rule (R3-B1, slice 9) only a proven merge allows removal, and an abandoned start has none. The result and an `abandoned` entry in the digest list what remains (`branch`, `worktree`, `sessionId`), so the orchestrator can tell the owner. A later merge of a pull request from that branch still reaches cleanup through slice 9.
 
 ## What the owner sees
 
-Tests with a temp git repository and a bare remote: success; failure injected after each step, then retry, gives one branch, one worktree and one session; restart between steps; abandon after each step removes only created artifacts and refuses a branch with commits beyond `origin/dev`; a branch pushed without extra commits and with an open draft pull request that was never reported is refused; an `ls-remote` that fails (unreachable remote) is refused; a failure before step `session` shows `start_failed` to the orchestrator and an entry in the digest's `operations`; a crash after `session` before the first assistant message, then restart and retry, gives one durable session in the same worktree. Lab recording: the orchestrator starts a worker for an issue with one call.
+Tests with a temp git repository and a bare remote: success; failure injected after each step, then retry, gives one branch, one worktree and one session; restart between steps; abandon after each step releases the slot, removes nothing and lists what remains; abandon of a running worker stops it first; a failure before step `session` shows `start_failed` to the orchestrator and an entry in the digest's `operations`; a crash after `session` before the first assistant message, then restart and retry, gives one durable session in the same worktree. Lab recording: the orchestrator starts a worker for an issue with one call.
 
 ## Gates
 
@@ -43,4 +43,4 @@ Git calls through `lib/git/service.js` or a small helper there, the worktree pat
 
 ## Feedback that changes this slice
 
-The slice exceeds 600 lines: split abandon into its own pull request before slice 9.
+The slice exceeds 600 lines: split abandon into its own pull request before slice 9. The owner allows removing what a start created when it never pushed: add that as a guard rule in slice 9, not here.

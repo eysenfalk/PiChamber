@@ -4,22 +4,26 @@ Closes #118. Depends on slices 7 and 8. Proposed role: `task-extreme`.
 
 ## Contract
 
-After a squash merge, cleanup removes the worker's worktree, branches and session without losing unmerged work. Every removal, automatic or by hand, goes through one guard. A refused or half done cleanup is visible and resumable.
+After a squash merge, cleanup removes the worker's worktree, branches and session without losing unmerged work. Owner rule (2026-10-12, R3-B1): worktree, branch and worker session are removed only after a proven merge, and the only proof is a pull request in state `merged` (`mergedAt` set) for exactly this head branch. A closed unmerged pull request, a missing pull request and a missing remote branch are no proof: nothing is removed, the case is reported. Every removal, automatic or by hand, goes through one guard. A refused or half done cleanup is visible and resumable.
 
 ## API seam
 
 `orchestration/cleanup-guard.js`, pure decision over facts the caller gathers:
 
 ```js
-canRemove({ worker, pr, prLookup, localTip, remoteRef, worktreeClean, hasLiveRun, commitsBeyondDev })
+canRemove({ worker, pulls, localTip, remoteRef, worktreeClean, hasLiveRun })
+// pulls: fresh list of pull requests whose head is exactly worker.branch in worker's repository | { error }
 // remoteRef: { state: 'present', tip } | { state: 'absent' } | { state: 'unknown', error }
-// prLookup: fresh findPullForBranch result | { error }
   → { ok: true } | { ok: false, reason }
 ```
 
-- With a registered pull request: identity (repo, number) matches the record, state `merged` from a fresh read (slice 7 rules), `mergedSha` recorded, local tip equal to the pull request's head at merge, the remote ref either `present` with that tip or `absent` (deleted after the merge, as GitHub does by setting), clean worktree, no live run. A remote ref `unknown` blocks (R2-S7).
-- Without a registered pull request the state is unknown, not absent (R2-B3). Proof of no pull request is either a remote ref `absent` (slice 8's rule) or a fresh `findPullForBranch` (`lib/github/pulls.js`) for the repository and the head branch. An open pull request refuses and is recorded on the worker for the orchestrator; a merged one is handled by the rules above; a closed unmerged one or none allows removal only with no commits beyond `origin/dev`, clean worktree and no live run. A lookup error, a stale result or a missing credential refuses: no proof, no removal (fail closed, orchestrator decision 2026-10-12).
+The only `ok` case: `pulls` is a fresh read without error, stale flag or section errors (slice 7 rules), it contains no open pull request, and it contains a pull request with `mergedAt` set whose head repository and head branch are exactly the worker's, which matches the registered `pullRequest` if there is one, and whose head at merge equals the local tip. In addition the remote ref is either `present` with that tip or `absent` (deleted after the merge, as GitHub does by setting; this is accepted only next to the merged pull request, never as proof by itself), the worktree is clean and no run is live. A remote ref `unknown` blocks (R2-S7).
+
+Everything else refuses with a reason the orchestrator can pass on: no pull request for the branch, only closed unmerged ones, an open one, a lookup error or missing credential, a tip after the merge, a dirty worktree, a live run. A pull request missing from the registry is looked up the same way and then recorded on the worker.
+Lookup: `findPullForBranch` in `lib/github/pulls.js` asks only for open pull requests. This slice gives it a `state` option; the guard asks with `state: 'all'`, uncached, across all pages, while existing callers keep the default.
 - Never `main` or `dev`, never another orchestrator's worker.
+
+`pr_closed` triggers no cleanup: the worker stays, the event and the digest report it, and the orchestrator asks the owner (as the #112 skill says for a pull request closed without merge).
 
 `orchestration/cleanup.js`, triggered by `pr_merged` when `orchestration.cleanup.auto` is on (default on), or by `worker_cleanup { sessionId }`. It moves the worker to `cleanup_pending` and journals `cleanup: { steps, blockedReason? }`:
 
@@ -30,11 +34,11 @@ canRemove({ worker, pr, prLookup, localTip, remoteRef, worktreeClean, hasLiveRun
 
 Each step is safe to run again. A refused guard or a failed step sets `cleanup_blocked` with the reason and emits `cleanup_blocked`; success sets `removed` and emits `cleanup_done`.
 
-`session_delete { sessionId }`, orchestrator only, ownership required: deletes a worker without branch or worktree, or one whose cleanup steps 1 to 3 are done; otherwise refused with the guard's reason. `worker_abandon` from slice 8 gains the GitHub lookup here, so a pushed branch without a pull request can be removed too.
+`session_delete { sessionId }`, orchestrator only, ownership required: deletes the session of a worker whose guard said `ok` and whose cleanup steps 1 to 3 are done, the manual form of step 4; otherwise refused with the guard's reason. Workers without a branch (`session_spawn` helpers such as `review` or `research`) have no merge and are therefore never deleted by the orchestrator; they stay `stopped` and the owner deletes them in the UI if wanted.
 
 ## What the owner sees
 
-Tests with a temp repository, a bare remote and squash merges: normal cleanup; a commit after the merge; a dirty worktree; a moved remote branch (lease refusal); a failure after each step and a resume; a live run; a foreign worker; `session_delete` for a worker with unmerged commits refused; a merged pull request whose remote branch GitHub already deleted (cleanup completes, step 3 skipped); an `ls-remote` failure (blocked); a pushed branch without extra commits and an open, unreported draft pull request (abandon and `session_delete` refused, pull request recorded); the same with a failing GitHub lookup (refused). Lab recording: a worker's pull request is merged by squash, the orchestrator receives `pr_merged` and then `cleanup_done`, the worktree and branches are gone.
+Tests with a temp repository, a bare remote and squash merges: normal cleanup; a commit after the merge; a dirty worktree; a moved remote branch (lease refusal); a failure after each step and a resume; a live run; a foreign worker; `session_delete` for a worker with unmerged commits refused; a merged pull request whose remote branch GitHub already deleted (cleanup completes, step 3 skipped); an `ls-remote` failure (blocked); an unregistered draft closed without merge on a clean branch without extra commits, once with the remote branch present and once absent (nothing removed, reported); no pull request at all with the remote branch absent (nothing removed); an open, unreported draft (refused, pull request recorded); a failing GitHub lookup (refused); `pr_closed` (no cleanup); `session_delete` of a branchless helper (refused). Lab recording: a worker's pull request is merged by squash, the orchestrator receives `pr_merged` and then `cleanup_done`, the worktree and branches are gone.
 
 ## Gates
 
