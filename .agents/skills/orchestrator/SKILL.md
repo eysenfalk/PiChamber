@@ -38,12 +38,20 @@ Look at what the running workers do. Builds and full test runs of several worker
 
 ## Models
 
-`orchestration_capabilities` returns the model and thinking level per role from the PiChamber settings; the owner changes the assignment there. Spawn with the assigned model. Never write a model id into a brief or spawn from memory, and never substitute a model when an assignment is unavailable: report it to the owner. An explicit owner choice for one task wins over the role.
+`orchestration_capabilities` returns the model and thinking level per role from the PiChamber settings; the owner changes the assignment there, and the values live only there. Spawn with the assigned model and level. Never write a model id into a brief or spawn from memory, and never substitute a model when an assignment is unavailable: report it to the owner. An explicit owner choice for one task wins over the role.
 
-- `implementation`: issue work that ends in a branch and pull request, plans included.
-- `research`: reading, comparing and investigating without changing the repository.
-- `small`: narrowly specified mechanical changes and lookups.
-- `review`: every review round. The owner wants work reviewed by a different model than its author, so `implementation` work (Opus by default) goes to `gpt-6.1-sol`. If the settings make author and reviewer the same model, tell the owner.
+Pick the role by the work, not by the model you would like:
+
+- `plan`: architecture, spec, plan, hard debugging.
+- `implement`: multi step implementation in a worktree, large refactorings, work likely to run longer than about 30 minutes.
+- `task`: clearly scoped everyday work such as a bug fix, a small feature, docs, or catching up tests.
+- `research`: codebase or web research, comparison, summary with sources; changes nothing.
+- `small`: short and mechanical, such as searching, renaming, summarizing, classifying.
+- `review`: every review round on any worker's work, in a fresh session. It stays `gpt-6.1-sol` at `high` whichever model did the work (owner decision); if the settings say otherwise, tell the owner.
+
+When `task` or `small` work turns out harder than briefed, escalate instead of letting the worker guess on: hand it to a new spawn one thinking level up or in the next role, and tell the owner. The brief asks the worker to report `QUESTION` in that case.
+
+The defaults follow Anthropic's guidance as of October 2026 on choosing a model (https://platform.claude.com/docs/en/about-claude/models/choosing-a-model) and on effort levels per model (https://platform.claude.com/docs/en/build-with-claude/effort). Revisit the roles when new models arrive or the owner's enabled models change.
 
 ## Cleanup
 
