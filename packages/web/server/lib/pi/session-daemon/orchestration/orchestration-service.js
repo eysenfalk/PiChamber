@@ -126,6 +126,7 @@ export function createOrchestrationService(deps) {
     hostStatus,
     resolveBranch = async () => undefined,
     getSessionActivity = () => ({}),
+    holdSession = () => () => {},
     // 'present' | 'absent' | 'unknown' for the worker's JSONL.
     sessionFileState = async () => 'unknown',
     // A live session created for this start operation, if any.
@@ -177,6 +178,17 @@ export function createOrchestrationService(deps) {
   const hasLiveRun = (sessionId) => {
     const state = getSessionState(sessionId);
     return state === 'busy' || state === 'retry';
+  };
+
+  // Holds a target session's idle guard for the whole use, so a session
+  // opened here is not disposed mid-use and is disposed again when idle.
+  const withSession = async (sessionId, use) => {
+    const release = holdSession(sessionId);
+    try {
+      return await use();
+    } finally {
+      release();
+    }
   };
 
   const notifyWaiters = () => {
@@ -364,7 +376,7 @@ export function createOrchestrationService(deps) {
         operation = ownedOperation(document, opId, caller);
       }
       const { sessionId } = operation;
-      if (!operation.steps.prompted?.doneAt && document.workers[sessionId]) {
+      if (!operation.steps.prompted?.doneAt && document.workers[sessionId]) await withSession(sessionId, async () => {
         // A prompt step that began before a crash may have been accepted;
         // send receipts do not outlive the process, the transcript does.
         const accepted = operation.steps.prompted?.startedAt !== undefined && await taskAccepted(sessionId, intent);
@@ -385,7 +397,7 @@ export function createOrchestrationService(deps) {
             : receipt?.messageId ? { messageId: receipt.messageId } : {});
         });
         document = await registry.read();
-      }
+      });
       return { sessionId, worker: document.workers[sessionId] };
     } catch (error) {
       // The step ended without finishing; a takeover need not wait for it.
@@ -520,7 +532,9 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const read = async (_callerSessionId, args) => {
+  const read = (callerSessionId, args) => withSession(args.sessionId, () => readSession(callerSessionId, args));
+
+  const readSession = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const limit = args.limit ?? 10;
     const messages = (runtime.session.messages ?? [])
@@ -542,7 +556,9 @@ export function createOrchestrationService(deps) {
     };
   };
 
-  const send = async (_callerSessionId, args) => {
+  const send = (callerSessionId, args) => withSession(args.sessionId, () => sendSession(callerSessionId, args));
+
+  const sendSession = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const receipt = await startTask(runtime.session.sessionId, args.text, args.delivery ?? 'prompt', args.clientRequestId);
     return {
@@ -556,7 +572,7 @@ export function createOrchestrationService(deps) {
   const wait = async (_callerSessionId, args, options = {}) => {
     const sessionIds = [...new Set(args.sessionIds)];
     for (const sessionId of sessionIds) {
-      if (!getLiveRuntime(sessionId)) await activateSession(sessionId);
+      if (!getLiveRuntime(sessionId)) await withSession(sessionId, () => activateSession(sessionId));
     }
     const cap = Math.min(options.maxWaitMs ?? MAX_WAIT_MS, MAX_WAIT_MS);
     const timeoutMs = Math.min(args.timeoutMs ?? DEFAULT_WAIT_MS, cap);
@@ -590,7 +606,7 @@ export function createOrchestrationService(deps) {
   };
 
   const interrupt = async (_callerSessionId, args) => {
-    await abortSession(args.sessionId);
+    await withSession(args.sessionId, () => abortSession(args.sessionId));
     return { sessionId: args.sessionId, interrupted: true };
   };
 
@@ -622,7 +638,7 @@ export function createOrchestrationService(deps) {
     }
     if (!failure) {
       try {
-        await abortSession(sessionId);
+        await withSession(sessionId, () => abortSession(sessionId));
       } catch (error) {
         if (!isGone(error)) failure = typeof error?.code === 'string' ? error.code : 'ABORT_FAILED';
       }
@@ -675,7 +691,7 @@ export function createOrchestrationService(deps) {
     let fromRuntime = getLiveRuntime(from);
     if (!fromRuntime) {
       try {
-        fromRuntime = await activateSession(from);
+        fromRuntime = await withSession(from, () => activateSession(from));
       } catch (error) {
         if (!isGone(error)) {
           throw new OrchestrationError('ORCHESTRATION_TAKEOVER_BUSY', 'That orchestrator cannot be checked here, it may still run in another PiChamber instance.', {
@@ -780,14 +796,18 @@ export function createOrchestrationService(deps) {
         const recipient = await resultRecipient(sessionId, lineage);
         if (!recipient) return;
         ({ owner, cwd: ownerCwd } = recipient);
-        const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
-        const current = await resultRecipient(sessionId, lineage);
-        if (!current) return;
-        if (current.owner !== owner) {
-          retryAtOnce = true;
-          throw new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker changed its owner during delivery.', { sessionId });
-        }
-        await deliverResult(parent, sessionId, result, current.worker);
+        // The owner's guard covers its activation and the send until Pi
+        // accepted it, but not the backoff between attempts.
+        await withSession(owner, async () => {
+          const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
+          const current = await resultRecipient(sessionId, lineage);
+          if (!current) return;
+          if (current.owner !== owner) {
+            retryAtOnce = true;
+            throw new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker changed its owner during delivery.', { sessionId });
+          }
+          await deliverResult(parent, sessionId, result, current.worker);
+        });
         return;
       } catch (error) {
         if (isGone(error)) return;
@@ -833,9 +853,11 @@ export function createOrchestrationService(deps) {
     const lineage = lineageOf(runtime);
     let document = await registry.read();
     if (!document.workers[sessionId] && lineage?.parentSessionId && !imported.has(lineage.parentSessionId)) {
-      const parent = getLiveRuntime(lineage.parentSessionId)
-        ?? await activateSession(lineage.parentSessionId, lineage.parentDirectory);
-      await ensureImported(lineage.parentSessionId, parent);
+      await withSession(lineage.parentSessionId, async () => {
+        const parent = getLiveRuntime(lineage.parentSessionId)
+          ?? await activateSession(lineage.parentSessionId, lineage.parentDirectory);
+        await ensureImported(lineage.parentSessionId, parent);
+      });
       document = await registry.read();
     }
     if (!document.workers[sessionId]) return;

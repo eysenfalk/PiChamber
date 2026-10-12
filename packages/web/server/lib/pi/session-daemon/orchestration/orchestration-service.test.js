@@ -62,7 +62,7 @@ let nextInstance = 0;
  * One daemon process. Two harnesses on the same `file` are two processes
  * sharing the durable registry; a new harness on the same file is a restart.
  */
-const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker', delay = async () => {}, pid: reusedPid, startTime } = {}) => {
+const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker', delay = async () => {}, pid: reusedPid, startTime, holdSession } = {}) => {
   const runtimes = new Map();
   const states = new Map();
   // JSONL presence per worker; a settled worker got its assistant message.
@@ -127,6 +127,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
     canonicalDirectory: async (directory) => resolve(directory),
     delay: vi.fn(delay),
     onDeliveryFailed: vi.fn(),
+    ...(holdSession ? { holdSession } : {}),
     processId: pid,
     processInstance: `process-${pid}-${nextInstance}`,
     processStartTime: (candidate) => startTimes.get(candidate) ?? null,
@@ -691,6 +692,65 @@ describe('orchestration service', () => {
     await settle('worker-1', 'second');
     expect(deps.delay).toHaveBeenCalledTimes(4);
     expect(deps.onDeliveryFailed).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'worker-1', parentSessionId: 'orch' }));
+  });
+
+  it('holds the parent guard for each delivery until it is accepted, but not across the backoff', async () => {
+    const held = new Map();
+    const heldDuring = { sends: [], backoffs: [] };
+    const { service, deps, orchestrator, settle } = createHarness({
+      delay: async () => { heldDuring.backoffs.push(held.get('orch') ?? 0); },
+      holdSession: (sessionId) => {
+        held.set(sessionId, (held.get(sessionId) ?? 0) + 1);
+        return () => held.set(sessionId, held.get(sessionId) - 1);
+      },
+    });
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const send = orchestrator.session.sendCustomMessage;
+    orchestrator.session.sendCustomMessage = async (...args) => {
+      heldDuring.sends.push(held.get('orch') ?? 0);
+      if (heldDuring.sends.length === 1) throw Object.assign(new Error('closed'), { code: 'RUNTIME_DISPOSED' });
+      return send.apply(orchestrator.session, args);
+    };
+    await settle('worker-1', 'result');
+    expect(heldDuring).toEqual({ sends: [1, 1], backoffs: [0] });
+    expect(held.get('orch')).toBe(0);
+    expect(deps.onDeliveryFailed).not.toHaveBeenCalled();
+  });
+
+  it('holds the guard of every session a tool activates or aborts, including the old owner of a takeover', async () => {
+    const held = new Map();
+    const seen = [];
+    const harness = createHarness({
+      holdSession: (sessionId) => {
+        held.set(sessionId, (held.get(sessionId) ?? 0) + 1);
+        return () => held.set(sessionId, held.get(sessionId) - 1);
+      },
+    });
+    const { service, deps, runtimes } = harness;
+    const activate = deps.activateSession.getMockImplementation();
+    deps.activateSession.mockImplementation(async (sessionId, ...rest) => {
+      seen.push(['activate', sessionId, held.get(sessionId) ?? 0]);
+      return activate(sessionId, ...rest);
+    });
+    const abort = deps.abortSession.getMockImplementation();
+    deps.abortSession.mockImplementation(async (sessionId) => {
+      seen.push(['abort', sessionId, held.get(sessionId) ?? 0]);
+      return abort(sessionId);
+    });
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await service.call('orch', 'session_interrupt', { sessionId: 'worker-1' });
+    await expectCode(service.call('orch', 'session_read', { sessionId: 'gone' }), 'SESSION_NOT_FOUND');
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    runtimes.delete('orch');
+    await service.call('orch-2', 'orchestration_takeover', { fromSessionId: 'orch' });
+    await service.call('orch-2', 'session_stop', { sessionId: 'worker-1' });
+    expect(seen).toEqual([
+      ['abort', 'worker-1', 1],
+      ['activate', 'gone', 1],
+      ['activate', 'orch', 1],
+      ['abort', 'worker-1', 1],
+    ]);
+    expect([...held.values()].every((count) => count === 0)).toBe(true);
   });
 
   it('drops the result of a worker whose parent was deleted', async () => {
