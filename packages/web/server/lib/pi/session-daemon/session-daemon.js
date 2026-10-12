@@ -1417,20 +1417,19 @@ export function createSessionDaemon({
 
     // Last resort for non-standard filenames: read the header of every
     // file in every directory store under agentDir/sessions.
-    const scanned = await scanPiSessionJsonlHeaders({ sessionId, agentDir });
-    if (scanned.incomplete) incomplete = true;
+    const scanned = await scanPiSessionJsonlHeaders({
+      sessionId,
+      agentDir,
+      accept: async ({ path, cwd: headerCwd }) => {
+        await validatePiSessionJsonlFile(path);
+        return { target: { id: sessionId, path }, directory: await resolveDirectory(headerCwd) };
+      },
+    });
     if (scanned.match) {
-      try {
-        await validatePiSessionJsonlFile(scanned.match.path);
-        const validated = await resolveDirectory(scanned.match.cwd);
-        knownDirectories.add(validated);
-        return { target: { id: sessionId, path: scanned.match.path }, directory: validated };
-      } catch {
-        // The header names this session; a file that does not validate now
-        // is no proof that the session is gone.
-        incomplete = true;
-      }
+      knownDirectories.add(scanned.match.directory);
+      return scanned.match;
     }
+    if (scanned.incomplete) incomplete = true;
 
     throw Object.assign(
       new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.'),

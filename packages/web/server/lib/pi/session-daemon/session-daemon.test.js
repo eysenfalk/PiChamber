@@ -1105,6 +1105,34 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('finds a caller behind a same-id transcript that does not validate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-scan-'));
+    const endpoint = testDaemonEndpoint(root);
+    const agentDir = join(root, 'agent');
+    const storeA = join(agentDir, 'sessions', 'a');
+    const storeB = join(agentDir, 'sessions', 'b');
+    await mkdir(storeA, { recursive: true });
+    await mkdir(storeB, { recursive: true });
+    // Neither name carries the id, so only the header scan can find them.
+    const header = JSON.stringify({ type: 'session', id: 'caller', cwd: root });
+    await writeFile(join(storeA, 'broken.jsonl'), `${header}\nnot json\n`);
+    await writeFile(join(storeB, 'renamed.jsonl'), `${header}\n`);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir,
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
+    await client.close();
+  });
+
   it('reports a failed caller lookup as retryable instead of a gone caller', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-lookup-'));
     const endpoint = testDaemonEndpoint(root);
