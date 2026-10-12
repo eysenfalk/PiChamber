@@ -1,7 +1,8 @@
+import { existsSync, readdirSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { findPersistedSessionByOperation } from './session-lookup.js';
 
@@ -35,6 +36,21 @@ describe('persisted session lookup by start operation', () => {
       target: jsonl({ type: 'session', id: 'target' }, { type: 'custom', customType: LINEAGE, data: { opId: 'op_1' } }, { type: 'message' }),
     });
     await expect(lookup(sessions)).resolves.toEqual({ sessionId: 'target', cwd: '/work/a', sessionFile: sessions[2].path });
+  });
+
+  it.skipIf(!existsSync('/proc/self/fd'))('closes every session file it read, also after an early match', async () => {
+    // Larger than the read stream buffer, so a file is never read to its end.
+    const body = `${JSON.stringify({ type: 'message', text: 'x'.repeat(1024) })}\n`.repeat(256);
+    const sessions = await sessionsIn({
+      other: `${jsonl({ type: 'session', id: 'other' })}${body}`,
+      target: `${jsonl({ type: 'session', id: 'target' }, { type: 'custom', customType: LINEAGE, data: { opId: 'op_1' } })}${body}`,
+    });
+    const openFiles = () => readdirSync('/proc/self/fd').length;
+    const before = openFiles();
+    for (let scan = 0; scan < 20; scan += 1) {
+      await expect(lookup(sessions)).resolves.toMatchObject({ sessionId: 'target' });
+    }
+    await vi.waitFor(() => expect(openFiles()).toBeLessThan(before + 5));
   });
 
   it('ignores a lineage entry after the first message and sessions removed since the listing', async () => {

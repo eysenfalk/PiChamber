@@ -11,7 +11,8 @@ import { createInterface } from 'node:readline';
 const UNREADABLE = Symbol('unreadable');
 
 const lineageOpIdOf = async (file, lineageType) => {
-  const lines = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  const input = createReadStream(file, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
   let unreadable = false;
   try {
     for await (const line of lines) {
@@ -30,7 +31,9 @@ const lineageOpIdOf = async (file, lineageType) => {
     }
     return unreadable ? UNREADABLE : undefined;
   } finally {
+    // Closing the reader does not close the file after an early return.
     lines.close();
+    input.destroy();
   }
 };
 
