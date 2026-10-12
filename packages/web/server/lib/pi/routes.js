@@ -25,6 +25,8 @@ import {
 } from './extension-protocol.js';
 import { createPiUiSettingsStore } from './ui-settings-store.js';
 import { createPiSnippetsStore } from './snippets-store.js';
+import { createOrchestrationCredentialStore } from '../client-auth/orchestration-credentials.js';
+import { registerOrchestrationMcpRoute } from './mcp-route.js';
 import { isValidSendOperationId, isValidStreamEpoch } from './session-daemon/send-operation-registry.js';
 import {
   DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
@@ -852,6 +854,7 @@ export const registerPiRuntimeRoutes = (app, {
   sessionFoldersStore = createPiSessionFoldersStore(),
   uiSettingsStore = createPiUiSettingsStore(),
   snippetsStore = createPiSnippetsStore(),
+  orchestrationCredentialStore = createOrchestrationCredentialStore(),
   listCustomThemes = listPiCustomThemes,
   updateChecker = checkForUpdates,
   updateLauncher = launchUpdateCommand,
@@ -863,6 +866,10 @@ export const registerPiRuntimeRoutes = (app, {
   eventStreamMaxBufferedBytes = DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
 }) => {
   const eventStreamRegistry = createPiEventStreamRegistry();
+  registerOrchestrationMcpRoute(app, {
+    getDaemonRuntime: () => getDaemonRuntime(getPiSessionDaemonRuntime),
+    credentialStore: orchestrationCredentialStore,
+  });
   app.get('/api/pi/ui-settings', async (_req, res) => {
     try {
       res.json(await uiSettingsStore.read());
@@ -1713,7 +1720,24 @@ export const registerPiRuntimeRoutes = (app, {
 
   app.delete('/api/pi/sessions/:sessionId', async (req, res) => {
     const result = await requestSessionOperation(req, res, getPiSessionDaemonRuntime, 'sessions.delete');
-    if (result !== undefined) res.status(204).end();
+    if (result !== undefined) {
+      orchestrationCredentialStore.revokeSession(req.params.sessionId);
+      res.status(204).end();
+    }
+  });
+
+  // Mints an MCP credential that acts as this one session (Adapter B). Only an
+  // authenticated client reaches here: the /api gate lets orchestration
+  // credentials through to `/api/pi/mcp` alone. The raw token is returned once.
+  app.post('/api/pi/sessions/:sessionId/orchestration-credential', (req, res) => {
+    const sessionId = sessionIdFrom(req);
+    if (!sessionId) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    const { token, expiresAt, idleTimeoutMs } = orchestrationCredentialStore.mint(sessionId);
+    res.status(201).json({ token, sessionId, expiresAt, idleTimeoutMs, url: '/api/pi/mcp', server: 'pichamber' });
   });
 
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {
