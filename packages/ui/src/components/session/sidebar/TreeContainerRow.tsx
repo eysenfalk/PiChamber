@@ -24,10 +24,14 @@ const KIND_ICON: Record<Exclude<TreeNodeKind, 'session'>, IconName> = {
   otherFolder: 'folder',
 };
 
+/**
+ * One span for all guide columns, so a flex gap in the row applies once and every
+ * row kind indents exactly GUIDE_WIDTH_PX per level. Rendered empty at depth 0 for
+ * the same reason.
+ */
 export const TreeGuides: React.FC<{ row: TreeRow }> = ({ row }) => {
-  if (row.depth === 0) return null;
   return (
-    <>
+    <span aria-hidden className="flex shrink-0 self-stretch">
       {Array.from({ length: row.depth }, (_, level) => {
         const own = level === row.depth - 1;
         const line = own ? (row.isLast ? 'half' : 'full') : row.guides[level + 1] ? 'full' : null;
@@ -41,7 +45,7 @@ export const TreeGuides: React.FC<{ row: TreeRow }> = ({ row }) => {
           </span>
         );
       })}
-    </>
+    </span>
   );
 };
 
@@ -114,7 +118,8 @@ export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onAct
   );
 
   const rowClass = cn(
-    'flex min-h-6 w-full min-w-0 items-center gap-1 rounded-md px-1.5 text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+    // pl-0.5 plus the gap after the guides puts the chevron where session rows have theirs (pl-1.5).
+    'flex min-h-6 w-full min-w-0 items-center gap-1 rounded-md pl-0.5 pr-1.5 text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
     selected ? 'bg-interactive-selection' : 'hover:bg-interactive-hover',
   );
 

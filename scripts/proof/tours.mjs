@@ -146,7 +146,8 @@ export function sidebarTreeTour(manifest) {
       actions: [{ type: 'drag', from: { text: long.title }, to: { selector: folder } }, { type: 'wait', selector: `${folder}[aria-expanded]` },
         // dnd-kit swallows clicks for a moment after a drop; a person never clicks that fast.
         { type: 'wait', ms: 300 }, { type: 'click', text: 'Reviews' }, { type: 'wait', selector: `${folder}[aria-expanded="true"]` }],
-      evidence: [{ selector: `${folder}[aria-expanded="true"]` }, { selector: `[role="treeitem"][aria-level="4"][aria-label="${long.title}"]` }] },
+      evidence: [{ selector: `${folder}[aria-expanded="true"]` }, // The fork toggle proves the level without asking a deep, ellipsized title to fit.
+        { selector: `[role="treeitem"][aria-level="4"][aria-label="${long.title}"] [data-tree-toggle]` }] },
     { caption: 'Arrow keys walk the tree: down to the session, left closes its forks, left again climbs to the folder and closes it.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'press', key: 'ArrowDown' }, { type: 'wait', selector: `[role="treeitem"][aria-label="${long.title}"]:focus` },
         { type: 'press', key: 'ArrowLeft' }, { type: 'press', key: 'ArrowLeft' }, { type: 'press', key: 'ArrowLeft' }],

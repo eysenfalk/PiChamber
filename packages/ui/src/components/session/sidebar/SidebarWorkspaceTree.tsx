@@ -208,7 +208,8 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
       : undefined
   );
 
-  const treeItemClass = 'rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50';
+  // The design system strips focus rings globally; data-focus-ring="accent" is its opt-in.
+  const treeItemClass = 'rounded-md';
 
   return (
     <TreeDndProvider
@@ -229,11 +230,12 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                 <div
                   {...itemProps(row.key)}
                   role="treeitem"
+                  data-focus-ring="accent"
                   data-tree-node={row.key}
                   aria-label={nodeLabel(row.node)}
                   aria-level={row.depth + 1}
                   aria-expanded={forks > 0 ? row.expanded : undefined}
-                  className={`flex min-h-6 min-w-0 items-center ${treeItemClass}`}
+                  className={`flex min-h-6 min-w-0 items-center pl-1.5 ${treeItemClass}`}
                 >
                   <TreeGuides row={row} />
                   {forks > 0 ? (
@@ -247,7 +249,10 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                     >
                       <Icon name={row.expanded ? 'arrow-down-s' : 'arrow-right-s'} className="h-3 w-3" />
                     </button>
-                  ) : null}
+                  ) : (
+                    // Same chevron column as container rows, so siblings line up.
+                    <span aria-hidden className="h-4 w-4 shrink-0" />
+                  )}
                   <div className="min-w-0 flex-1">
                     {renderSession(toSessionNode(row.node), containerDirectory(container), container?.projectId ?? null)}
                   </div>
@@ -271,6 +276,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
               <div
                 {...itemProps(row.key)}
                 role="treeitem"
+                data-focus-ring="accent"
                 aria-level={row.depth + 1}
                 aria-expanded={row.node.children.length > 0 ? row.expanded : undefined}
                 aria-label={row.node.kind === 'folder' ? row.node.label : undefined}

@@ -172,6 +172,9 @@ export const TreeDndItem: React.FC<ItemProps> = ({ nodeKey, drag, drop, handleLa
         >
           <Icon name="draggable" className="size-3.5" />
         </button>
+      ) : dnd?.touchDrag ? (
+        // Keeps the count column aligned with rows that have a handle.
+        <span aria-hidden className="h-6 w-6 shrink-0" />
       ) : null}
       {action?.type === 'reorderProject' ? (
         <span
