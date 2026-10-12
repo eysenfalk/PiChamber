@@ -14,6 +14,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0006](0006-intent-as-the-primitive.md) | Intent as the primitive: work organized by accepted intents, not by sessions | Proposed |
 | [0007](0007-ideas-as-issues.md) | Ideas as records of their own, kept as issues of the tracker | Accepted |
 | [0008](0008-dev-integration-branch.md) | Work merges into `dev`; `main` only fast-forwards to stable states | Accepted |
+| [0009](0009-spec-folder-for-multi-pr-features.md) | A feature delivered in several pull requests gets a temporary spec folder | Accepted |
 
 ## Rules
 

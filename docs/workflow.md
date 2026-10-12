@@ -20,10 +20,11 @@ How work moves from an idea to `dev` and from there to `main` in this repository
 | [Roadmap issue #24](https://github.com/eysenfalk/PiChamber/issues/24) | The order of upcoming work as its ordered sub-issues, and a generated order list and graph | sub-issues: people and agents; list and graph: `scripts/workflow/roadmap-sync.mjs` |
 | GitHub issues | Ideas, roadmap items (label `roadmap`) and bugs | people and agents |
 | Pull request | The plan (how), its proof, the review and the CI result | agent drafts, user approves |
+| `specs/<issue>-<name>/` | Only for a feature delivered in several pull requests: the ladder of pull requests, shared contracts and the handoff to the next agent. Deleted by the last pull request of the feature ([ADR 0009](adr/0009-spec-folder-for-multi-pr-features.md)) | agents, in the feature's pull requests |
 | Git history on `dev` | One squash commit per pull request, containing its title and full description | automatic |
 | `main` | Only stable states: a commit of `dev` the owner promoted by fast-forward ([ADR 0008](adr/0008-dev-integration-branch.md)) | the owner |
 
-There is no archive of plans and no hand-maintained catalogue. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests through the lab, is a separate roadmap item after #11.
+There is no archive of plans and no hand-maintained catalogue; a spec folder lives only while its feature is being built. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests through the lab, is a separate roadmap item after #11.
 
 ## Configuration: `workflow.json`
 
