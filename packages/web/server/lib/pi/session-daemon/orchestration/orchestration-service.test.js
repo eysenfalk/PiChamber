@@ -9,7 +9,7 @@ import {
 } from './orchestration-service.js';
 
 const ROLES = {
-  'implement-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
+  'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
   research: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
   small: { modelId: 'claude-haiku-5-5', thinking: 'low' },
   review: { modelId: 'gpt-6.1-sol', thinking: 'high' },
@@ -85,15 +85,15 @@ const expectCode = async (promise, code) => {
 describe('orchestration service', () => {
   it('spawns a linked worker, starts its task and reports it as a slot', async () => {
     const { service, deps, orchestrator, runtimes } = createHarness();
-    const spawned = await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'Fix the bug\nDetails', role: 'implement-hard' });
+    const spawned = await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'Fix the bug\nDetails', role: 'task-hard' });
 
-    expect(spawned).toMatchObject({ sessionId: 'worker-1', cwd: '/work/a', title: 'Fix the bug', role: 'implement-hard', state: 'busy' });
+    expect(spawned).toMatchObject({ sessionId: 'worker-1', cwd: '/work/a', title: 'Fix the bug', role: 'task-hard', state: 'busy' });
     expect(spawned.model).toEqual({ providerId: 'anthropic', modelId: 'claude-opus-5-5' });
     expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/work/a',
       thinking: 'high',
       parentSessionPath: '/sessions/orch.jsonl',
-      lineage: { parentSessionId: 'orch', parentDirectory: '/work/main', role: 'implement-hard' },
+      lineage: { parentSessionId: 'orch', parentDirectory: '/work/main', role: 'task-hard' },
     }));
     expect(deps.sendInput).toHaveBeenCalledWith({ sessionId: 'worker-1', text: 'Fix the bug\nDetails', delivery: 'prompt', operationId: undefined });
     expect(childRecordsOf(orchestrator).map((record) => record.sessionId)).toEqual(['worker-1']);

@@ -267,7 +267,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'sessions',
     title: "Worker roles",
     description: "Model and thinking level for each worker role, from orchestrate and plan to small tasks and review.",
-    keywords: ['orchestration', 'workers', 'roles', 'model', 'orchestrate', 'plan', 'oracle', 'debug', 'implement', 'easy', 'medium', 'hard', 'extreme', 'task', 'research', 'review', 'small', 'effort', 'subagents'],
+    keywords: ['orchestration', 'workers', 'roles', 'model', 'orchestrate', 'plan', 'oracle', 'debug', 'task', 'easy', 'medium', 'hard', 'extreme', 'research', 'review', 'small', 'effort', 'subagents'],
   },
   {
     id: 'sessions.thinking-defaults',

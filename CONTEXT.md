@@ -26,7 +26,7 @@ The lab image carries no provider credentials, so a recording of agent behavior 
 - Date: 2026-10-12
 - Settled by: Pi changing the Claude 5.5 `thinkingLevelMap`, or new Claude models that need new role defaults
 
-For `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-haiku-5-5`, Pi supports `low`, `medium`, `high`, `xhigh` and `max`, and sends each one as the same Anthropic effort with adaptive thinking. `off` and `minimal` map to null: Pi and the daemon (`thinking-levels.js`) raise them to `low`, so thinking never turns off, which the API would reject with 400. The orchestration role defaults are the owner's values (2026-10-12) with Anthropic's recommended effort levels as background; the e2e test checks that every Claude default is a level its model supports, so `xhigh` for `debug` and `implement-extreme` reaches Opus 5.5 as effort `xhigh`.
+For `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-haiku-5-5`, Pi supports `low`, `medium`, `high`, `xhigh` and `max`, and sends each one as the same Anthropic effort with adaptive thinking. `off` and `minimal` map to null: Pi and the daemon (`thinking-levels.js`) raise them to `low`, so thinking never turns off, which the API would reject with 400. The orchestration role defaults are the owner's values (2026-10-12) with Anthropic's recommended effort levels as background; the e2e test checks that every Claude default is a level its model supports, so `xhigh` for `debug` and `task-extreme` reaches Opus 5.5 as effort `xhigh`.
 
 ### Intent checkpoints rely on Pi extension behavior that is not proven yet
 
