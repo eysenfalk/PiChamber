@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { ORCHESTRATION_TOOLS } from './tool-contracts.js';
 import {
   CHILD_ENTRY,
   LINEAGE_ENTRY,
@@ -83,6 +84,15 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now } = {}) => {
 const expectCode = async (promise, code) => {
   await expect(promise).rejects.toMatchObject({ code });
 };
+
+describe('orchestration tool contracts', () => {
+  it('offers exactly the owner\'s eleven roles to session_spawn', () => {
+    const spawn = ORCHESTRATION_TOOLS.find((tool) => tool.name === 'session_spawn');
+    expect(spawn.parameters.properties.role.enum).toEqual([
+      'orchestrate', 'plan', 'oracle', 'debug', 'task-easy', 'task-medium', 'task-hard', 'task-extreme', 'research', 'small', 'review',
+    ]);
+  });
+});
 
 describe('orchestration service', () => {
   it('spawns a linked worker, starts its task and reports it as a slot', async () => {
@@ -276,8 +286,11 @@ describe('orchestration service', () => {
     await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ alreadyStopped: true });
   });
 
-  it('rejects unknown models and relative directories', async () => {
+  it('rejects unknown models, retired roles and relative directories', async () => {
     const { service } = createHarness();
+    for (const role of ['implementation', 'implement', 'task']) {
+      await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'x', role }), 'INVALID_ARGUMENT');
+    }
     await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'x', model: { modelId: 'nope' } }), 'ORCHESTRATION_MODEL_UNAVAILABLE');
     await expectCode(service.call('orch', 'session_spawn', { cwd: 'relative', task: 'x' }), 'INVALID_ARGUMENT');
     await expectCode(service.call('orch', 'no_such_tool'), 'UNKNOWN_TOOL');

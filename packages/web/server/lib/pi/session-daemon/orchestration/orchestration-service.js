@@ -181,6 +181,9 @@ export function createOrchestrationService(deps) {
 
   const resolveModel = async (args, settings) => {
     const role = args.role ? settings.roles[args.role] : undefined;
+    if (args.role && !role) {
+      throw new OrchestrationError('INVALID_ARGUMENT', `Unknown role: ${args.role}`);
+    }
     const requested = args.model ?? (role ? { providerId: role.providerId, modelId: role.modelId } : undefined);
     const thinking = args.thinking ?? role?.thinking;
     if (!requested) return { thinking };
