@@ -31,6 +31,8 @@
 - `workspaceTree.ts`: Pure model of the workspace tree (spec `specs/95-workspace-tree/`): Chats, projects with worktrees, folders and forks, Other folders; order, the five-session cut, rollups and default expansion. Every active session lands in exactly one node. Rendered by `SidebarWorkspaceTree`. `folderScopesByProject` and `sessionsByProject` derive bulk-selection scopes and project session lists from the same tree. Optional `hidden` (project ids plus `chats`, from `useProjectVisibilityStore`) drops those roots; a non-empty `query` instead narrows the tree to matching projects, worktrees, folders and session titles with their ancestors, includes hits in hidden projects (root marked `hiddenMatch`), dissolves the "N more" cut, and returns a transient `searchExpanded` overlay plus `matchCount`. `parents` and `placement` always describe the unfiltered tree; the stored expansion is never touched.
 - `treeDrop.ts`, `applyTreeDrop.ts`, `treeDnd.tsx`: drop rules, store effects and the dnd-kit wiring described above.
 - `treeKeyboard.ts`: Pure key-to-action mapping for the tree.
+- `worktreeStatusScheduler.ts`: Framework-free scheduler for the light git status of visible worktree rows: at most 2 fetches at once, one in flight per path, 60 s cadence per visible path counted from the end of the last attempt (failures retry at the same cadence), on-demand `refresh`/`refreshVisible`, `setActive(false)` while hidden, `dispose`. Records `ready` or `failed` per path; a failure keeps the last known status apart and is never read as clean. Clock and timers are injected.
+- `worktreePills.ts`: Pure mapping from a scheduler record plus PR summary to the pill model of D4 (`dirty`, `clean`, `ahead`, `behind`, `no-upstream`, `attention`, `unknown`, `pull-request`) and the project `N dirty` rollup. Renderers own icons, colors and strings.
 
 ### Hooks
 
@@ -41,6 +43,7 @@
 - `hooks/useWorkspaceTreeExpansion.ts`: Single writer of tree expansion; applies `defaultExpanded` when nothing is stored and opens the active session's ancestors once when it changes.
 - `hooks/useLongPressMenu.ts`: Shared 500 ms long press that opens a row's context menu on touch.
 - `hooks/useTreeKeyboard.ts`: Roving tab stop and key handling for tree rows.
+- `hooks/useWorktreeStatusScheduler.ts`: React binding of `worktreeStatusScheduler.ts` (slice 5 of #95, not yet mounted). Fetches light git status through `useGitStore.fetchStatus` (the cache) under `runBackgroundNetworkTask`, refreshes on window focus, pauses while the page is hidden, and rebuilds the scheduler on a runtime or git API change. `refresh(path)` is for expand and the end of a session turn.
 - `hooks/useAuthoritativeSessionCleanup.ts`: Establishes the first complete active+archived list as a non-destructive baseline, then cleans persisted state only for sessions omitted by a later authoritative snapshot.
 
 ### Types and utilities
