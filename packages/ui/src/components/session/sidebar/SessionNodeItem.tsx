@@ -229,7 +229,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const leadingIndicators = showPinnedMarker ? (
     <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">{pinnedMarkerContent}</span>
   ) : null;
-  const subsessionChevron = hasChildren ? (
+  const isTreeRow = renderContext === 'tree';
+  const subsessionChevron = hasChildren && !isTreeRow ? (
     <button
       type="button"
       onClick={(event) => {
@@ -374,12 +375,14 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 data-global-session={secondaryMeta?.globalSession ? '1' : undefined}
                 onClick={handleRowBackgroundClick}
                 style={{
-                  ...(depth > 0 ? { marginLeft: `${depth * 14}px` } : undefined),
+                  ...(depth > 0 && !isTreeRow ? { marginLeft: `${depth * 14}px` } : undefined),
                   ...(rowBackground ? { backgroundColor: rowBackground } : undefined),
                 }}
                 className={cn(
-                  'group relative my-0.5 flex cursor-pointer items-center rounded-xl px-3 py-2 transition-colors',
-                  !rowBackground && depth > 0
+                  isTreeRow
+                    ? 'group relative flex min-h-6 min-w-0 flex-1 cursor-pointer items-center rounded-md px-1.5 transition-colors'
+                    : 'group relative my-0.5 flex cursor-pointer items-center rounded-xl px-3 py-2 transition-colors',
+                  !rowBackground && depth > 0 && !isTreeRow
                     ? 'bg-secondary/30 hover:bg-interactive-hover'
                     : !rowBackground
                       ? 'hover:bg-interactive-hover'
@@ -458,13 +461,13 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                     </div>
                   </div>
 
-                  {(secondaryMeta?.showFolderLabel && tooltipProjectLabel) ||
+                  {!isTreeRow && ((secondaryMeta?.showFolderLabel && tooltipProjectLabel) ||
                   tooltipBranchLabel ||
                   isGitRepo ||
                   prSummary ||
                   subtaskCount > 0 ||
                   (agentName && agentName !== 'default') ||
-                  showActivityDuration ? (
+                  showActivityDuration) ? (
                     <div className="flex w-full min-w-0 items-center gap-2 overflow-hidden pt-0.5 typography-ui-label font-normal text-muted-foreground">
                       {secondaryMeta?.showFolderLabel && tooltipProjectLabel ? (
                         <span className="min-w-0 max-w-[110px] shrink-0 truncate">{tooltipProjectLabel}</span>
@@ -574,7 +577,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           {contextMenuContent}
         </ContextMenu.Root>
       </DraggableSessionRow>
-      {hasChildren && isExpanded
+      {hasChildren && isExpanded && !isTreeRow
         ? node.children.map((child): React.ReactNode => {
             const childRenderExtras: SessionNodeChildRenderExtras = childRenderExtrasFor
               ? childRenderExtrasFor(child)

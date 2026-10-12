@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { mkdtemp, rm, stat, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 // PiChamber's parent may point PI_PACKAGE_DIR into an Electron asar.
 const packageDir = process.env.PI_PACKAGE_DIR;
@@ -18,7 +19,7 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(seed.projects.map((p) => p.name)).toEqual(SEED_MANIFEST.projects.map((p) => p.name));
     for (const project of seed.projects) {
       expect((await stat(join(project.path, '.git'))).isDirectory()).toBe(true);
-      const expected = seed.sessions.filter((s) => s.project === project.name);
+      const expected = seed.sessions.filter((s) => s.directory === project.path);
       const directory = SessionManager.open(expected[0].path).getSessionDir();
       const listed = await SessionManager.list(project.path, directory);
       expect(listed.map((s) => s.name).sort()).toEqual(expected.map((s) => s.title).sort());
@@ -47,6 +48,23 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(Buffer.byteLength(forkText) - renameAt).toBeGreaterThan(FORK_WORK_AFTER_RENAME_BYTES);
     expect(Buffer.byteLength(forkText)).toBeGreaterThan(512 * 1024);
     expect((await stat(long.path)).mtimeMs).toBeGreaterThan((await stat(seed.sessions.find((s) => s.project === 'lab-beta').path)).mtimeMs);
+    // Sidebar tree fixtures: committed projects, linked worktrees, a fork chain, a home chat and a foreign folder.
+    const alpha = seed.projects.find((p) => p.name === 'lab-alpha');
+    const worktrees = spawnSync('git', ['-C', alpha.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout;
+    for (const worktree of SEED_MANIFEST.worktrees) {
+      const path = join(root, 'projects', 'lab-alpha-worktrees', worktree.name);
+      expect(worktrees).toContain(`worktree ${path}\nHEAD `);
+      expect(worktrees).toContain(`branch refs/heads/${worktree.name}`);
+      const session = seed.sessions.find((s) => s.worktree === worktree.name);
+      expect(session.directory).toBe(path);
+      expect((await SessionManager.list(path, SessionManager.open(session.path).getSessionDir())).map((s) => s.name)).toEqual([session.title]);
+    }
+    expect(spawnSync('git', ['-C', alpha.path, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim()).toBe('main');
+    const forkChild = seed.sessions.find((s) => s.role === 'fork-child');
+    expect(SessionManager.open(forkChild.path).getHeader().parentSession).toBe(fork.path);
+    expect(SessionManager.open(forkChild.path).getSessionName()).toBe(forkChild.title);
+    expect(seed.sessions.find((s) => s.role === 'chat').directory).toBe(root);
+    expect(seed.sessions.find((s) => s.role === 'foreign').directory).toBe(join(root, 'folders', 'scratch'));
     expect(await seedLab(root)).toEqual(seed); // A second startup preserves identities and user edits.
   } finally {
     await rm(temporary, { recursive: true, force: true });

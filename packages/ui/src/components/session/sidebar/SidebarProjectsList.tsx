@@ -1,3 +1,4 @@
+import type { SessionRenderContext } from './sessionNodeTypes';
 import React from 'react';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { formatDirectoryName, cn } from '@/lib/utils';
@@ -50,7 +51,7 @@ type Props = {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null; showFolderLabel?: boolean; globalSession?: boolean } | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: SessionRenderContext,
   ) => React.ReactNode;
   renderGroupSessions: (
     group: SessionGroup,

@@ -51,6 +51,8 @@ The `lab` tour reads `lab/seed-manifest.json` by default. The lab owns project n
 
 The `fork-rename` tour also reads the manifest. It checks that a freshly started lab daemon lists the session with role `fork` under its manifest title in the desktop sidebar, keeps it when the session is opened, and shows it in the hosted mobile drawer. The seeded fork's head carries the parent title and its rename lies 600 KiB before the end of the file, so a reader that searches only a fixed tail window lists the parent title instead.
 
+The `sidebar-tree` tour reads the manifest's `worktrees` and the session roles `long`, `fork`, `fork-child`, `worktree` and `chat`. It proves the workspace tree (issue #95) in the seeded app: Chats as the top-level node, a project that expands into its main checkout and linked worktrees, main's sessions, the fork chain behind the **Expand forks** toggles with its fork count, and the same tree in dark theme and in the hosted mobile drawer. Worktree rows are addressed by their `data-tree-node` key `w:<path>` from the manifest path, never by row index.
+
 The `add-device` tour needs no manifest. It opens the **Add a device** dialog in desktop and mobile, light and dark: desktop through `?settings=remote-instances`, hosted mobile (which ignores that parameter) through the sessions drawer, Settings and **Manage instances & pair devices**. The lab pod has no Tailscale interface, so each step requires **Home network only** to be the selected radio and **Tailscale (recommended)** to be disabled with its not-available hint. The Tailscale state itself cannot be recorded in the lab.
 
 ## Evidence rule

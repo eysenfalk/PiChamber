@@ -4,18 +4,18 @@ Temporary spec for #95 ([ADR 0009](../../docs/adr/0009-spec-folder-for-multi-pr-
 
 ## Next agent prompt
 
-Status 2026-10-12: spec written, nothing implemented. Slice 1 is planned in draft PR #100 and waits for the owner's approval.
+Status 2026-10-12: slices 1 (PR #100) and 2 are merged into `dev`; the owner approved all slice plans on 2026-10-12, so each slice goes from plan to merge without a new approval round. Choices taken without asking are in [choices.md](choices.md).
 
 You are picking up the sidebar workspace tree. Read this README, then the slice file of the next open slice, then `AGENTS.md` and every project skill the slice names. Work in one branch and one draft pull request per slice, based on `origin/dev`. Start a slice only after the previous one is merged into `dev`; slices are not stacked. Do not implement before the owner approved the pull request's plan.
 
-Next pickup: [slice 1, tree model](slices/1-tree-model.md) in PR #100.
+Next pickup: [slice 3, parity and cleanup](slices/3-parity.md).
 
-Blockers: none besides plan approval.
+Blockers: none.
 
 Global TODO:
 
-- [ ] [1 Tree model](slices/1-tree-model.md) (#96, PR #100)
-- [ ] [2 Tree in the sidebar](slices/2-tree-mounted.md) (#96)
+- [x] [1 Tree model](slices/1-tree-model.md) (#96, PR #100)
+- [x] [2 Tree in the sidebar](slices/2-tree-mounted.md) (#96)
 - [ ] [3 Parity and cleanup](slices/3-parity.md) (closes #96)
 - [ ] [4 Visibility filter and quick search](slices/4-filter-search.md) (closes #97)
 - [ ] [5 Git pills and pull requests](slices/5-git-pills.md) (#98)
@@ -107,7 +107,7 @@ Found by the code sweep and the four draft plans. Each has an owning slice.
 
 | Unknown | Settled by | If it goes wrong |
 |---|---|---|
-| Re-sorting on every running or waiting change causes render churn | measurement in slice 2 | sorting stays stable while a row is visible, as its own slice |
+| Re-sorting on every running or waiting change causes render churn | measured in slice 2: 0.21 ms per rebuild at 16 worktrees and 200 sessions; React render counts while streaming not yet measured (offline lab) | sorting stays stable while a row is visible, as its own slice, only if the owner sees lag |
 | Row count of a full search on real data | slice 4 | a virtualization slice before slice 4 merges |
 | Long press versus touch drag on project rows | slice 3, hosted mobile recording | drag handle on touch |
 | Bulk selection scope under the tree | slice 2 smoke test | moves to slice 3 |

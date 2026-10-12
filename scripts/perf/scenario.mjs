@@ -9,11 +9,30 @@
 import { evaluateValue, wait } from "./cdp.mjs"
 
 /**
- * Expands every project. The sidebar persists the ids of collapsed projects,
- * so an empty list expands everything. Requires a reload to take effect.
+ * Expands every node of the sidebar workspace tree by clicking each collapsed
+ * chevron until none remain. The tree persists its expansion
+ * (oc.sidebar.tree.expanded.v1), so a following reload keeps it. Waits up to
+ * `readyMs` for the tree to render first.
  */
-export const expandProjects = async (client) => {
-  await evaluateValue(client, `localStorage.setItem("oc.sessions.projectCollapse", "[]")`)
+export const expandProjects = async (client, { readyMs = 15_000, passes = 20, settleMs = 300 } = {}) => {
+  const deadline = Date.now() + readyMs
+  while (Date.now() < deadline) {
+    const ready = await evaluateValue(client, `document.querySelectorAll("[role=tree] [data-tree-node]").length`)
+    if (ready) break
+    await wait(250)
+  }
+  let totalClicked = 0
+  for (let pass = 0; pass < passes; pass += 1) {
+    const clicked = await evaluateValue(client, `(() => {
+      const toggles = [...document.querySelectorAll('[data-tree-node][aria-expanded="false"] [data-tree-toggle]')]
+      for (const toggle of toggles) toggle.click()
+      return toggles.length
+    })()`)
+    if (!clicked) break
+    totalClicked += clicked
+    await wait(settleMs)
+  }
+  return totalClicked
 }
 
 /**

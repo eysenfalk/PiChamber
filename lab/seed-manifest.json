@@ -5,9 +5,18 @@
     { "name": "lab-gamma", "path": "/lab/projects/lab-gamma" }
   ],
   "sessions": [
-    { "project": "lab-alpha", "title": "Lab: long session with tools", "role": "long" },
+    { "project": "lab-alpha", "title": "Lab: tools session", "role": "long" },
     { "project": "lab-beta", "title": "Lab: short session", "role": "short" },
     { "project": "lab-gamma", "title": "Lab: release notes", "role": "short" },
-    { "project": "lab-alpha", "title": "Lab: renamed fork", "role": "fork" }
+    { "project": "lab-alpha", "title": "Lab: renamed fork", "role": "fork" },
+    { "project": "lab-alpha", "title": "Lab: fork child", "role": "fork-child" },
+    { "project": "lab-alpha", "worktree": "sidebar-tree", "title": "Lab: tree row layout", "role": "worktree" },
+    { "project": "lab-alpha", "worktree": "search-filter", "title": "Lab: project filter", "role": "worktree" },
+    { "title": "Lab: quick chat", "role": "chat" },
+    { "folder": "scratch", "title": "Lab: scratch notes", "role": "foreign" }
+  ],
+  "worktrees": [
+    { "project": "lab-alpha", "name": "sidebar-tree" },
+    { "project": "lab-alpha", "name": "search-filter" }
   ]
 }

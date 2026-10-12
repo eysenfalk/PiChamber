@@ -1,4 +1,5 @@
 /* eslint-disable */
+import type { SessionRenderContext } from './sidebar/sessionNodeTypes';
 import React from 'react';
 import type { Session } from '@/lib/chat/types';
 import { toast } from '@/components/ui';
@@ -40,10 +41,13 @@ import { createSessionOwnershipIndex } from './sidebar/sessionOwnership';
 import { SessionGroupSection } from './sidebar/SessionGroupSection';
 import { SidebarHeader } from './sidebar/SidebarHeader';
 import { SidebarNav } from './sidebar/SidebarNav';
-import { SidebarSpacesBar } from './sidebar/SidebarSpacesBar';
 import { SidebarFooter } from './sidebar/SidebarFooter';
 import { isKnownActiveSessionDirectory } from './sidebar/sessionOwnership';
-import { SidebarProjectsList } from './sidebar/SidebarProjectsList';
+import { SidebarWorkspaceTree } from './sidebar/SidebarWorkspaceTree';
+import { useWorkspaceTreeModel } from './sidebar/hooks/useWorkspaceTreeModel';
+import { useWorkspaceTreeExpansion } from './sidebar/hooks/useWorkspaceTreeExpansion';
+import type { NodeKey } from './sidebar/workspaceTree';
+import { GLOBAL_PROJECT_ID } from '@/components/chat/composer/state/draftTargetProjects';
 import { SessionNodeItem } from './sidebar/SessionNodeItem';
 import type { SessionNodeRenderExtras } from './sidebar/sessionNodeItemUtils';
 import { useUpdateStore } from '@/stores/useUpdateStore';
@@ -140,8 +144,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const [expandedParents, setExpandedParents] = React.useState<Set<string>>(new Set());
   const safeStorage = React.useMemo(() => getDeferredSafeStorage(), []);
   const [collapsedProjects, setCollapsedProjects] = React.useState<Set<string>>(new Set());
-  const selectedSpaceId = useSidebarSpaceStore((state) => state.selectedSpaceId);
-  const selectedWorktreePath = useSidebarSpaceStore((state) => state.selectedWorktreePath);
+  const selectedNodeKey = useSidebarSpaceStore((state) => state.selectedNodeKey);
+  const selectNode = useSidebarSpaceStore((state) => state.select);
+  const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
 
   const [projectRepoStatus, setProjectRepoStatus] = React.useState<Map<string, boolean | null>>(new Map());
   const [visibleSessionCountByGroup, setVisibleSessionCountByGroup] = React.useState<Map<string, number>>(new Map());
@@ -315,21 +320,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     }
     return errors;
   }, [projects, worktreeProjects]);
-  React.useEffect(() => {
-    if (!selectedSpaceId) return;
-    const project = projects.find((candidate) => candidate.id === selectedSpaceId);
-    if (!project) {
-      useSidebarSpaceStore.getState().clearSpaceSelection();
-      return;
-    }
-    if (!selectedWorktreePath) return;
-    const stillAvailable = (availableWorktreesByProject.get(normalizePath(project.path) ?? project.path) ?? [])
-      .some((worktree) => normalizePath(worktree.path) === normalizePath(selectedWorktreePath));
-    if (!stillAvailable) {
-      useSidebarSpaceStore.getState().clearSelectedWorktree();
-      toast.warning('The selected worktree is no longer available. Showing the project checkout instead.');
-    }
-  }, [availableWorktreesByProject, projects, selectedSpaceId, selectedWorktreePath]);
   const openNewSessionDraft = useSessionUIStore((state) => state.openNewSessionDraft);
   // The sidebar tree's +-buttons (project / group / folder) open a draft but,
   // unlike selecting an existing session, don't navigate. VS Code's compact view
@@ -414,7 +404,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     gitBranches,
   });
 
-  const { scheduleCollapsedProjectsPersist } = useSidebarPersistence({
+  useSidebarPersistence({
     safeStorage,
     keys: {
       sessionExpanded: SESSION_EXPANDED_STORAGE_KEY,
@@ -680,15 +670,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       } else {
         next.add(projectId);
       }
-      try {
-        safeStorage.setItem(PROJECT_COLLAPSE_STORAGE_KEY, JSON.stringify(Array.from(next)));
-      } catch { /* ignored */ }
-
-      // Persist collapse state to server settings (web + desktop local/remote).
-      scheduleCollapsedProjectsPersist(next);
       return next;
     });
-  }, [resetProjectSessionLimits, safeStorage, scheduleCollapsedProjectsPersist]);
+  }, [resetProjectSessionLimits]);
 
   const normalizedProjects = React.useMemo(() => {
     return projects
@@ -935,31 +919,30 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     projectSections,
     flatSectionsForRender,
     sectionsForRender,
-    selectedSpaceId,
-    selectedWorktreePath,
+    selectedSpaceId: null,
+    selectedWorktreePath: null,
     homeDirectory,
     activeSessionIdSet,
     unreadSessionIdSet,
   });
 
-  const handleSelectProject = React.useCallback((id: string | null) => {
-    useSidebarSpaceStore.getState().selectSpace(id);
-    if (!id) return;
-    setActiveProjectIdOnly(id);
-    const section = projectSections.find((candidate) => candidate.project.id === id);
-    const rootGroup = section?.groups.find((group) => group.isMain);
-    const firstSession = rootGroup?.sessions[0]?.session;
-    if (firstSession) {
-      stableHandleSessionSelect(firstSession.id, rootGroup?.directory ?? section?.project.normalizedPath ?? null, { keepPanelOpen: true });
-    } else if (section) {
-      openNewSessionDraftFromTree({ selectedProjectId: id, directoryOverride: section.project.normalizedPath });
-    }
-  }, [
-    openNewSessionDraftFromTree,
-    projectSections,
-    setActiveProjectIdOnly,
-    stableHandleSessionSelect,
-  ]);
+  const workspaceTreeModel = useWorkspaceTreeModel({
+    projects: normalizedProjects,
+    worktreesByProjectPath: availableWorktreesByProject,
+    ownership: sessionOwnership,
+    sessions,
+    foldersByScope: foldersMap,
+    pinnedSessionIds,
+    runningSessionIds: activeSessionIdSet,
+    unseenSessionIds: unreadSessionIdSet,
+    discoveryComplete: worktreeTopologyState.complete,
+  });
+  const workspaceTreeExpansion = useWorkspaceTreeExpansion(workspaceTreeModel.tree, currentSessionId);
+  const handleSelectTreeNode = React.useCallback((key: NodeKey) => {
+    selectNode(key);
+    const projectId = workspaceTreeModel.nodesByKey.get(key)?.projectId;
+    if (projectId) setActiveProjectIdOnly(projectId);
+  }, [selectNode, setActiveProjectIdOnly, workspaceTreeModel.nodesByKey]);
 
   // Discover/refresh PR status for expanded projects' worktree branches so
   // session rows can tint their branch marker and show PR state in tooltips.
@@ -980,7 +963,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       projectId?: string | null,
       archivedBucket: boolean = false,
       secondaryMeta?: { projectLabel?: string | null; branchLabel?: string | null; globalSession?: boolean } | null,
-      renderContext: 'project' | 'recent' = 'project',
+      renderContext: SessionRenderContext = 'project',
       renderExtras?: SessionNodeRenderExtras,
     ): React.ReactNode => (
       <SessionNodeItem
@@ -1198,9 +1181,17 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     if (mobileVariant) {
       setSessionSwitcherOpen(false);
     }
-    openNewSessionDraft();
+    // New session lands in the selected tree node; Chats or no selection starts a chat without a workspace.
+    const selected = selectedNodeKey ? workspaceTreeModel.nodesByKey.get(selectedNodeKey as NodeKey) : undefined;
+    if (selected?.projectId && selected.directory) {
+      openNewSessionDraft({ selectedProjectId: selected.projectId, directoryOverride: selected.directory });
+    } else if (selected?.kind === 'chats') {
+      openNewSessionDraft({ selectedProjectId: GLOBAL_PROJECT_ID });
+    } else {
+      openNewSessionDraft();
+    }
     onNavigateAway?.();
-  }, [mobileVariant, onNavigateAway, openNewSessionDraft, setActiveMainTab, setSessionSwitcherOpen]);
+  }, [mobileVariant, onNavigateAway, openNewSessionDraft, selectedNodeKey, setActiveMainTab, setSessionSwitcherOpen, workspaceTreeModel.nodesByKey]);
 
   const handleRequestCloseWorktree = React.useCallback((projectId: string, worktree: NonNullable<CloseWorktreeConfirmState>['worktree']) => {
     const project = projects.find((candidate) => candidate.id === projectId);
@@ -1261,11 +1252,11 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         refreshed = await refreshWorktreeProject(pending.projectPath, git, { force: true });
       }
       const isCurrentWorktree = targetPath !== null && normalizePath(currentDirectory) === targetPath;
-      const isSelectedWorktree = targetPath !== null
-        && selectedSpaceId === pending.projectId
-        && normalizePath(selectedWorktreePath) === targetPath;
-      if (isCurrentWorktree || isSelectedWorktree) {
-        handleSelectProject(pending.projectId);
+      if (targetPath !== null && selectedNodeKey === `w:${targetPath}`) {
+        selectNode(`p:${pending.projectId}`);
+      }
+      if (isCurrentWorktree) {
+        openNewSessionDraftFromTree({ selectedProjectId: pending.projectId, directoryOverride: normalizePath(pending.projectPath) });
       }
 
       setCloseWorktreeConfirm(null);
@@ -1283,10 +1274,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     closeWorktreeConfirm,
     currentDirectory,
     git,
-    handleSelectProject,
+    openNewSessionDraftFromTree,
     refreshWorktreeProject,
-    selectedSpaceId,
-    selectedWorktreePath,
+    selectNode,
+    selectedNodeKey,
   ]);
 
   return (
@@ -1336,7 +1327,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         sessionSearchQuery={sessionSearchQuery}
         setSessionSearchQuery={setSessionSearchQuery}
         hasSessionSearchQuery={hasSessionSearchQuery}
-        searchMatchCount={searchMatchCount + (selectedSpaceId === null ? allFoldersOnlySearchMatchCount : 0)}
+        searchMatchCount={searchMatchCount + allFoldersOnlySearchMatchCount}
         selectionModeEnabled={selectionModeEnabled}
         onToggleSelectionMode={handleToggleSelectionMode}
         mobileVariant={mobileVariant}
@@ -1351,73 +1342,20 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         </div>
       ) : null}
 
-      {!hideDirectoryControls && projectSections.length > 0 ? (
-        <SidebarSpacesBar
-          projects={projectSections.map((s) => s.project)}
-          selectedProjectId={selectedSpaceId}
-          selectedWorktreePath={selectedWorktreePath}
-          worktreesByProject={availableWorktreesByProject}
-          worktreeErrorsByProject={worktreeErrorsByProject}
-          onSelectProject={handleSelectProject}
-          onSelectWorktree={(projectId, worktreePath) => {
-            useSidebarSpaceStore.getState().selectWorktree(projectId, worktreePath);
-            setActiveProjectIdOnly(projectId);
-            const section = projectSections.find((candidate) => candidate.project.id === projectId);
-            const group = section?.groups.find((candidate) => normalizePath(candidate.directory) === normalizePath(worktreePath));
-            const firstSession = group?.sessions[0]?.session;
-            if (firstSession) {
-              stableHandleSessionSelect(firstSession.id, worktreePath, { keepPanelOpen: true });
-            } else {
-              openNewSessionDraftFromTree({ selectedProjectId: projectId, directoryOverride: worktreePath });
-            }
-          }}
-          onCloseWorktree={handleRequestCloseWorktree}
-          onOpenDirectoryDialog={handleOpenDirectoryDialog}
-          onOpenProjectEditDialog={setEditingProjectDialogId}
-          onRemoveProject={removeProject}
-          totalSessionCount={totalSessionCount}
-          getSessionCountForProject={(id) => sessionCountByProject.get(id) ?? 0}
-          hasActiveSessionByProject={hasActiveSessionByProject}
-          activeDirectoriesByProject={activeDirectoriesByProject}
-          hasUnseenByProject={hasUnseenByProject}
-          homeDirectory={homeDirectory}
-          mobileVariant={mobileVariant}
-        />
-      ) : null}
-
-      <SidebarProjectsList
-        sectionsForRender={filteredSectionsForSidebarRender}
-        allFoldersOnlySection={selectedSpaceId === null ? allFoldersOnlySection : null}
-        projectSections={projectSections}
-        activeProjectId={activeProjectId}
-        showOnlyMainWorkspace={showOnlyMainWorkspace}
-        hasSessionSearchQuery={hasSessionSearchQuery}
+      <SidebarWorkspaceTree
+        tree={workspaceTreeModel.tree}
+        expanded={workspaceTreeExpansion.expanded}
+        setOpen={workspaceTreeExpansion.setOpen}
+        selectedNodeKey={selectedNodeKey}
+        onSelectNode={handleSelectTreeNode}
+        activeSessionId={currentSessionId}
+        renderSession={(node, directory, projectId) => renderSessionNode(node, 0, directory, projectId, false, null, 'tree')}
+        onOpenProjectEditDialog={setEditingProjectDialogId}
+        onRemoveProject={removeProject}
+        onCloseWorktree={handleRequestCloseWorktree}
+        onOpenDirectoryDialog={hideDirectoryControls ? undefined : handleOpenDirectoryDialog}
         emptyState={emptyState}
-        searchEmptyState={searchEmptyState}
-        isAllFoldersView={selectedSpaceId === null}
-        pinnedSessionIds={pinnedSessionIds}
-        renderSessionNode={renderSessionNode}
-        renderGroupSessions={renderGroupSessions}
-        homeDirectory={homeDirectory}
-        collapsedProjects={collapsedProjects}
-        hideDirectoryControls={hideDirectoryControls}
-        projectRepoStatus={projectRepoStatus}
         mobileVariant={mobileVariant}
-        alwaysShowActions={alwaysShowSidebarActions}
-        toggleProject={toggleProject}
-        setActiveProjectIdOnly={setActiveProjectIdOnly}
-        setActiveMainTab={setActiveMainTab}
-        setSessionSwitcherOpen={setSessionSwitcherOpen}
-        openNewSessionDraft={openNewSessionDraftFromTree}
-        openProjectEditDialog={setEditingProjectDialogId}
-        removeProject={removeProject}
-        reorderProjects={reorderProjects}
-        getOrderedGroups={getOrderedGroups}
-        setGroupOrderByProject={setGroupOrderByProject}
-        renderProjectStatusIndicator={renderProjectStatusIndicator}
-        openSidebarMenuKey={openSidebarMenuKey}
-        setOpenSidebarMenuKey={setOpenSidebarMenuKey}
-        isInlineEditing={isInlineEditing}
       />
 
       {/* Dedicated mobile: the new-session action floats above the session

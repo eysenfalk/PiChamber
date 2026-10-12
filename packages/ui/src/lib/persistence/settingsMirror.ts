@@ -137,26 +137,8 @@ export const persistToLocalStorage = (settings: DesktopSettings): void => {
     localStorage.removeItem('pinnedDirectories');
   }
 
-  if (Array.isArray(settings.projects) && settings.projects.length > 0) {
-    const collapsed = settings.projects
-      .filter(
-        (project) =>
-          (project as unknown as { sidebarCollapsed?: boolean })
-            .sidebarCollapsed === true
-      )
-      .map((project) => project.id)
-      .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    if (collapsed.length > 0) {
-      localStorage.setItem(
-        'oc.sessions.projectCollapse',
-        JSON.stringify(collapsed)
-      );
-    } else {
-      localStorage.removeItem('oc.sessions.projectCollapse');
-    }
-  } else {
-    localStorage.removeItem('oc.sessions.projectCollapse');
-  }
+  // Project collapse is no longer mirrored: the workspace tree keeps its own
+  // local expansion (oc.sidebar.tree.expanded.v1).
   // Retired gitmojiEnabled and directoryShowHidden are intentionally not mirrored:
   // the directory surface owns its built-in default and must not be restored from settings.
   if (typeof settings.filesViewShowGitignored === 'boolean') {

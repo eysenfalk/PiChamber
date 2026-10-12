@@ -10,6 +10,7 @@ lab/run status
 lab/run record lab           # captioned screenshots and H.264 video in .proof/lab/
 lab/run record fork-rename   # renamed large fork listed by a fresh daemon, in .proof/fork-rename/
 lab/run record add-device    # Add a device dialog without Tailscale, in .proof/add-device/
+lab/run record sidebar-tree  # Workspace tree: Chats, worktrees, fork chain, other folders, in .proof/sidebar-tree/
 lab/run down                # removes pod, internal network and lab state volume
 ```
 
@@ -43,4 +44,4 @@ podman exec pichamber-lab-server curl --connect-timeout 3 --max-time 5 https://e
 # curl must fail; network probes do not authorize runtime internet access.
 ```
 
-Open the printed URL. Select `Lab Alpha` (the prettified `lab-alpha` basename), then `Lab: long session with tools`; `lab-beta` contains `Lab: short session`. Check both desktop (1440×900) and mobile (390×844). Only synthetic lab text should be visible. Look at every saved image before publishing it. Inspect every PNG, the contact sheet and the recording, then publish from the host with `bun run proof:publish -- <pr> lab`. Captions sit below the app, never over it. `lab/run record fixture-broken` must fail on its missing `#clipped` evidence in the real lab; host fixture tests also cover actual clipping. Publishing and GitHub access never run inside the lab. [ADR 0004](../docs/adr/0004-proof-lab.md) records the decision.
+Open the printed URL. Select `Lab Alpha` (the prettified `lab-alpha` basename), then `Lab: tools session`; `lab-beta` contains `Lab: short session`. Check both desktop (1440×900) and mobile (390×844). Only synthetic lab text should be visible. Look at every saved image before publishing it. Inspect every PNG, the contact sheet and the recording, then publish from the host with `bun run proof:publish -- <pr> lab`. Captions sit below the app, never over it. `lab/run record fixture-broken` must fail on its missing `#clipped` evidence in the real lab; host fixture tests also cover actual clipping. Publishing and GitHub access never run inside the lab. [ADR 0004](../docs/adr/0004-proof-lab.md) records the decision.
