@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { createPiSettingsStore } from './settings-store.js';
+import { createPiSettingsStore, DEFAULT_ORCHESTRATION_SETTINGS, resolveOrchestrationSettings } from './settings-store.js';
 
 describe('Pi settings sidecar', () => {
   it('round-trips PiChamber defaults without mixing them into Pi settings', async () => {
@@ -142,5 +142,56 @@ describe('Pi settings sidecar', () => {
     expect(resolveEffective(7, 5)).toBe(7);
     expect(resolveEffective(undefined, undefined)).toBe(3);
     expect(resolveEffective(0, 5)).toBe(0);
+  });
+
+  it('stores orchestration overrides and merges them over the role defaults', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const file = join(root, 'pi', 'settings.json');
+    const store = createPiSettingsStore({ file });
+
+    expect(resolveOrchestrationSettings(await store.read())).toEqual({
+      workerLimit: 4,
+      roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
+    });
+
+    await store.update({ orchestration: { workerLimit: 2, roles: { review: { providerId: 'openai', modelId: ' gpt-6.1-sol ', thinking: 'xhigh' } } } });
+    await store.update({ orchestration: { roles: { small: { modelId: 'tiny' } } } });
+    const stored = await store.read();
+    expect(stored.orchestration).toEqual({
+      workerLimit: 2,
+      roles: {
+        review: { providerId: 'openai', modelId: 'gpt-6.1-sol', thinking: 'xhigh' },
+        small: { modelId: 'tiny' },
+      },
+    });
+    const resolved = resolveOrchestrationSettings(stored);
+    expect(resolved.workerLimit).toBe(2);
+    expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'low' });
+    expect(resolved.roles.implementation).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
+
+    // A role set to null returns to its default; null clears every override.
+    await store.update({ orchestration: { roles: { small: null } } });
+    expect((await store.read()).orchestration.roles).not.toHaveProperty('small');
+    await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
+  });
+
+  it('rejects invalid orchestration settings without changing stored state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const file = join(root, 'pi', 'settings.json');
+    const store = createPiSettingsStore({ file });
+    await store.update({ orchestration: { workerLimit: 3 } });
+    for (const orchestration of [
+      { workerLimit: 0 },
+      { workerLimit: 17 },
+      { workerLimit: 2.5 },
+      { roles: { planner: { modelId: 'x' } } },
+      { roles: { small: { modelId: '' } } },
+      { roles: { small: { modelId: 'x', thinking: 'loud' } } },
+      { roles: [] },
+      'four',
+    ]) {
+      await expect(store.update({ orchestration })).rejects.toMatchObject({ code: 'PI_SETTINGS_INVALID' });
+    }
+    await expect(store.read()).resolves.toEqual({ version: 1, orchestration: { workerLimit: 3 } });
   });
 });

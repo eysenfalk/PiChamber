@@ -57,6 +57,9 @@ import {
   validatePiSessionJsonlFile,
 } from './session-jsonl.js';
 import { resolvePiChamberDataDir } from '../../pichamber-data-dir.js';
+import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from './orchestration/host-info.js';
+import { LINEAGE_ENTRY, OrchestrationError, createOrchestrationService } from './orchestration/orchestration-service.js';
+import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
 const textFromContent = (content) => (
   Array.isArray(content)
@@ -129,7 +132,9 @@ export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), se
     const services = await createAgentSessionServices({
       cwd: runtimeCwd,
       agentDir: runtimeAgentDir,
-      resourceLoaderOptions: {},
+      resourceLoaderOptions: hooks?.extensionFactories?.length
+        ? { extensionFactories: hooks.extensionFactories }
+        : {},
     });
 
     const result = {
@@ -598,6 +603,7 @@ export function createSessionDaemon({
     ?? ((runtimeOptions, runtimeHooks) => createPiSessionRuntime(runtimeOptions, runtimeHooks));
   const createRuntime = (runtimeOptions) => baseCreateRuntime(runtimeOptions, {
     createExtensionBindings: buildExtensionBindings,
+    extensionFactories: [orchestrationExtension],
   });
 
   const getSessionState = () => runtime
@@ -1843,7 +1849,9 @@ export function createSessionDaemon({
     };
   };
 
-  const createSession = async (payload) => {
+  // `worker` is internal only (orchestration spawns): it links the new
+  // session to its orchestrator and leaves the daemon's active session alone.
+  const createSession = async (payload, worker) => {
     const explicitRetryLimit = payload && typeof payload === 'object' ? (payload.maxRetries ?? payload.retryLimit ?? payload.defaultRetryLimit) : undefined;
     if (explicitRetryLimit !== undefined && (!Number.isInteger(explicitRetryLimit) || explicitRetryLimit < 0 || explicitRetryLimit > 10)) {
       throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The retry limit must be an integer between 0 and 10.');
@@ -1873,7 +1881,7 @@ export function createSessionDaemon({
     const newRuntime = await createRuntime({
       cwd: targetCwd,
       agentDir,
-      ...(parent ? { sessionFile: parent.path } : {}),
+      ...(parent && !worker ? { sessionFile: parent.path } : {}),
     });
     if (!newRuntime.cwd) newRuntime.cwd = targetCwd;
     // Apply default retry limit for new sessions. Explicit per-run overrides win.
@@ -1901,9 +1909,15 @@ export function createSessionDaemon({
     } catch {}
     let result = { cancelled: false };
     if (typeof newRuntime.newSession === 'function') {
+      const parentSession = worker?.parentSessionPath ?? parent?.path;
       result = await newRuntime.newSession({
-        ...(parent ? { parentSession: parent.path } : {}),
-        ...(payload.title ? { setup: async (manager) => manager.appendSessionInfo(payload.title.trim()) } : {}),
+        ...(parentSession ? { parentSession } : {}),
+        ...(payload.title || worker ? {
+          setup: async (manager) => {
+            if (payload.title) manager.appendSessionInfo(payload.title.trim());
+            if (worker) manager.appendCustomEntry(LINEAGE_ENTRY, worker.lineage);
+          },
+        } : {}),
       });
     } else if (payload.title && newRuntime.session?.sessionManager?.appendSessionInfo) {
       newRuntime.session.sessionManager.appendSessionInfo(payload.title.trim());
@@ -1949,9 +1963,11 @@ export function createSessionDaemon({
       throw error;
     }
     runtimeRegistry.register(newRuntime, { cwd: targetCwd });
-    runtime = newRuntime;
-    activeDirectory = targetCwd;
-    rememberRuntimeSession();
+    if (!worker) {
+      runtime = newRuntime;
+      activeDirectory = targetCwd;
+      rememberRuntimeSession();
+    }
     const created = projectActiveSession(newRuntime, targetCwd);
     const createdTitle = created.session.title
       || (typeof payload.title === 'string' ? payload.title.trim() : '')
@@ -3712,6 +3728,7 @@ export function createSessionDaemon({
         toolInputBySession.delete(sessionId);
         clearToolTimingsForSession(sessionId, { keepCompleted: true });
         publish('session.lifecycle', { state: 'idle', serverNow: Date.now() }, sessionId, directory);
+        void orchestration.onSessionSettled(sessionId, owningRuntime).catch(() => {});
         if (!completeRequestedShutdown(sessionId)) {
           void flushPendingResourceReload(owningRuntime).then(() => {
             if (!shutdownRequestedBySession.has(sessionId)) scheduleIdleDisposal(sessionId);
@@ -3792,6 +3809,72 @@ export function createSessionDaemon({
       }
       default:
         break;
+    }
+  };
+
+  const abortSession = async (sessionId, directory) => {
+    const activeRuntime = await activateSession(sessionId, directory);
+    const streaming = activeRuntime.session.isStreaming;
+    await activeRuntime.session.abort();
+    if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, sessionId, activeRuntime.cwd);
+  };
+
+  const orchestration = createOrchestrationService({
+    activateSession,
+    getLiveRuntime: (sessionId) => runtimeRegistry?.findBySessionId(sessionId),
+    listLiveRuntimes: () => runtimeRegistry?.listAll() ?? [],
+    getSessionState: (sessionId) => {
+      if (retryStateBySession.has(sessionId)) return 'retry';
+      const live = runtimeRegistry?.findBySessionId(sessionId);
+      if (!live) return 'dormant';
+      return live.session.isStreaming || activeRunStartedAt.has(sessionId) ? 'busy' : 'idle';
+    },
+    createWorkerSession: async ({ cwd: workerCwd, title, model, thinking, parentSessionPath, lineage }) => {
+      const created = await createSession(
+        { cwd: workerCwd, title, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) },
+        { parentSessionPath, lineage },
+      );
+      const sessionId = created.session.id;
+      return { sessionId, cwd: runtimeRegistry?.findBySessionId(sessionId)?.cwd ?? workerCwd };
+    },
+    sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
+      { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },
+      delivery === 'prompt' ? undefined : delivery,
+    ),
+    abortSession: (sessionId) => abortSession(sessionId),
+    readSettings: createOrchestrationSettingsReader({ dataDir: resolvePiChamberDataDir() }),
+    listModels: async () => (await listProviders()).providers.flatMap((provider) => provider.models.map((model) => ({
+      providerId: model.providerId,
+      modelId: model.id,
+      ...(model.label ? { label: model.label } : {}),
+      available: provider.authenticated,
+    }))),
+    hostStatus: readHostStatus,
+    resolveBranch: readGitBranch,
+  });
+  const orchestrationExtension = createOrchestrationExtension(orchestration);
+
+  // Bounded below the 60s tool-call timeout of MCP clients; the in-process
+  // extension path waits as long as the tool call asks.
+  const ORCHESTRATION_IPC_MAX_WAIT_MS = 50_000;
+
+  // Tool errors are results, not protocol failures: a protocol error closes
+  // the daemon connection and loses the reason the model needs to recover.
+  const callOrchestration = async (payload) => {
+    if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string' || payload.sessionId.length === 0
+      || typeof payload.tool !== 'string' || (payload.args !== undefined && (typeof payload.args !== 'object' || payload.args === null))) {
+      throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The orchestration call is invalid.');
+    }
+    try {
+      return { value: await orchestration.call(payload.sessionId, payload.tool, payload.args ?? {}, { maxWaitMs: ORCHESTRATION_IPC_MAX_WAIT_MS }) };
+    } catch (error) {
+      return {
+        error: {
+          code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED',
+          message: redactAttachmentPaths(error?.message ?? String(error)),
+          ...(error instanceof OrchestrationError && error.details !== undefined ? { details: error.details } : {}),
+        },
+      };
     }
   };
 
@@ -4143,6 +4226,11 @@ export function createSessionDaemon({
         writeDetailResponse(socket, message.requestId, result);
         return;
       }
+      case 'orchestration.call': {
+        const result = await callOrchestration(message.payload);
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
       case 'sessions.prompt':
       case 'sessions.steer':
       case 'sessions.followUp': {
@@ -4190,10 +4278,7 @@ export function createSessionDaemon({
         return;
       }
       case 'sessions.abort': {
-        const activeRuntime = await activateSession(message.payload?.sessionId, message.payload?.directory || message.payload?.cwd);
-        const streaming = activeRuntime.session.isStreaming;
-        await activeRuntime.session.abort();
-        if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, message.payload.sessionId, activeRuntime.cwd);
+        await abortSession(message.payload?.sessionId, message.payload?.directory || message.payload?.cwd);
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result: {} });
         return;
       }
