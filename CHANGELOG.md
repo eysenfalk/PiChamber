@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Pi 1.1.0 (#93).** The server and session daemon run on Pi SDK 1.1.0 instead of 1.0.2. The daemon advertises its extension runner, so extensions that wrap tool execution, such as pi-fabric 0.114, no longer fail every non-read tool with "unavailable until extension tool hooks initialize".
+
 ## [1.0.7] - 2026-10-05
 
 Pairing over Tailscale since 1.0.6.
