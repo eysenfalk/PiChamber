@@ -1,68 +1,76 @@
 # Slice 2. Worker reports and digest
 
-Closes #117. Depends on slice 1. Proposed role: `task-medium`.
+Part of #117 (closed by slice 4 with its lab proof). Depends on slice 1. Proposed role: `task-hard`.
 
 ## Contract
 
-Workers report through a tool instead of free text, and one call gives the orchestrator the state of all its workers in a result that is a small fraction of their transcripts.
+Workers report through a tool instead of free text, and one call gives the orchestrator the state of all its workers, a small fraction of their transcripts, without activating dormant runtimes. Unknown values are `null`, not zero.
 
 ## API seam
 
-New tool, worker only (orchestrators get `ORCHESTRATION_FORBIDDEN`):
+New tool, worker only (policy of slice 1):
 
 ```js
 worker_report {
   kind: 'progress' | 'question' | 'blocked' | 'ready' | 'done',
-  summary: string,              // one line, max 300
-  audience?: 'orchestrator' | 'owner',   // for question and blocked
-  pullRequest?: number,         // ready, done
-  evidence?: string[],          // max 10 items, each max 500: commands with results, proof links
+  summary: string,                 // one line, max 300
+  audience?: 'orchestrator' | 'owner',   // question, blocked
+  resolves?: string,               // question id this report settles
+  pullRequest?: number,
+  noPullRequest?: string,          // reason, for done without a pull request
+  evidence?: string[],             // max 10, each max 500
   clientRequestId?,
 }
 ```
 
-The service stores the latest report per kind group in the worker's record (`report`, and `openQuestion` for `question` and `blocked`). An open question clears when the worker receives its next input from any source: `session_send`, the owner's prompt in the UI, or a steer. The daemon's prompt and steer path calls one `onInputAccepted(sessionId)` hook for this. `ready` and `done` set `pullRequest` in the record when given.
+Validation by kind: `done` needs `evidence` with at least one item and either `pullRequest` or `noPullRequest`; `ready` needs `pullRequest`; `question` and `blocked` need `audience`. A rejected report changes nothing.
+
+`question` and `blocked` create `question: { id, kind, audience, summary, at }` in the record, replacing an older one. It closes only when the worker sends its next report (any kind), or when the orchestrator calls `session_send { ..., resolves: '<id>' }` (new optional field). A UI prompt from the owner or an unrelated `session_send` leave it open; the digest shows `lastInputAt` so the orchestrator sees that someone wrote.
+
+`done` moves the worker to `done` (slice 1 transitions). `ready` and `done` store `pullRequest` with the repository of the worker's cwd.
+
+Snapshot at every settle of a registered worker, written by the service: `snapshot: { at, lastProgressAt, lastError: { message, at } | null, usage: { input, output, cacheRead, cacheWrite, cost } }`. `usage` is the session total at that settle, computed from the runtime that just settled.
 
 New tool, orchestrator only:
 
 ```js
 orchestration_digest { sessionIds?: string[] } → {
-  at: epochMs,
-  limit: { workerLimit, active },
+  at,
+  limit: { workerLimit, used },
   workers: [{
     sessionId, title, role, issue, branch, worktree, pullRequest,
-    lifecycle,                 // registry state
-    live: 'starting' | 'busy' | 'retry' | 'waiting_input' | 'idle' | 'dormant',
-    since: epochMs,            // start of the current live state
-    lastProgressAt,            // latest assistant message, tool result or report
-    report: { kind, summary, at, evidence? },
-    openQuestion: { audience, summary, at } | null,
-    lastError: { message, at } | null,  // last run's error, first 300 characters
-    usage: { input, output, cacheRead, cacheWrite, cost },
+    lifecycle, lifecycleSince,            // registry state and since
+    live, liveSince,                      // 'busy' | 'retry' | 'waiting_input' | 'idle' | 'dormant', null if unknown
+    lastProgressAt,                       // live when resident, else snapshot; null if never seen
+    lastInputAt,
+    report: { kind, summary, at, pullRequest?, evidence? } | null,
+    question: { id, audience, summary, at } | null,
+    lastError: { message, at } | null,
+    usage: { settled, settledAt, currentRun } | null,  // currentRun only while busy, from the live run's messages
   }],
 }
 ```
 
-`usage` is a snapshot the service writes into the record at each settle, so a dormant worker is never activated for the digest. `waiting_input` comes from a pending extension dialog of that session (`extension.dialog`), the same live channel the UI uses.
+`live` comes from the owners named in the README: the runtime registry (busy, idle, dormant), the retry state map (retry) and the extension bridge's pending dialogs (waiting_input). `session_read` stays for the rare full look.
 
-`session_read` stays for the rare full look. Instructions and the skill tell workers to report through `worker_report`, and the orchestrator to read the digest.
+The worker preamble (slice 1) tells workers to report through `worker_report`; `instructions.js` and the skill tell the orchestrator to read the digest.
 
 ## What the owner sees
 
-A test with four faux workers that each produced a long transcript: the digest's JSON is under 10 % of their combined `session_read` output. A worker's `done` report carries its pull request and evidence. The lab recording comes with slice 3, where the wake points at the digest.
+Tests: four faux workers with long transcripts, the digest's JSON under 10 % of their combined `session_read` output; `done` without evidence refused; an unrelated `session_send` and a UI prompt leave the question open, a report and `resolves` close it; digest after disposal and after a daemon restart shows snapshot values with their time and `live: 'dormant'` without activating a runtime; a retry shows `live: 'retry'`; an open dialog shows `waiting_input`; usage during a run is `settled` plus `currentRun` without double counting after the settle.
 
 ## Gates
 
-Focused tests for the report tool, the open question lifecycle (cleared by `session_send` and by a UI prompt), the digest shape and the size ratio; type check, lint, `bun run test`.
+Focused tests above, type check, lint, `bun run test`.
 
 ## Left to the implementer
 
-How the summary of `lastError` is cut, the exact usage fields that Pi's assistant messages provide, whether the per-settle usage snapshot is stored as a total or as a sum of deltas.
+How `lastError` is cut, how `currentRun` is read from the live session, the exact usage fields Pi provides.
 
 ## Stays green
 
-#107 result delivery still works; it is replaced in slice 3.
+#107 result delivery; it is replaced in slice 3.
 
 ## Feedback that changes this slice
 
-The orchestrator still reads transcripts after this slice: the digest misses a field, add it here.
+The orchestrator still reads transcripts after this slice: add the missing field here.
