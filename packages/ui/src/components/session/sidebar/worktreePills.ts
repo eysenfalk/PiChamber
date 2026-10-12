@@ -22,7 +22,7 @@ export type WorktreePill =
   | { kind: 'unknown' }
   | { kind: 'pull-request'; number: number; state: PrVisualSummary['visualState'] };
 
-export type WorktreePills = {
+type WorktreePills = {
   pills: WorktreePill[];
   /** When the shown status was fetched, for the tooltip of the ahead and behind pills. */
   fetchedAt: number | null;

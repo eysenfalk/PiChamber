@@ -16,7 +16,8 @@
     { "folder": "scratch", "title": "Lab: scratch notes", "role": "foreign" }
   ],
   "worktrees": [
-    { "project": "lab-alpha", "name": "sidebar-tree" },
-    { "project": "lab-alpha", "name": "search-filter" }
+    { "project": "lab-alpha", "name": "sidebar-tree", "git": "dirty" },
+    { "project": "lab-alpha", "name": "search-filter", "git": "ahead-behind" },
+    { "project": "lab-alpha", "name": "rebase-stop", "git": "rebase" }
   ]
 }

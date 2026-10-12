@@ -137,12 +137,27 @@ export function sidebarTreeTour(manifest) {
   const nameField = 'input[aria-label="Folder name"]';
   const tree = [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }, { selector: `${main}[aria-expanded="true"]` },
     ...worktrees.map(worktree => ({ text: worktree.worktree })), { text: long.title }];
+  // Git pills (slice 5): the seed puts each linked worktree into one git state.
+  const gitRow = state => {
+    const worktree = manifest.worktrees.find(candidate => candidate.git === state);
+    if (!worktree) throw new Error(`Invalid lab seed manifest: no ${state} worktree`);
+    return row(`w:${project.path}-worktrees/${worktree.name}`);
+  };
+  const pill = (rowSelector, label) => ({ selector: `${rowSelector} [aria-label${label.endsWith('*') ? '^' : ''}="${label.replace(/\*$/, '')}"]` });
+  const pills = [
+    pill(gitRow('dirty'), '2 changed files'), pill(gitRow('dirty'), '1 commit to pull*'),
+    pill(gitRow('ahead-behind'), '2 commits to push*'), pill(gitRow('ahead-behind'), '1 commit to pull*'), pill(gitRow('ahead-behind'), 'All committed'),
+    pill(gitRow('rebase'), 'Rebase in progress'), pill(main, 'No upstream branch'),
+  ];
+  const projectRollup = pill(projectNode(project), '2 worktrees have uncommitted changes');
   return validateTour({ name: 'sidebar-tree', steps: [
     { caption: 'One tree instead of two areas: Chats on top, then projects. Nothing is expanded yet.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[role="tree"]' }, { type: 'wait', text: label }],
       evidence: [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }] },
     { caption: `Clicking ${label} selects and expands it and shows its worktrees. Clicking main shows its sessions.`, viewport: 'desktop', theme: 'light',
       actions: expand, evidence: tree },
+    { caption: 'Each worktree shows its git state: ●2 uncommitted files, ↑2 ↓1 against main, ✓ all committed, a warning while a rebase is stopped, a cloud where main has no upstream.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', selector: pills[0].selector }, { type: 'wait', selector: pills[5].selector }], evidence: pills },
     { caption: 'Forks sit under their parent session, with a fork count.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
         { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],
@@ -184,6 +199,9 @@ export function sidebarTreeTour(manifest) {
       evidence: [{ selector: hiddenTree }, { selector: `${folder}[aria-expanded="false"]` }, { text: chat.title }] },
     { caption: 'The same tree in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [role="tree"]' }, { text: chat.title }, { text: 'Reviews' }] },
+    { caption: `Collapsed, ${label} sums its worktrees up as "2 dirty".`, viewport: 'desktop', theme: 'dark',
+      actions: [{ type: 'click', selector: `${projectNode(project)} [data-tree-toggle]` }, { type: 'wait', selector: projectRollup.selector }],
+      evidence: [projectRollup, { selector: `${projectNode(project)}[aria-expanded="false"]` }] },
     { caption: 'The hosted mobile drawer shows the same tree.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: '[data-mobile-sessions-drawer] [role="tree"]' }],

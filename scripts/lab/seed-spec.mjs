@@ -20,8 +20,14 @@ export const SEED_MANIFEST = {
     { folder: 'scratch', title: 'Lab: scratch notes', role: 'foreign' },
   ],
   // Linked worktrees of a project, checked out next to it as <project>-worktrees/<name>.
+  // `git` is the state the git pills show (slice 5 of #95). Every worktree with a state
+  // tracks the project's main, which moves on by one commit after they branch off.
   worktrees: [
-    { project: 'lab-alpha', name: 'sidebar-tree' },
-    { project: 'lab-alpha', name: 'search-filter' },
+    // Two uncommitted changes, one commit behind main.
+    { project: 'lab-alpha', name: 'sidebar-tree', git: 'dirty' },
+    // Two commits ahead of main and one behind, nothing uncommitted.
+    { project: 'lab-alpha', name: 'search-filter', git: 'ahead-behind' },
+    // A rebase onto main stopped on a conflict.
+    { project: 'lab-alpha', name: 'rebase-stop', git: 'rebase' },
   ],
 };

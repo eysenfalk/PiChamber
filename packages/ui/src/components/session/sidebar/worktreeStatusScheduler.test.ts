@@ -177,6 +177,32 @@ describe('worktree status scheduler', () => {
     h.scheduler.dispose();
   });
 
+  test('budget: 14 visible worktrees cost 14 status requests per minute, two at a time', async () => {
+    const h = createHarness();
+    const paths = Array.from({ length: 14 }, (_, index) => `/wt/${index}`);
+    h.scheduler.setVisiblePaths(paths);
+    // Fast status answers: every request settles right after it starts.
+    const drain = async () => {
+      for (;;) {
+        const open = [...h.pending.entries()].find(([, list]) => list.length > 0);
+        if (!open) break;
+        await h.resolveNext(open[0]);
+      }
+    };
+    await drain();
+    expect(h.calls).toHaveLength(14);
+
+    const before = h.calls.length;
+    for (let second = 0; second < 60; second += 1) {
+      await h.clock.advance(1_000);
+      await drain();
+    }
+    expect(h.calls.length - before).toBe(14);
+    expect(new Set(h.calls.slice(before))).toEqual(new Set(paths));
+    expect(h.maxInFlight()).toBe(2);
+    h.scheduler.dispose();
+  });
+
   test('the cadence counts from the end of the fetch, so slow fetches do not stack', async () => {
     const h = createHarness();
     h.scheduler.setVisiblePaths(['/a']);

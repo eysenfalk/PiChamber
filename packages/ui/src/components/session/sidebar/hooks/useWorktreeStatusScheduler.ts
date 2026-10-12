@@ -1,7 +1,6 @@
 import React from 'react';
 import type { GitStatus } from '@/lib/api/types';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useGitStore, type GitAPI } from '@/stores/useGitStore';
 import {
@@ -21,20 +20,20 @@ const NO_STATUSES: WorktreeStatuses = new Map();
  * guards, merge with a newer full status) but it swallows request errors. A
  * request that did not store a result newer than this call is therefore
  * reported as a failure here, so the scheduler can show `?` instead of a stale
- * or empty status. `null` means the directory is not a git repository.
+ * or empty status. `null` means the directory is not a git repository. The
+ * scheduler's concurrency limit is the only gate these requests need.
  */
-export const fetchLightWorktreeStatus = (path: string, git: GitAPI): Promise<GitStatus | null> =>
-  runBackgroundNetworkTask(async () => {
-    const startedAt = Date.now();
-    await useGitStore.getState().fetchStatus(path, git, { mode: 'light', silent: true });
-    const state = useGitStore.getState().directories.get(path);
-    if (!state || state.lastStatusFetch < startedAt) {
-      throw new Error('Git status request did not complete');
-    }
-    if (state.isGitRepo === false) return null;
-    if (!state.status) throw new Error('Git status request returned no status');
-    return state.status;
-  });
+export const fetchLightWorktreeStatus = async (path: string, git: GitAPI): Promise<GitStatus | null> => {
+  const startedAt = Date.now();
+  await useGitStore.getState().fetchStatus(path, git, { mode: 'light', silent: true });
+  const state = useGitStore.getState().directories.get(path);
+  if (!state || state.lastStatusFetch < startedAt) {
+    throw new Error('Git status request did not complete');
+  }
+  if (state.isGitRepo === false) return null;
+  if (!state.status) throw new Error('Git status request returned no status');
+  return state.status;
+};
 
 /**
  * Drives `createWorktreeStatusScheduler` for the worktree paths whose rows are

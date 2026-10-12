@@ -47,3 +47,12 @@ Decisions the implementing agent took without asking, per slice. The owner can o
 | No virtualization. A match-everything query renders the full tree, the same rows as no query, which slice 2 measured. | Search only removes rows. | Very large real trees would need virtualization regardless of search. |
 | The tour addresses lab projects by their real id `path_<base64url of the path>`. | Projects added by path get that id; `lab/start.mjs` names are only labels. | A changed id scheme breaks the tour, loudly. |
 
+## Slice 5. Git pills and pull requests
+
+| Choice | Why | Cost if wrong |
+|---|---|---|
+| `WorktreeGitPills` is the only sidebar caller of `useEnsureGitHubPrStatus`, once per rendered worktree; the pull request badge on session rows is deleted. | D4 puts the pull request number on the worktree row, and the old badge asked once per session row (known trap). | Someone who relied on the badge next to a session now looks one row up. |
+| Merged worktrees are fed to the tree model as a sorted path key derived from `useGitHubPrStatusStore`, so the tree rebuilds only when the merged set changes, not on every pull request result. | A raw store subscription would rebuild the tree on every status poll. | A merged worktree whose pull request was never requested (collapsed, never rendered) stays out of the "N merged" group until it is shown once. |
+| Clean shows a check icon and forks show a node-tree icon with the count, not the ✓ and ⑂ glyphs. | The interface monospace font has no glyph for either; the recording showed tofu boxes. | None expected. |
+| The lab seed creates dirty, ahead/behind and rebase-stop worktrees with the local `main` as upstream, and the tour proves each state plus the collapsed `2 dirty` rollup. | The lab has no remote and no GitHub; a local upstream gives real ahead and behind counts. | Merged pull requests are proven by unit tests only. |
+| The request budget is a unit test with fake timers: 14 visible worktrees cost 14 status requests per minute with at most 2 in flight. | The slice asked for a measured budget; the scheduler has injected timers, so the test is exact and fast. | It does not measure server cost per request. |
