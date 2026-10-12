@@ -49,7 +49,7 @@ export const ORCHESTRATION_TOOLS = [
         role: {
           type: 'string',
           enum: [...ORCHESTRATION_ROLES],
-          description: 'Model and thinking from the role defaults. plan: architecture, spec, plan, hard debugging. implement: multi-step change in a worktree, large refactor, longer than about 30 minutes. task: well-scoped everyday work such as a bug fix, small feature, docs or tests. research: codebase or web research with sources. small: short mechanical work such as search, rename, summary, classification. review: fresh review of a worker\'s changes.',
+          description: 'Model and thinking from the role defaults. orchestrate: the orchestrating session itself. plan: architecture, spec, plan. oracle: second opinion or advice before a decision, changes no code. debug: a stuck or hard bug. implement: multi-step change in a worktree, large refactor. task: well-scoped everyday work such as a bug fix, small feature, docs or tests. research: codebase or web research with sources. small: short mechanical work such as search, rename, summary, classification. review: check of finished work. When a task turns out harder, move one role up instead of guessing.',
         },
         model,
         thinking,

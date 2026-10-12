@@ -166,8 +166,8 @@ describe('Pi settings sidecar', () => {
     });
     const resolved = resolveOrchestrationSettings(stored);
     expect(resolved.workerLimit).toBe(2);
-    expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'low' });
-    expect(resolved.roles.implement).toEqual({ modelId: 'claude-opus-5-5', thinking: 'xhigh' });
+    expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'medium' });
+    expect(resolved.roles.implement).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
 
     // A role set to null returns to its default; null clears every override.
     await store.update({ orchestration: { roles: { small: null } } });
@@ -175,13 +175,16 @@ describe('Pi settings sidecar', () => {
     await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
   });
 
-  it('defaults each role to the task-fitting model and thinking level, never off', () => {
+  it('defaults the nine roles to the owner\'s models and thinking levels, never off', () => {
     expect(DEFAULT_ORCHESTRATION_SETTINGS.roles).toEqual({
+      orchestrate: { modelId: 'claude-opus-5-5', thinking: 'high' },
       plan: { modelId: 'claude-opus-5-5', thinking: 'high' },
-      implement: { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
-      task: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
+      oracle: { modelId: 'gpt-6.1-sol', thinking: 'high' },
+      debug: { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
+      implement: { modelId: 'claude-opus-5-5', thinking: 'high' },
+      task: { modelId: 'claude-sonnet-5-5', thinking: 'high' },
       research: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
-      small: { modelId: 'claude-haiku-5-5', thinking: 'low' },
+      small: { modelId: 'claude-haiku-5-5', thinking: 'medium' },
       review: { modelId: 'gpt-6.1-sol', thinking: 'high' },
     });
     // Claude 5.5 models reject thinking off; no default may ask for it.

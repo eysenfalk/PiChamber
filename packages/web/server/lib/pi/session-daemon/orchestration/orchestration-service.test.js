@@ -9,7 +9,7 @@ import {
 } from './orchestration-service.js';
 
 const ROLES = {
-  implement: { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
+  implement: { modelId: 'claude-opus-5-5', thinking: 'high' },
   research: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
   small: { modelId: 'claude-haiku-5-5', thinking: 'low' },
   review: { modelId: 'gpt-6.1-sol', thinking: 'high' },
@@ -91,7 +91,7 @@ describe('orchestration service', () => {
     expect(spawned.model).toEqual({ providerId: 'anthropic', modelId: 'claude-opus-5-5' });
     expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/work/a',
-      thinking: 'xhigh',
+      thinking: 'high',
       parentSessionPath: '/sessions/orch.jsonl',
       lineage: { parentSessionId: 'orch', parentDirectory: '/work/main', role: 'implement' },
     }));
