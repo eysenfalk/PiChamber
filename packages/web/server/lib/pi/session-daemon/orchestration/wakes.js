@@ -11,6 +11,10 @@ import { DEFAULT_ORCHESTRATION_SETTINGS } from '../../settings-store.js';
 // settle. Only the owner's own settle sends before the window ends; a
 // worker's settle and the watchdog tick wait for it. Entries leave the queue only after the send resolved, so events
 // emitted during a send arrive with the next message.
+//
+// Only an owner marked as orchestrator gets a batch. The events of an
+// unmarked owner's workers stay queued and go out at the first tick or
+// settle after the mark is set.
 
 export const EVENTS_MESSAGE = 'pichamber.orchestration.events';
 
@@ -68,6 +72,7 @@ export function createWakes({
       coalesceMs: value?.wakes?.coalesceMs ?? DEFAULT_ORCHESTRATION_SETTINGS.wakes.coalesceMs,
       stallAfterMs: value?.watchdog?.stallAfterMs ?? DEFAULT_ORCHESTRATION_SETTINGS.watchdog.stallAfterMs,
       watchdog: value?.watchdog?.enabled ?? DEFAULT_ORCHESTRATION_SETTINGS.watchdog.enabled,
+      orchestrators: new Set(value?.orchestrators ?? []),
     };
   };
 
@@ -148,8 +153,9 @@ export function createWakes({
     if (queues.size === 0) return;
     let document;
     let coalesceMs;
+    let orchestrators;
     try {
-      [document, { coalesceMs }] = await Promise.all([registry.read(), settings()]);
+      [document, { coalesceMs, orchestrators }] = await Promise.all([registry.read(), settings()]);
     } catch {
       return;
     }
@@ -167,7 +173,7 @@ export function createWakes({
       byOwner.set(worker.orchestratorSessionId, batch);
     }
     for (const [owner, batch] of byOwner) {
-      if (sending.has(owner) || BUSY_STATES.has(stateOf(owner))) continue;
+      if (!orchestrators.has(owner) || sending.has(owner) || BUSY_STATES.has(stateOf(owner))) continue;
       const due = Math.min(...batch.map(({ event }) => event.at)) + coalesceMs;
       if (owner !== settledOwner && due > at) {
         nextDue = Math.min(nextDue, due);

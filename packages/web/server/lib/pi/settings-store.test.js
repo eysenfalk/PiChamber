@@ -156,6 +156,7 @@ describe('Pi settings sidecar', () => {
       github: { enabled: true },
       gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
       roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
+      orchestrators: [],
     });
 
     await store.update({ orchestration: { workerLimit: 2, roles: { review: { providerId: 'openai', modelId: ' gpt-6.1-sol ', thinking: 'xhigh' } } } });
@@ -210,6 +211,20 @@ describe('Pi settings sidecar', () => {
     expect(resolveOrchestrationSettings(await store.read()).github).toEqual({ enabled: false });
     await store.update({ orchestration: { github: null } });
     expect(resolveOrchestrationSettings(await store.read()).github).toEqual({ enabled: true });
+  });
+
+  it('marks sessions as orchestrator one by one and removes a mark with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    expect(resolveOrchestrationSettings(await store.read()).orchestrators).toEqual([]);
+    await store.update({ orchestration: { orchestrators: { 'session-a': true } } });
+    await store.update({ orchestration: { orchestrators: { 'session-b': true } } });
+    expect(resolveOrchestrationSettings(await store.read()).orchestrators).toEqual(['session-a', 'session-b']);
+    await store.update({ orchestration: { orchestrators: { 'session-a': null } } });
+    expect(resolveOrchestrationSettings(await store.read()).orchestrators).toEqual(['session-b']);
+    // A new store on the same file is a restart.
+    const restarted = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    expect(resolveOrchestrationSettings(await restarted.read()).orchestrators).toEqual(['session-b']);
   });
 
   it('stores an absolute worktree root and clears it with null', async () => {
@@ -274,6 +289,10 @@ describe('Pi settings sidecar', () => {
       { wakes: [] },
       { worktreeRoot: 'relative/path' },
       { worktreeRoot: 7 },
+      { orchestrators: ['session-a'] },
+      { orchestrators: { 'session-a': false } },
+      { orchestrators: { 'session-a': 'yes' } },
+      { orchestrators: { ' ': true } },
       'four',
     ]) {
       await expect(store.update({ orchestration })).rejects.toMatchObject({ code: 'PI_SETTINGS_INVALID' });

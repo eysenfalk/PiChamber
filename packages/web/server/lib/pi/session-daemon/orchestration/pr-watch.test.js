@@ -140,7 +140,7 @@ describe('a green pull request wakes the orchestrator', () => {
       stateOf: () => 'idle',
       runStartedAt: () => undefined,
       waitingForInput: () => false,
-      readSettings: async () => ({ wakes: { coalesceMs: 3_000 }, watchdog: { enabled: false } }),
+      readSettings: async () => ({ wakes: { coalesceMs: 3_000 }, watchdog: { enabled: false }, orchestrators: ['orch'] }),
       now: () => clock,
       isGone: () => false,
     });

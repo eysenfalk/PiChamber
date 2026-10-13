@@ -1,5 +1,5 @@
 import { createConnection } from 'node:net';
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -21,6 +21,14 @@ export const piAiFauxUrl = () => {
 export function disableHostGate(dataDir, orchestration = {}) {
   mkdirSync(join(dataDir, 'pi'), { recursive: true });
   writeFileSync(join(dataDir, 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { ...orchestration, gate: { enabled: false } } }));
+}
+
+// Marks a session as orchestrator in the same file, as the UI switch does.
+export function markOrchestrator(dataDir, sessionId) {
+  const file = join(dataDir, 'pi', 'settings.json');
+  const settings = JSON.parse(readFileSync(file, 'utf8'));
+  settings.orchestration.orchestrators = { ...settings.orchestration.orchestrators, [sessionId]: true };
+  writeFileSync(file, JSON.stringify(settings));
 }
 
 export function connectClient(endpoint) {

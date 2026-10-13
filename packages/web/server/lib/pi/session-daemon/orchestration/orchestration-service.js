@@ -1187,13 +1187,21 @@ export function createOrchestrationService(deps) {
     if (violation) throw new OrchestrationError('INVALID_ARGUMENT', violation);
     await reconciled();
     const runtime = await callerRuntime(callerSessionId);
-    const callerKind = lineageOf(runtime) ? 'worker' : 'orchestrator';
+    const callerKind = await kindOf(callerSessionId, runtime);
     if (callerKind === 'orchestrator') await ensureImported(callerSessionId, runtime);
     const targetOwner = needsOwnership(toolName)
       ? (await registry.read()).workers[args?.sessionId]?.orchestratorSessionId ?? null
       : undefined;
     authorize({ toolName, callerSessionId, callerKind, targetOwner });
     return handlers[toolName](callerSessionId, args ?? {}, options, { runtime, callerKind });
+  };
+
+  // A worker stays a worker even when marked; any other session orchestrates
+  // only while settings.json marks it (read fresh, so a mark acts at once).
+  const kindOf = async (sessionId, runtime) => {
+    if (lineageOf(runtime)) return 'worker';
+    const { orchestrators = [] } = await readSettings();
+    return orchestrators.includes(sessionId) ? 'orchestrator' : 'unmarked';
   };
 
   /** Confirms that a session exists before a credential is issued for it. */
@@ -1755,7 +1763,8 @@ export function createOrchestrationService(deps) {
     startWakes: wakes.start,
     stopWakes: wakes.stop,
     verifyCaller,
-    isWorker: (sessionManager) => Boolean(lineageOf({ session: { sessionManager } })),
+    // 'worker' | 'orchestrator' | 'unmarked'; decides tools and instructions.
+    sessionKind: (sessionManager) => kindOf(sessionManager.getSessionId(), { session: { sessionManager } }),
     toolNames: ORCHESTRATION_TOOL_NAMES,
   };
 }
