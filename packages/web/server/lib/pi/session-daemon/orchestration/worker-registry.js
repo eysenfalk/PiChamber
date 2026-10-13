@@ -13,10 +13,18 @@ const OPEN_OPERATION_STATES = new Set(['reserved']);
 
 export const requestKey = (orchestratorSessionId, clientRequestId) => `${orchestratorSessionId}:${clientRequestId}`;
 
-/** Reserved operations plus `starting` and `active` workers, across the daemon. */
+/**
+ * A worker takes a slot and its directory while it is `starting` or
+ * `active`, and in any state while it shows a `hold`: an occupancy whose end
+ * could not be proven (an input a stop could not settle). Uncertainty counts
+ * as use.
+ */
+const occupies = (worker) => SLOT_WORKER_STATES.has(worker.state) || Boolean(worker.hold);
+
+/** Reserved operations plus occupying workers, across the daemon. */
 export const slotsInUse = (document) => (
   Object.values(document.operations).filter((operation) => operation.state === 'reserved').length
-  + Object.values(document.workers).filter((worker) => SLOT_WORKER_STATES.has(worker.state)).length
+  + Object.values(document.workers).filter(occupies).length
 );
 
 const assertFreeSlot = (document, workerLimit) => {
@@ -43,7 +51,7 @@ const assertFreeDirectory = (document, cwd, exceptSessionId) => {
     .find(([, candidate]) => candidate.state === 'reserved' && sameDirectory(candidate.intent?.cwd, cwd));
   const worker = Object.entries(document.workers)
     .find(([sessionId, candidate]) => sessionId !== exceptSessionId
-      && SLOT_WORKER_STATES.has(candidate.state) && sameDirectory(candidate.cwd, cwd));
+      && occupies(candidate) && sameDirectory(candidate.cwd, cwd));
   if (!operation && !worker) return;
   throw new OrchestrationError('ORCHESTRATION_CWD_BUSY', 'A managed worker holds this directory; use another worktree.', {
     ...(worker ? { sessionId: worker[0] } : { opId: operation[0] }),
@@ -229,7 +237,9 @@ export const applySettle = (document, sessionId, presence, at, { generation = nu
   const current = document.workers[sessionId];
   if (!current) return 'removed';
   const currentGeneration = current.generation ?? 0;
-  if (hold || current.admission || (generation !== null && generation !== currentGeneration)) return current.state;
+  // No generation is no proof: only the settle of the run that holds the
+  // current generation may apply its `done`.
+  if (hold || current.admission || generation === null || generation !== currentGeneration) return current.state;
   if ((current.doneReported === true || current.doneReported === currentGeneration) && current.state === 'active') {
     setWorkerState(current, 'done', at);
   }
@@ -260,7 +270,8 @@ export const admitForInput = (document, sessionId, { workerLimit, token, at, pro
   }
   const reserves = RESTARTABLE_STATES.has(worker.state);
   if (reserves) {
-    assertFreeSlot(document, workerLimit);
+    // A held worker already counts as a slot.
+    if (!worker.hold) assertFreeSlot(document, workerLimit);
     assertFreeDirectory(document, worker.cwd, sessionId);
   }
   worker.admission = { token, previous: reserves ? worker.state : null, process, since: at, state: 'pending' };
@@ -270,37 +281,58 @@ export const admitForInput = (document, sessionId, { workerLimit, token, at, pro
 
 const holdsAdmission = (worker, admission) => Boolean(admission) && worker?.admission?.token === admission;
 
+
 /**
  * An input of `admission` started a run. The run takes the worker's slot as
  * a new generation, so nothing is counted twice; with other inputs of the
  * admission still open (`keep`), the admission stays without a slot of its
- * own. An admission the worker no longer shows (a stop deleted it) is
- * `stale`: the run has no slot, and the caller aborts it.
+ * own. The admission is the shared claim on the slot; the run's identity is
+ * its own `start` (the input's ticket), with `seq`, the order in which its
+ * process saw the starts. `worker.run` names the start that holds the
+ * current generation.
  */
-const commitStart = (document, sessionId, at, { admission, keep = false }) => {
+const commitStart = (document, sessionId, at, { admission, start, seq, keep = false }) => {
   const worker = document.workers[sessionId];
-  if (!holdsAdmission(worker, admission)) return { stale: true };
-  if (keep) worker.admission = { ...worker.admission, previous: null };
-  else delete worker.admission;
+  // Another admission the worker shows meanwhile stays untouched.
+  if (holdsAdmission(worker, admission)) {
+    if (keep) worker.admission = { ...worker.admission, previous: null };
+    else delete worker.admission;
+  }
   delete worker.doneReported;
   if (RESTARTABLE_STATES.has(worker.state)) setWorkerState(worker, 'active', at);
   worker.generation = (worker.generation ?? 0) + 1;
-  worker.runAdmission = admission;
+  worker.run = { admission, start, seq };
   return { generation: worker.generation };
 };
 
 /**
- * `commitStart` for a run whose commit failed, retried by that run's next
- * registry step. Idempotent: an admission whose run already holds the
- * current generation (`runAdmission`) returns it; one the worker shows no
- * more and that started no generation is `stale`.
+ * Records the start of a run, also as the retry of a commit that failed,
+ * from that run's next registry step. Idempotent for the same `start` only.
+ * A start is `stale`, and gets no generation, when a later start of the same
+ * admission already holds the worker (a retried commit never takes over a
+ * newer run's generation) or when the worker no longer shows its admission
+ * (a stop deleted it).
  */
-export const completeStart = (document, sessionId, at, { admission, keep = false }) => {
+export const completeStart = (document, sessionId, at, { admission, start, seq, keep = false }) => {
   const worker = document.workers[sessionId];
-  if (holdsAdmission(worker, admission)) return commitStart(document, sessionId, at, { admission, keep });
-  if (worker && admission && worker.runAdmission === admission) return { generation: worker.generation ?? 0 };
-  return { stale: true };
+  if (!worker || !start) return { stale: true };
+  if (worker.run?.start === start) return { generation: worker.generation ?? 0 };
+  if (worker.run?.admission === admission) {
+    if (worker.run.seq > seq) return { stale: true };
+    // A later start of the same admission, whose predecessor's commit gave
+    // the admission back: it takes the next generation while the worker
+    // still runs.
+    if (!holdsAdmission(worker, admission)) {
+      if (worker.stopping || !SLOT_WORKER_STATES.has(worker.state)) return { stale: true };
+      return commitStart(document, sessionId, at, { admission, start, seq, keep });
+    }
+  }
+  if (!holdsAdmission(worker, admission)) return { stale: true };
+  return commitStart(document, sessionId, at, { admission, start, seq, keep });
 };
+
+/** Whether `start` holds the worker's current generation. */
+export const holdsStart = (worker, start) => Boolean(start) && worker?.run?.start === start;
 
 /**
  * Every input of `admission` ended without a run: a slot the admission took
@@ -328,20 +360,30 @@ export const markUnresolved = (document, sessionId, { admission, at }) => {
 };
 
 /**
- * A run started whose admission a stop ended, and the daemon could not tell
- * that run apart from another one to abort it. It runs anyway, so a worker
- * without a slot takes one again, without the limit check (the slot is in
- * use), and shows an `unresolved` admission (`unbound`) until the run's
- * settle releases it or a stop ends it. Returns whether it took the slot.
+ * Ends the `hold` a stop left for inputs it could not settle, once the
+ * stopping process has proof for every one of them. Only the hold's own
+ * token releases it.
  */
-export const holdUnboundRun = (document, sessionId, { admission, at, process }) => {
+export const releaseHold = (document, sessionId, token) => {
   const worker = document.workers[sessionId];
-  if (!worker || worker.stopping || worker.admission || !RESTARTABLE_STATES.has(worker.state)) return false;
-  worker.admission = {
-    token: admission, previous: worker.state, process, since: at, state: 'unresolved', unresolvedAt: at, unbound: true,
-  };
-  setWorkerState(worker, 'active', at);
+  if (!worker?.hold || worker.hold.token !== token) return false;
+  delete worker.hold;
   return true;
+};
+
+/**
+ * Marks a worker as occupied by something its process cannot prove ended:
+ * an input a stop could not settle, or a run that started without a slot.
+ * The worker keeps a slot and its directory in any state until `releaseHold`
+ * with the same token, or until reconcile finds the holder's process dead.
+ * The hold is taken without the limit check, because the occupancy already
+ * exists. An existing hold is kept and its token returned.
+ */
+export const setHold = (document, sessionId, { token, process, at, reason }) => {
+  const worker = document.workers[sessionId];
+  if (!worker) return undefined;
+  worker.hold ??= { token, process, since: at, reason };
+  return worker.hold.token;
 };
 
 /**

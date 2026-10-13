@@ -61,7 +61,7 @@ import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from
 import { OrchestrationError } from './orchestration/errors.js';
 import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
 import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
-import { abortBoundRun, bindStartedRun } from './orchestration/run-binding.js';
+import { abortBoundRun, bindStartedRun, isSettleFinal } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
@@ -3769,6 +3769,9 @@ export function createSessionDaemon({
         retryStateBySession.delete(sessionId);
         break;
       case 'agent_settled':
+        // A settle while a run is still live (Pi 1.1.0 can emit one for an
+        // earlier prompt) is no completion: no idle, no result, no release.
+        if (!isSettleFinal(owningRuntime.session)) break;
         retryStateBySession.delete(sessionId);
         activeRunStartedAt.delete(sessionId);
         settledSendGenerationBySession.set(sessionId, sendGenerationBySession.get(sessionId) ?? 0);

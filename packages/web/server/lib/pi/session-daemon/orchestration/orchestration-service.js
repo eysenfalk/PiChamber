@@ -17,11 +17,13 @@ import {
   failOperation,
   finishStep,
   importLineage,
-  holdUnboundRun,
+  holdsStart,
   markUnresolved,
   ownedOperation,
   recordSession,
   rejectStart,
+  releaseHold,
+  setHold,
   releaseAdmission,
   requestKey,
   reserveSpawn,
@@ -175,6 +177,12 @@ export function createOrchestrationService(deps) {
   // The run an admitted input of this service started, per worker, until it
   // settles: its admission and the generation its commit recorded.
   const liveRuns = new Map();
+  // The order in which Pi started runs of this service (`seq` of a start).
+  let startSeq = 0;
+  // Inputs per worker whose end this service cannot prove yet (a stop could
+  // not settle them, or their run started without a slot), and the registry
+  // hold that keeps the worker's slot and directory until each is settled.
+  const staleInputs = new Map();
   // A settle whose `done` rule waits for the admitted inputs, per worker.
   const deferredSettles = new Map();
   // Stops running in this service per worker; a second stop shares the first.
@@ -644,12 +652,14 @@ export function createOrchestrationService(deps) {
     }
     const outcome = await running;
     for (const id of outcome.stopped) if (!result.stopped.includes(id)) result.stopped.push(id);
+    for (const id of outcome.held) if (!result.held.includes(id)) result.held.push(id);
     result.failed.push(...outcome.failed);
     return outcome.ok;
   };
 
   const stopOne = async (sessionId, owner) => {
-    const result = { stopped: [], failed: [] };
+    const result = { stopped: [], failed: [], held: [] };
+    let unsettled;
     const claim = { ...self, token: randomUUID() };
     const children = await registry.update((document) => {
       const worker = document.workers[sessionId];
@@ -681,8 +691,9 @@ export function createOrchestrationService(deps) {
       // the worker stopped and is aborted then.
       await openTicketsDone(sessionId);
       // Inputs still unresolved now belong to this stop: their late verdict
-      // aborts the run instead of confirming an admission.
-      invalidateTickets(sessionId);
+      // aborts the run instead of confirming an admission. Pi accepted them,
+      // so until each is settled the worker keeps a hold on its slot.
+      unsettled = invalidateTickets(sessionId, claim.token);
       try {
         await withSession(sessionId, () => abortSession(sessionId));
       } catch (error) {
@@ -700,19 +711,26 @@ export function createOrchestrationService(deps) {
     // Only the claim's holder marks the worker stopped and reports it.
     const marked = await registry.update((document) => {
       const worker = document.workers[sessionId];
-      if (!worker) return true;
+      if (!worker) return { held: false };
       if (!holdsClaim(worker)) return false;
       delete worker.stopping;
       delete worker.doneReported;
       delete worker.admission;
       worker.state = 'stopped';
       worker.stateSince = now();
-      return true;
+      // Checked in this write: a verdict that settles an input later queues
+      // its release behind it.
+      if ((unsettled?.pending.size ?? 0) === 0) return { held: false };
+      setHold(document, sessionId, { token: unsettled.token, process: self, at: now(), reason: 'unresolved_input' });
+      return { held: true };
     });
     if (!marked) {
       result.failed.push({ sessionId, code: 'ORCHESTRATION_STOP_CLAIM_LOST' });
       return { ok: false, ...result };
     }
+    // Stopped, but not free: the worker's slot and directory stay held until
+    // Pi settled the inputs it had accepted.
+    if (marked.held) result.held.push(sessionId);
     pendingRuns.delete(sessionId);
     deferredSettles.delete(sessionId);
     result.stopped.push(sessionId);
@@ -722,7 +740,7 @@ export function createOrchestrationService(deps) {
   const stop = async (callerSessionId, args) => {
     const worker = (await registry.read()).workers[args.sessionId];
     if (worker?.state === 'stopped') return { sessionId: args.sessionId, stopped: [], alreadyStopped: true };
-    const result = { stopped: [], failed: [] };
+    const result = { stopped: [], failed: [], held: [] };
     await stopTree(args.sessionId, callerSessionId, result);
     notifyWaiters();
     if (result.failed.length > 0) {
@@ -731,7 +749,9 @@ export function createOrchestrationService(deps) {
         ...result,
       });
     }
-    return { sessionId: args.sessionId, stopped: result.stopped };
+    // `held`: stopped workers that keep their slot and directory until Pi
+    // settled an input it had accepted before the stop.
+    return { sessionId: args.sessionId, stopped: result.stopped, ...(result.held.length > 0 ? { held: result.held } : {}) };
   };
 
   const takeover = async (callerSessionId, args, _options, context) => {
@@ -954,10 +974,14 @@ export function createOrchestrationService(deps) {
       title: runtime.session.sessionManager?.getSessionName?.(),
       cwd: runtime.cwd,
     };
+    // The daemon reports only a settle after which no run is left (`isSettleFinal`),
+    // so this settle ends the live run and every bound stale run.
     const run = liveRuns.get(sessionId);
     liveRuns.delete(sessionId);
+    const staleRuns = [...(staleInputs.get(sessionId)?.pending ?? [])].filter((ticket) => ticket.run);
+    for (const ticket of staleRuns) await settleStale(ticket);
     // A run whose start could not be recorded completes its commit in the
-    // settle (R7-S1); an unbound run gives back the slot it held.
+    // settle (R7-S1).
     if (run) await run.committed;
     const lineage = lineageOf(runtime);
     let document = await registry.read();
@@ -980,15 +1004,14 @@ export function createOrchestrationService(deps) {
     try {
       settled = await registry.update((current) => {
         const hold = (tickets.get(sessionId)?.size ?? 0) > 0;
-        let generation = run?.generation ?? null;
-        // Not this run's slot (any more): nothing of its `done` applies.
-        let foreign = false;
-        if (run?.unbound) {
-          if (!admissionInUse(sessionId, run.admission)) releaseAdmission(current, sessionId, now(), run.admission);
-          foreign = true;
-        } else if (run && generation === null) {
+        // The registry checks the start the run froze: only the run that holds
+        // the current generation applies its `done`; no run of this service,
+        // or a start a later one replaced, is foreign.
+        let generation = null;
+        let foreign = true;
+        if (run) {
           const completed = completeStart(current, sessionId, now(), {
-            admission: run.admission, keep: admissionInUse(sessionId, run.admission),
+            admission: run.admission, start: run.start, seq: run.seq, keep: admissionInUse(sessionId, run.admission),
           });
           generation = completed.generation ?? null;
           foreign = completed.stale === true;
@@ -1041,12 +1064,40 @@ export function createOrchestrationService(deps) {
     .some((ticket) => ticket !== except && (ticket.admission === undefined || ticket.admission === admission));
   const ownsAdmission = (process) => sameStamp(process, self);
   // A stop ends the admission; its remaining inputs can no longer confirm a run.
-  const invalidateTickets = (sessionId) => {
-    for (const ticket of ticketsOf(sessionId)) {
+  // Returns the record that holds them, if any are left.
+  const invalidateTickets = (sessionId, token) => {
+    const left = ticketsOf(sessionId);
+    for (const ticket of left) {
       ticket.state = 'stale';
       ticket.decide();
     }
     tickets.delete(sessionId);
+    return left.length > 0 ? trackStale(sessionId, token, left) : undefined;
+  };
+  const trackStale = (sessionId, token, list) => {
+    let record = staleInputs.get(sessionId);
+    if (!record) {
+      record = { token, pending: new Set() };
+      staleInputs.set(sessionId, record);
+    }
+    for (const ticket of list) {
+      ticket.hold = record;
+      record.pending.add(ticket);
+    }
+    return record;
+  };
+  // A stale input is settled: its verdict started no run, or its run settled.
+  // The last one releases the hold.
+  const settleStale = async (ticket) => {
+    const record = ticket.hold;
+    if (!record?.pending.delete(ticket) || record.pending.size > 0) return;
+    if (staleInputs.get(ticket.sessionId) === record) staleInputs.delete(ticket.sessionId);
+    try {
+      await registry.update((document) => releaseHold(document, ticket.sessionId, record.token));
+    } catch (error) {
+      reportUnresolved(ticket.sessionId, error);
+    }
+    notifyWaiters();
   };
 
   // Reads the registry for an input. A broken registry must not block
@@ -1148,33 +1199,32 @@ export function createOrchestrationService(deps) {
    * late verdict of an unresolved input still counts.
    */
   /**
-   * A run started on an admission that a stop ended. Only that run is
-   * aborted, through the handle the daemon bound to it (`run`). Without a
-   * handle it cannot be told apart from another run, so it is not aborted;
-   * it holds a slot, visible as an `unbound` admission, until it settles, and
-   * is reported.
+   * A run started without a slot: its input a stop ended, or a later start
+   * replaced its commit. The worker holds a slot and its directory for it
+   * (`hold`). Only that run is aborted, through the signal the daemon bound
+   * to it, and its settle releases the hold. Without a bound signal it cannot
+   * be told apart from another run: it is not aborted, the hold stays until
+   * the daemon process ends, and it is reported (the documented limit).
    */
-  const endStaleRun = async (sessionId, admission, handle) => {
+  const staleStarted = async (ticket, handle) => {
+    const { sessionId } = ticket;
+    const record = ticket.hold ?? trackStale(sessionId, ticket.token, [ticket]);
     const bound = await Promise.resolve(handle).catch(() => null);
-    if (bound) {
-      await withSession(sessionId, () => abortRun(sessionId, bound)).catch(() => {});
-      return;
+    // Set before the hold is written, so the run's settle finds it.
+    if (bound) ticket.run = bound;
+    const holding = registry.update((document) => setHold(document, sessionId, {
+      token: record.token, process: self, at: now(), reason: bound ? 'stale_run' : 'unbound_run',
+    }));
+    if (bound) await withSession(sessionId, () => abortRun(sessionId, bound)).catch(() => {});
+    try {
+      await holding;
+    } catch (error) {
+      reportUnresolved(sessionId, error);
     }
-    // A live run of this process already holds the worker's slot.
-    if (!liveRuns.has(sessionId)) {
-      const run = { admission, generation: null, unbound: true, committed: Promise.resolve(null) };
-      liveRuns.set(sessionId, run);
-      let held = false;
-      try {
-        held = await registry.update((document) => holdUnboundRun(document, sessionId, { admission, at: now(), process: self }));
-      } catch (error) {
-        reportUnresolved(sessionId, error);
-      }
-      if (!held && liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
-    }
+    if (bound) return;
     reportUnresolved(sessionId, new OrchestrationError(
       'ORCHESTRATION_RUN_UNBOUND',
-      'An input of a stopped worker started a run that could not be aborted; it keeps a slot until it settles.',
+      'A run started without a slot and could not be told apart from another run; it keeps a slot and its directory until the daemon process ends.',
       { sessionId },
     ));
   };
@@ -1184,8 +1234,10 @@ export function createOrchestrationService(deps) {
     const { sessionId, admission } = ticket;
     if (ticket.state === 'stale') {
       // A stop ended this input's admission: a run it starts has no slot.
+      if (outcome === 'unresolved') return;
       ticket.state = 'closed';
-      if (outcome === 'started') await endStaleRun(sessionId, admission, handle);
+      if (outcome === 'started') await staleStarted(ticket, handle);
+      else await settleStale(ticket);
       return;
     }
     if (outcome === 'unresolved') {
@@ -1210,14 +1262,15 @@ export function createOrchestrationService(deps) {
     ticket.state = 'closed';
     // The waiting settle belonged to the previous run; this run keeps the slot.
     deferredSettles.delete(sessionId);
-    const run = { admission, generation: null };
+    // The run's identity is its start, in the order Pi started runs.
+    const run = { admission, start: ticket.token, seq: ++startSeq, generation: null };
     let settleRun;
     run.committed = new Promise((resolve) => { settleRun = resolve; });
     liveRuns.set(sessionId, run);
     let committed;
     try {
       committed = await registry.update((document) => completeStart(document, sessionId, now(), {
-        admission, keep: admissionInUse(sessionId, admission),
+        admission, start: run.start, seq: run.seq, keep: admissionInUse(sessionId, admission),
       }));
     } catch (error) {
       // No rollback: the admission keeps the slot, and the run's next
@@ -1241,27 +1294,25 @@ export function createOrchestrationService(deps) {
     // A run whose start could not be recorded completes its commit first, so
     // the report binds to its own generation (R7-S1). If that fails again,
     // the report fails and the slot stays.
+    // The reporting run is frozen before any await, and the report binds to
+    // its start, never to whatever generation is current. Without a live run
+    // of this service there is no proof, and nothing is recorded.
     const run = liveRuns.get(sessionId);
-    const pending = run && !run.unbound && run.generation === null ? run : undefined;
-    if (pending) await pending.committed;
-    let completed;
-    const recorded = await registry.update((document) => {
+    if (!run) return false;
+    await run.committed;
+    const generation = await registry.update((document) => {
       const worker = document.workers[sessionId];
-      if (!worker || (worker.state !== 'active' && worker.state !== 'starting')) return false;
-      if (pending && pending.generation === null) {
-        completed = completeStart(document, sessionId, now(), {
-          admission: pending.admission, keep: admissionInUse(sessionId, pending.admission),
-        });
-        if (completed.stale) return false;
-      }
-      // Bound to the reporting run, so it never ends a later run.
-      worker.doneReported = worker.generation ?? 0;
-      return true;
+      if (!worker || (worker.state !== 'active' && worker.state !== 'starting')) return null;
+      const completed = completeStart(document, sessionId, now(), {
+        admission: run.admission, start: run.start, seq: run.seq, keep: admissionInUse(sessionId, run.admission),
+      });
+      if (completed.stale || !holdsStart(worker, run.start)) return null;
+      worker.doneReported = completed.generation;
+      return completed.generation;
     });
-    if (pending && pending.generation === null && completed?.generation !== undefined) {
-      pending.generation = completed.generation;
-    }
-    return recorded;
+    if (generation === null) return false;
+    if (run.generation === null) run.generation = generation;
+    return true;
   };
 
   // The check is lazy, not at daemon start: a daemon that never
@@ -1322,6 +1373,8 @@ export function createOrchestrationService(deps) {
         // A stop whose process died may not have aborted the run: the worker
         // keeps its state and slot, and session_stop can be retried.
         if (live.stopping && !belongsToLiveProcess(live.stopping)) delete live.stopping;
+        // A hold ends with its process: that process's runs and inputs died with it.
+        if (live.hold && !belongsToLiveProcess(live.hold.process)) delete live.hold;
       });
     }
   };

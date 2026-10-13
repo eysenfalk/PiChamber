@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createPiSessionRuntime } from '../session-daemon.js';
 import { piAiFauxUrl } from './e2e-support.js';
-import { abortBoundRun, bindStartedRun } from './run-binding.js';
+import { abortBoundRun, bindStartedRun, isSettleFinal } from './run-binding.js';
 
 const gate = () => {
   let resolve;
@@ -112,5 +112,67 @@ describe('run binding through the real SDK', () => {
     const replies = session.messages.filter((message) => message.role === 'assistant').map(textOf);
     expect(replies).toContain('RAN B');
     expect(replies).not.toContain('RAN A');
+  });
+
+  // What the daemon sees at its `agent_settled` boundary (R8-S2).
+  const settles = (session) => {
+    const seen = [];
+    session.subscribe((event) => {
+      if (event.type === 'agent_settled') seen.push({ final: isSettleFinal(session), signal: session.agent.signal });
+    });
+    return seen;
+  };
+
+  it('marks the settle Pi emits for a rejected prompt while another run is live as no completion', async () => {
+    const { session, prompt } = await setup();
+    const seen = settles(session);
+    gates['start A'] = gate();
+    gates['provider B'] = gate();
+    const promptA = prompt('A').catch((error) => error);
+    await gates['start A'].reached;
+    const promptB = prompt('B');
+    await gates['provider B'].reached;
+    const signalB = session.agent.signal;
+    // A's rejected prompt still emits agent_settled from its finally, while
+    // B's run holds the agent.
+    gates['start A'].resolve();
+    await promptA;
+    await new Promise((done) => setTimeout(done, 20));
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen.every((entry) => entry.final === false && entry.signal === signalB)).toBe(true);
+    expect(signalB.aborted).toBe(false);
+    // B's own end is the completion.
+    const before = seen.length;
+    gates['provider B'].resolve();
+    await promptB;
+    await new Promise((done) => setTimeout(done, 20));
+    expect(seen.slice(before).at(-1)).toEqual({ final: true, signal: undefined });
+  });
+
+  it('keeps the signal of an aborted run until that run ended, and gives the next run a new one', async () => {
+    const { session, prompt } = await setup();
+    const seen = settles(session);
+    gates['provider A'] = gate();
+    const running = prompt('A').catch(() => {});
+    await gates['provider A'].reached;
+    const signalA = session.agent.signal;
+    expect(abortBoundRun(session, signalA)).toBe(true);
+    // Aborted, but the run has not ended: still no completion.
+    expect(signalA.aborted).toBe(true);
+    expect(isSettleFinal(session)).toBe(false);
+    gates['provider A'].resolve();
+    await running;
+    await new Promise((done) => setTimeout(done, 20));
+    expect(isSettleFinal(session)).toBe(true);
+    expect(seen.at(-1)).toEqual({ final: true, signal: undefined });
+    // The next run has its own signal, so the aborted one never matches it.
+    gates['provider B'] = gate();
+    const next = prompt('B');
+    await gates['provider B'].reached;
+    expect(session.agent.signal).toBeInstanceOf(AbortSignal);
+    expect(session.agent.signal).not.toBe(signalA);
+    expect(abortBoundRun(session, signalA)).toBe(false);
+    gates['provider B'].resolve();
+    await next;
   });
 });

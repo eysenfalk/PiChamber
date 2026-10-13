@@ -28,6 +28,14 @@ The lab image carries no provider credentials, so a recording of agent behavior 
 
 Pi's `started` callback carries no run handle, and `AgentSession.abort()` aborts whatever run the agent has. Between the `isStreaming` check and `started` lie more awaits (auth, compaction, `before_agent_start`), so a prompt can report `started` while another prompt's run owns the agent; its own `Agent.prompt()` then fails, and a session wide abort would hit the other run. PiChamber reads the agent's `signal` one microtask after `started`: a new signal is this prompt's run, the old one means it got none. This depends on Pi starting the run without an await after the callback. If a Pi update breaks that order, `run-binding.e2e.test.js` fails.
 
+### Pi emits `agent_settled` for a rejected prompt while another prompt's run is live
+
+- Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `_runAgentPrompt()` at line 1380 to 1414 (`await this.agent.prompt(messages)` at 1390, `await this._emitAgentSettled()` in its `finally` at 1412), `_emitAgentSettled()` at 684 to 707 (clears `_isAgentRunActive` at 686, so `isStreaming` turns false while the other run goes on), the retry loop with `agent.continue()` at 1391 to 1403; `@earendil-works/pi-agent-core` 1.1.0 `dist/agent.js`: `prompt()` refusing while `activeRun` exists at 342, `finishRun()` clearing the run before the settle at 383 to 388; checked with the faux provider in `session-daemon/orchestration/run-binding.e2e.test.js` (#125 round 8)
+- Date: 2026-10-13
+- Settled by: a Pi release that emits `agent_settled` only for the prompt that owned the run, or that gives `agent_settled` a run id
+
+When a prompt reports `started` but `Agent.prompt()` refuses it because another prompt's run owns the agent, its `_runAgentPrompt` still emits `agent_settled` from its `finally` while the other run is live. A real settle comes after `finishRun()` cleared the run, so `session.agent.signal` is undefined then; at the false one it is the live run's signal. The daemon therefore treats a settle with a signal, also an aborted one, as no completion (`isSettleFinal`). The converse does not hold: between a run's end and its retry `continue()` the signal is undefined too, so no signal does not prove that the prompt is over. Pi 1.1.0 has no run id that would settle this; the contract in `session-daemon/DOCUMENTATION.md` keeps an occupancy whenever the evidence is missing or contradicts.
+
 ### Pi's prompt() decides between a new run and a queued input only after its own awaits
 
 - Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `prompt()` at line 1517, the deferral at 1518 to 1521, the `isStreaming` check at 1551, `_emitAgentSettled()` at 684 to 707; checked with the faux provider in `session-daemon/orchestration/admission.e2e.test.js` (#125 round 5)
