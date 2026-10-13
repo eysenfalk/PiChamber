@@ -3186,39 +3186,6 @@ export function createSessionDaemon({
   // deleted when its assigned JSONL is positively absent (see
   // disposeIdleSessionRuntime).
 
-  // A settle Pi emits for a worker run orchestration still tracks is held
-  // until that run's own end (R9 addendum): until then the worker stays busy,
-  // keeps its pending send and publishes no idle. Other sessions never hold.
-  const heldSettles = new Map();
-  // The native side of a final settle: idle, cleanup, disposal. A replayed
-  // held settle publishes no second idle when the prompt's end already did.
-  const applyNativeSettle = (sessionId, owningRuntime, directory, { replay = false } = {}) => {
-    const idle = !replay || settledSendGenerationBySession.get(sessionId) !== (sendGenerationBySession.get(sessionId) ?? 0);
-    retryStateBySession.delete(sessionId);
-    activeRunStartedAt.delete(sessionId);
-    settledSendGenerationBySession.set(sessionId, sendGenerationBySession.get(sessionId) ?? 0);
-    latestUserMessageIds.delete(sessionId);
-    latestTurnHeadIds.delete(sessionId);
-    latestAssistantMessageIds.delete(sessionId);
-    toolInputBySession.delete(sessionId);
-    clearToolTimingsForSession(sessionId, { keepCompleted: true });
-    if (idle) publish('session.lifecycle', { state: 'idle', serverNow: Date.now() }, sessionId, directory);
-    if (!completeRequestedShutdown(sessionId)) {
-      void flushPendingResourceReload(owningRuntime).then(() => {
-        if (!shutdownRequestedBySession.has(sessionId)) scheduleIdleDisposal(sessionId);
-      });
-    }
-    void flushPendingRuntimeRecreation().catch(() => {});
-  };
-  const replayHeldSettle = (sessionId) => {
-    const held = heldSettles.get(sessionId);
-    if (!held) return;
-    heldSettles.delete(sessionId);
-    // Another run started meanwhile: its own settle follows.
-    if (!isSettleFinal(held.runtime.session)) return;
-    applyNativeSettle(sessionId, held.runtime, held.directory, { replay: true });
-  };
-
   const runSessionInput = async (payload, delivery, { admit } = {}) => {
     if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string'
       || typeof payload.text !== 'string' || payload.text.length === 0 || Buffer.byteLength(payload.text) > 64 * 1024) {
@@ -3442,9 +3409,6 @@ export function createSessionDaemon({
         }, payload.sessionId, activeRuntime.cwd);
       }
       if (activeRuntime.session?.isStreaming) return;
-      // A worker run orchestration tracks is still live (this prompt may have
-      // been deferred, or Pi waits to retry): its own end publishes idle.
-      if (orchestration.tracksRun(payload.sessionId)) return;
       settledSendGenerationBySession.set(payload.sessionId, generation);
       // Extension commands can complete without starting an agent turn, so Pi
       // emits no agent_settled event. Close the optimistic browser lifecycle
@@ -3820,16 +3784,22 @@ export function createSessionDaemon({
         // A settle while a run is still live (Pi 1.1.0 can emit one for an
         // earlier prompt) is no completion: no idle, no result, no release.
         if (!isSettleFinal(owningRuntime.session)) break;
-        // A worker run orchestration tracks ends only with its own prompt:
-        // a settle is no proof (it may be another prompt's), so its native
-        // side waits for that end (`onRunEnded`).
-        if (orchestration.tracksRun(sessionId)) {
-          heldSettles.set(sessionId, { runtime: owningRuntime, directory });
-          void orchestration.onSessionSettled(sessionId, owningRuntime).catch(() => {});
-          break;
-        }
-        applyNativeSettle(sessionId, owningRuntime, directory);
+        retryStateBySession.delete(sessionId);
+        activeRunStartedAt.delete(sessionId);
+        settledSendGenerationBySession.set(sessionId, sendGenerationBySession.get(sessionId) ?? 0);
+        latestUserMessageIds.delete(sessionId);
+        latestTurnHeadIds.delete(sessionId);
+        latestAssistantMessageIds.delete(sessionId);
+        toolInputBySession.delete(sessionId);
+        clearToolTimingsForSession(sessionId, { keepCompleted: true });
+        publish('session.lifecycle', { state: 'idle', serverNow: Date.now() }, sessionId, directory);
         void orchestration.onSessionSettled(sessionId, owningRuntime).catch(() => {});
+        if (!completeRequestedShutdown(sessionId)) {
+          void flushPendingResourceReload(owningRuntime).then(() => {
+            if (!shutdownRequestedBySession.has(sessionId)) scheduleIdleDisposal(sessionId);
+          });
+        }
+        void flushPendingRuntimeRecreation().catch(() => {});
         break;
       case 'session_info_changed': {
         const title = typeof event.name === 'string' ? event.name.trim() : '';
@@ -4010,7 +3980,6 @@ export function createSessionDaemon({
       const message = `The worker slot of ${sessionId} could not be updated after Pi accepted its input; the slot stays taken until the worker settles or stops: ${redactAttachmentPaths(error?.message ?? String(error))}`;
       publish('session.error', { code: 'ORCHESTRATION_ADMISSION_UNRESOLVED', message }, sessionId);
     },
-    onRunEnded: replayHeldSettle,
   });
   const orchestrationExtension = createOrchestrationExtension(orchestration);
 

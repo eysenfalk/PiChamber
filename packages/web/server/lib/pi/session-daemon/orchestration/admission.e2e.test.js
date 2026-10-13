@@ -63,15 +63,6 @@ export default function (pi) {
     gate.entered();
     await gate.promise;
   });
-  // One-shot: the first run that ends after the gate is set waits before its
-  // settle; its agent signal is gone by then.
-  pi.on('agent_before_settle', async () => {
-    const gate = gates().beforeSettle;
-    if (!gate) return;
-    gates().beforeSettle = undefined;
-    gate.entered();
-    await gate.promise;
-  });
   // One-shot: the first settle after the gate is set waits for it.
   pi.on('agent_settled', async () => {
     const gate = gates().settled;
@@ -140,7 +131,6 @@ describe('worker input admission through the real SDK', () => {
     gates?.input?.resolve();
     gates?.settled?.resolve();
     gates?.start?.resolve();
-    gates?.beforeSettle?.resolve();
     delete globalThis.__pichamberAdmission;
     await harness?.client.close().catch(() => {});
     await harness?.daemon.stop();
@@ -259,47 +249,5 @@ describe('worker input admission through the real SDK', () => {
     expect(running.filter((text) => text === 'RUN B')).toHaveLength(2);
     await vi.waitFor(async () => expect(await worker()).toMatchObject({ state: 'done' }));
     expect(results()).toHaveLength(before.results + 1);
-  }, 120_000);
-
-  // R9 addendum: the native side of a settle (idle, cleanup, the result) of a
-  // tracked worker run waits for that run's own end.
-  it('publishes no idle for a worker while its run waits before its settle and another prompt settles', async () => {
-    const gates = globalThis.__pichamberAdmission = {};
-    harness = await setup();
-    const { client, workerId, worker, results, delivered } = harness;
-    const running = [];
-    gates.running = (text) => running.push(text);
-    const idles = () => client.events.filter((message) => message.event === 'session.lifecycle'
-      && message.payload?.sessionId === workerId && message.payload?.state === 'idle').length;
-
-    const startA = gates.start = gate();
-    const promptA = client.request('sessions.prompt', { sessionId: workerId, text: 'RUN A' }).catch((error) => error);
-    await startA.reached;
-    gates.response = gate();
-    const other = connectClient(harness.endpoint);
-    await other.authenticate();
-    await expect(other.request('sessions.prompt', { sessionId: workerId, text: 'RUN B' })).resolves.toMatchObject({ kind: 'response' });
-    await other.close();
-    await client.next(() => running.includes('RUN B'));
-    // A reports started into B's run; its settle waits in a hook.
-    const settleA = gates.settled = gate();
-    startA.resolve();
-    await settleA.reached;
-    const before = { results: results().length, idles: idles() };
-    // B's run ends and waits before its settle: no agent signal, no retry.
-    const beforeSettleB = gates.beforeSettle = gate();
-    gates.response.resolve();
-    await beforeSettleB.reached;
-    settleA.resolve();
-    await promptA;
-    await new Promise((done) => setTimeout(done, 300));
-    expect(idles()).toBe(before.idles);
-    expect(results().length).toBe(before.results);
-    expect(await worker()).toMatchObject({ state: 'active' });
-    // B's own end publishes idle and delivers its result.
-    beforeSettleB.resolve();
-    await delivered(before.results + 1);
-    await vi.waitFor(() => expect(idles()).toBe(before.idles + 1));
-    expect(running.filter((text) => text === 'RUN B')).toHaveLength(1);
   }, 120_000);
 });

@@ -1771,32 +1771,6 @@ describe('orchestration input admission (#125 round 5)', () => {
     await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'two' }), 'ORCHESTRATION_LIMIT');
   });
 
-  // Review round 9 addendum: a deferred prompt's own promise exists and is
-  // already fulfilled when its late verdict comes. It proves nothing about
-  // that run, also not for a run that is not bound or whose input a stop
-  // ended; the unproven hold keeps the slot and the directory.
-  for (const variant of [
-    { name: 'a bound late run', run: () => Promise.resolve(new AbortController().signal) },
-    { name: 'a late verdict without a run of its own', run: () => Promise.resolve(null) },
-  ]) {
-    it(`never counts the fulfilled prompt of a deferred input as the end of ${variant.name}`, async () => {
-      const harness = createHarness({ workerLimit: 2 });
-      const { service } = harness;
-      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-      await service.call('orch', 'session_spawn', { cwd: '/work/c', task: 'three' });
-      await finishWorker(harness, 'worker-1');
-      const { ticket } = await harness.input('worker-1', { outcome: 'unresolved' });
-      const fulfilled = Promise.resolve(true);
-      await fulfilled;
-      const { completion } = await harness.verdict(ticket, 'started', { run: variant.run(), finished: fulfilled });
-      await completion;
-      expect((await harness.workers())['worker-1']).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } });
-      await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
-      await harness.service.call('orch', 'session_stop', { sessionId: 'worker-2' });
-      await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'two' }), 'ORCHESTRATION_CWD_BUSY');
-    });
-  }
-
   it('waits for an admitted input before a stop finishes, and frees the slot after an input that started no run', async () => {
     const harness = createHarness({ workerLimit: 1 });
     const { service, deps } = harness;
@@ -1861,14 +1835,9 @@ describe('orchestration input admission (#125 round 5)', () => {
     const harness = createHarness({ workerLimit: guard === 'limit' ? 1 : 2 });
     const { service, settle } = harness;
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    // Two prompts wait for their verdict (in Pi's before_agent_start) while
-    // the run goes on; they share one admission.
-    const admit = async () => {
-      await service.beforeSessionInput('worker-1');
-      return { ticket: await service.admitInput('worker-1') };
-    };
-    const a = await admit();
-    const b = await admit();
+    // Pi defers two prompts behind the running run; they share one admission.
+    const a = await harness.input('worker-1', { outcome: 'unresolved' });
+    const b = await harness.input('worker-1', { outcome: 'unresolved' });
     expect(a.ticket.admission).toBe(b.ticket.admission);
     await settle('worker-1', 'first');
     // A starts a run; recording its start fails.
@@ -1911,9 +1880,7 @@ describe('orchestration input admission (#125 round 5)', () => {
     await expect(guardSpawn(service, guard)).resolves.toMatchObject({ sessionId: 'worker-2' });
   });
 
-  // R9 addendum: the deferred prompt's promise is fulfilled before its late
-  // run starts; a stop changes nothing about that.
-  it.each(['limit', 'directory'])('holds the slot of a stopped worker for the run a deferred input started, also with its fulfilled prompt (%s)', async (guard) => {
+  it.each(['limit', 'directory'])('keeps the slot of a stopped worker until the prompt of the run a stale input started proves its end (%s)', async (guard) => {
     const harness = createHarness({ workerLimit: guard === 'limit' ? 1 : 2 });
     const { service, deps, settle } = harness;
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
@@ -1921,15 +1888,19 @@ describe('orchestration input admission (#125 round 5)', () => {
     const pending = await harness.input('worker-1', { outcome: 'unresolved' });
     await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
     const run = { signal: 'late-run' };
-    const fulfilled = Promise.resolve(true);
-    await fulfilled;
-    const { completion } = await harness.verdict(pending.ticket, 'started', { run: Promise.resolve(run), finished: fulfilled });
+    const end = deferred();
+    const { completion } = await harness.verdict(pending.ticket, 'started', { run: Promise.resolve(run), finished: end.promise });
     expect(deps.abortRun).toHaveBeenCalledWith('worker-1', run);
-    await completion;
-    // Aborted is not ended, and neither the prompt nor a settle proves it.
-    await settle('worker-1', 'aborted');
-    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'stopped', hold: { reason: 'unproven_run' } });
+    // Aborted, but not ended yet; a settle is no proof.
     await expectCode(guardSpawn(service, guard), guardCode(guard));
+    await settle('worker-1', 'aborted');
+    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'stopped', hold: { reason: 'unresolved_input' } });
+    await expectCode(guardSpawn(service, guard), guardCode(guard));
+    end.resolve(true);
+    await completion;
+    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'stopped' });
+    expect((await harness.workers())['worker-1'].hold).toBeUndefined();
+    await expect(guardSpawn(service, guard)).resolves.toMatchObject({ sessionId: 'worker-2' });
   });
 
   it.each(['limit', 'directory'])('holds the slot of a stopped worker for a late verdict\'s aborted run, whose end has no proof (%s)', async (guard) => {
