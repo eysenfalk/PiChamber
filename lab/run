@@ -29,7 +29,15 @@ podman() { command podman "$@" 9>&-; }
 # The checkout that started the pod, from its label (empty for an unlabeled pod).
 holder() { podman pod inspect "$name" --format '{{index .Labels "io.pichamber.lab.checkout"}}'; }
 # A lab whose labelled checkout directory is gone cannot be stopped from there; any checkout may remove it.
-abandoned() { [[ -n "$1" && ! -d "$1" ]]; }
+# Only a confirmed ENOENT counts: an access or I/O error says nothing about the holder, so the lab stays refused.
+abandoned() {
+  local err
+  [[ -n "$1" ]] || return 1
+  err="$(LC_ALL=C stat -- "$1" 2>&1 >/dev/null)" && return 1
+  [[ "$err" == *'No such file or directory' ]] && return 0
+  echo "Cannot tell whether the holder $1 still exists (${err##*: }); not treating the lab as abandoned." >&2
+  return 1
+}
 check_checkout() {
   local owner
   owner="$(holder)" || return 1

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, writeFile, readFile, rm, mkdir, symlink, stat } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir, chmod, symlink, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -127,9 +127,10 @@ printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
 });
 
 // A pod labelled with `holder`; podman commands are logged, `pod rm` removes it.
-const withHeldLab = async (holder, command, run) => {
+const withHeldLab = async (holder, command, run, prepare) => {
   const root = await mkdtemp(join(tmpdir(), 'pichamber-owner-'));
   try {
+    await prepare?.(root);
     await writeFile(join(root, 'podman'), `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
 if [[ "$1" == info ]]; then echo true
@@ -144,7 +145,10 @@ fi
       env: { ...process.env, PATH: `${root}:${process.env.PATH}`, XDG_RUNTIME_DIR: root, FAKE_LAB: root, FAKE_HOLDER: holder(root) }, encoding: 'utf8', timeout: 5000,
     });
     await run(result, async () => readFile(join(root, 'calls'), 'utf8'), root);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally {
+    await chmod(join(root, 'locked'), 0o700).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
 };
 const otherCheckout = (root) => root; // an existing directory that is not this checkout
 const goneCheckout = (root) => join(root, 'removed-checkout');
@@ -191,6 +195,19 @@ test('up removes an abandoned lab before it starts a new one', () =>
     expect(result.stderr).toContain('which no longer exists');
     expect(result.stderr).not.toContain('Lab already exists');
   }));
+
+// EACCES is not proof that the holder is gone: a foreign active lab must not be removed because its path cannot be read.
+test.skipIf(process.getuid?.() === 0)('a holder path that cannot be read is not abandoned: down and up refuse and remove nothing', async () => {
+  for (const command of [['down'], ['up'], ['status']]) {
+    await withHeldLab((root) => join(root, 'locked', 'checkout'), command, async (result, calls) => {
+      expect(result.stderr).toContain('Cannot tell whether the holder');
+      if (command[0] !== 'status') expect(result.status).toBe(1);
+      expect(result.stdout).not.toContain('no longer exists');
+      expect(result.stderr).not.toContain('which no longer exists');
+      expect(await calls()).not.toMatch(/ rm /);
+    }, async (root) => { await mkdir(join(root, 'locked')); await chmod(join(root, 'locked'), 0o000); });
+  }
+});
 
 test('a pod without a checkout label stays refused', () =>
   withHeldLab(() => '', ['down'], async (result, calls) => {

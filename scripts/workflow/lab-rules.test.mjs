@@ -66,7 +66,7 @@ describe('proof lab repository rules', () => {
     expect(run).toContain('io.pichamber.lab.checkout');
     expect(run).toMatch(/^\s+status\)[\s\S]*?echo "Holder: /m);
     // Only a labelled checkout whose directory is gone counts as abandoned; an unlabeled pod stays refused.
-    expect(run).toMatch(/^abandoned\(\) \{ \[\[ -n "\$1" && ! -d "\$1" \]\]; \}$/m);
+    expect(run).toMatch(/^abandoned\(\) \{[\s\S]*?\[\[ -n "\$1" \]\] \|\| return 1[\s\S]*?stat -- "\$1"[\s\S]*?No such file or directory/m);
     // Removal of an abandoned lab goes through the one cleanup under the lifecycle lock.
     expect(run.indexOf('flock 9')).toBeLessThan(run.indexOf('abandoned "$owner"'));
     expect(run).toMatch(/if abandoned "\$holder_checkout"; then\s+cleanup \|\| exit 1/);
