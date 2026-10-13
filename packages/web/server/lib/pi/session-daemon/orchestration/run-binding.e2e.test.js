@@ -62,6 +62,14 @@ describe('run binding through the real SDK', () => {
         const held = gates[`start ${event.prompt}`];
         if (held) { held.entered(); await held.promise; }
       });
+      // One-shot: the first settle after `gates.settle` is set waits for it.
+      pi.on('agent_settled', async () => {
+        const held = gates.settle;
+        if (!held) return;
+        delete gates.settle;
+        held.entered();
+        await held.promise;
+      });
     };
     runtime = await createPiSessionRuntime({ cwd, agentDir }, { extensionFactories: [extension] });
     const { session } = runtime;
@@ -196,13 +204,59 @@ describe('run binding through the real SDK', () => {
     const end = provenRunEnd(session, promptB, Promise.resolve().then(() => bound)).then((proven) => { ended = true; return proven; });
     await backoff.reached;
     await new Promise((done) => setTimeout(done, 20));
-    // B waits to retry: no live signal, no completion yet.
+    // B waits to retry: no live signal, no completion yet, and a settle now
+    // would be none either (R9-B1).
     expect(session.isRetrying).toBe(true);
     expect(session.agent.signal).toBeUndefined();
-    expect(isSettleFinal(session)).toBe(true);
+    expect(isSettleFinal(session)).toBe(false);
     expect(ended).toBe(false);
     await expect(end).resolves.toBe(true);
     const replies = session.messages.filter((message) => message.role === 'assistant').map(textOf);
     expect(replies).toContain('RAN B');
+  });
+
+  // R9-B1: A reports `started` without a run of its own while B runs; A's
+  // settle waits in a hook until B's attempt failed and B waits to retry with
+  // no signal. That settle must complete nothing; only B's prompt ends B.
+  it('lets no other prompt\'s settle complete a run that waits to retry', async () => {
+    const { session, prompt } = await setup();
+    session.settingsManager.applyOverrides({ retry: { enabled: true, baseDelayMs: 300 } });
+    const seen = settles(session);
+    const backoff = gate();
+    session.subscribe((event) => { if (event.type === 'auto_retry_start') backoff.entered(); });
+    gates['start A'] = gate();
+    gates['provider B'] = gate();
+    gates['fail B'] = gate();
+    let boundA;
+    let boundB;
+    const promptA = prompt('A', () => { boundA = bindStartedRun(session); }).catch((error) => error);
+    await gates['start A'].reached;
+    const promptB = prompt('B', () => { boundB = bindStartedRun(session); });
+    await gates['provider B'].reached;
+    const signalB = await boundB;
+    expect(signalB).toBeInstanceOf(AbortSignal);
+    gates.settle = gate();
+    const settleA = gates.settle;
+    gates['start A'].resolve();
+    await settleA.reached;
+    expect(await boundA).toBeNull();
+    let ended = false;
+    const endB = provenRunEnd(session, promptB, Promise.resolve(signalB)).then((proven) => { ended = true; return proven; });
+    gates['provider B'].resolve();
+    await backoff.reached;
+    expect(session.agent.signal).toBeUndefined();
+    const before = seen.length;
+    settleA.resolve();
+    await promptA;
+    await new Promise((done) => setTimeout(done, 20));
+    expect(session.isRetrying).toBe(true);
+    expect(seen.slice(before)).toEqual([{ final: false, signal: undefined }]);
+    expect(ended).toBe(false);
+    await expect(endB).resolves.toBe(true);
+    await new Promise((done) => setTimeout(done, 20));
+    expect(seen.at(-1)).toEqual({ final: true, signal: undefined });
+    const replies = session.messages.filter((message) => message.role === 'assistant').map(textOf);
+    expect(replies).toContain('RAN B');
+    expect(replies).not.toContain('RAN A');
   });
 });

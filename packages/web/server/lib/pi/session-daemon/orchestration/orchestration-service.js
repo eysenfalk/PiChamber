@@ -180,7 +180,7 @@ export function createOrchestrationService(deps) {
   const liveRuns = new Map();
   // The order in which Pi started runs of this service (`seq` of a start).
   let startSeq = 0;
-  // The `seq` of the latest start per worker.
+  // The `seq` of the latest start per worker that bound a run of its own.
   const latestStart = new Map();
   // Inputs per worker whose end this service cannot prove yet (a stop could
   // not settle them, or their run started without a slot), and the registry
@@ -1325,7 +1325,6 @@ export function createOrchestrationService(deps) {
     }
     // Verdict order, taken before any await.
     const seq = ++startSeq;
-    latestStart.set(sessionId, seq);
     // Pi orders runs, not verdicts: only the ticket's own bound signal shows
     // that it started a run. Until then the ticket stays open with its slot.
     const signal = await Promise.resolve(handle).catch(() => null);
@@ -1340,7 +1339,9 @@ export function createOrchestrationService(deps) {
       return { completion: endWithPrompt(ticket, finished) };
     }
     // From here the run holds the admission's slot until its own end,
-    // whatever happens to the other tickets.
+    // whatever happens to the other tickets. A verdict without its own run
+    // never got here, so it cannot take the latest result (R9-B1).
+    latestStart.set(sessionId, seq);
     tickets.get(sessionId)?.delete(ticket.token);
     if ((tickets.get(sessionId)?.size ?? 0) === 0) tickets.delete(sessionId);
     ticket.state = 'closed';
