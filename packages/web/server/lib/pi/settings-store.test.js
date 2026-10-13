@@ -153,6 +153,7 @@ describe('Pi settings sidecar', () => {
       workerLimit: 4,
       wakes: { coalesceMs: 3_000 },
       watchdog: { stallAfterMs: 600_000, enabled: true },
+      gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
       roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
     });
 
@@ -170,6 +171,15 @@ describe('Pi settings sidecar', () => {
     expect(resolved.workerLimit).toBe(2);
     expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'medium' });
     expect(resolved.roles['task-hard']).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
+
+    // The gate merges field by field; null returns it to its default.
+    await store.update({ orchestration: { gate: { enabled: false } } });
+    await store.update({ orchestration: { gate: { minAvailableBytes: 4 * 1024 ** 3 } } });
+    const gated = await store.read();
+    expect(gated.orchestration.gate).toEqual({ enabled: false, minAvailableBytes: 4 * 1024 ** 3 });
+    expect(resolveOrchestrationSettings(gated).gate).toEqual({ enabled: false, minAvailableBytes: 4 * 1024 ** 3 });
+    await store.update({ orchestration: { gate: null } });
+    expect((await store.read()).orchestration).not.toHaveProperty('gate');
 
     // A role set to null returns to its default; null clears every override.
     await store.update({ orchestration: { roles: { small: null } } });
@@ -190,6 +200,16 @@ describe('Pi settings sidecar', () => {
     });
     await store.update({ orchestration: { watchdog: null } });
     expect(resolveOrchestrationSettings(await store.read()).watchdog).toEqual({ stallAfterMs: 600_000, enabled: true });
+  });
+
+  it('stores an absolute worktree root and clears it with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { worktreeRoot: '/srv/worktrees' } });
+    await store.update({ orchestration: { workerLimit: 2 } });
+    expect(resolveOrchestrationSettings(await store.read())).toMatchObject({ workerLimit: 2, worktreeRoot: '/srv/worktrees' });
+    await store.update({ orchestration: { worktreeRoot: null } });
+    expect(resolveOrchestrationSettings(await store.read())).not.toHaveProperty('worktreeRoot');
   });
 
   it('defaults the eleven roles to the owner\'s models and thinking levels, never off', () => {
@@ -221,6 +241,12 @@ describe('Pi settings sidecar', () => {
       { workerLimit: 0 },
       { workerLimit: 17 },
       { workerLimit: 2.5 },
+      { gate: true },
+      { gate: [] },
+      { gate: { enabled: 'yes' } },
+      { gate: { minAvailableBytes: -1 } },
+      { gate: { minAvailableBytes: 1.5 } },
+      { gate: { minAvailableBytes: 1024 ** 4 + 1 } },
       { roles: { planner: { modelId: 'x' } } },
       { roles: { implementation: { modelId: 'x' } } },
       { roles: { implement: { modelId: 'x' } } },
@@ -235,6 +261,8 @@ describe('Pi settings sidecar', () => {
       { watchdog: { stallAfterMs: 7_200_001 } },
       { watchdog: { enabled: 'yes' } },
       { wakes: [] },
+      { worktreeRoot: 'relative/path' },
+      { worktreeRoot: 7 },
       'four',
     ]) {
       await expect(store.update({ orchestration })).rejects.toMatchObject({ code: 'PI_SETTINGS_INVALID' });

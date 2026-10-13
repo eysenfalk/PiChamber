@@ -1,5 +1,5 @@
 import { createConnection } from 'node:net';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -15,6 +15,13 @@ export const piAiFauxUrl = () => {
   if (!piAiDir) throw new Error('Pi faux provider not found next to the SDK.');
   return pathToFileURL(join(piAiDir, 'dist', 'providers', 'faux.js')).href;
 };
+
+// The tests run on a real host; its load or free memory must not refuse their spawns.
+// `orchestration` adds further settings to the same file.
+export function disableHostGate(dataDir, orchestration = {}) {
+  mkdirSync(join(dataDir, 'pi'), { recursive: true });
+  writeFileSync(join(dataDir, 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { ...orchestration, gate: { enabled: false } } }));
+}
 
 export function connectClient(endpoint) {
   const socket = createConnection({ path: endpoint });

@@ -62,9 +62,9 @@ Intervene with the mildest step that fixes it, and tell the owner about anything
 
 The tools refuse a fifth unfinished worker; that is the owner's limit of four. The host can run out before that, and other sessions of the owner load it too.
 
-Before every spawn, read the host load and free memory from `orchestration_capabilities` and compare with the core count. Do not spawn while the 1 minute load exceeds the core count or less than 8 GB are available (owner decision). Queue the work, tell the owner, and look again when a worker finishes.
+The spawn tool checks the host itself: it refuses with `ORCHESTRATION_HOST_BUSY`, and the reason carries the 1 minute load, the core count and the available memory, while the load exceeds the core count or less than 8 GB are available (owner decision; the owner can switch the gate off or change the minimum in the settings, `orchestration.gate`). Do not retry in a loop: queue the work, tell the owner, and look again when a worker finishes. `orchestration_digest` and `orchestration_capabilities` show the same numbers (`host`) when you want to look before you decide.
 
-Look at what the running workers do. Builds and full test runs of several workers are staggered, not started together; say so in the brief. The lab (`lab/run`) is one pod per host, so one worker at a time may use it; the brief says whether this worker may.
+Look at what the running workers do. Builds and full test runs of several workers are staggered, not started together; say so in the brief. The lab (`lab/run`) is one pod per host, so one worker at a time may use it; the brief says whether this worker may. Workers run `lab/run` only from their own worktree and `lab/run down` when done. `lab/run status` names the holder (the checkout that started the pod). A worker that finds the lab held by another checkout reports `blocked`; if the holder's worktree is gone, `lab/run down` or `up` from any checkout removes the leftover pod.
 
 ## Models
 

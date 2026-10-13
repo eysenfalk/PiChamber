@@ -37,6 +37,25 @@ const assertFreeSlot = (document, workerLimit) => {
   }
 };
 
+const GIB = 1024 ** 3;
+const gib = (bytes) => (bytes / GIB).toFixed(1);
+
+/**
+ * Refuses a new start while the host is busy. `hostGate` is the host numbers
+ * plus the settings' `minAvailableBytes`; without it the gate is off.
+ */
+const assertHostIdle = (hostGate) => {
+  if (!hostGate) return;
+  const { load1, cores, availableBytes, minAvailableBytes } = hostGate;
+  if (load1 <= cores && availableBytes >= minAvailableBytes) return;
+  throw new OrchestrationError('ORCHESTRATION_HOST_BUSY', `The host is busy: load ${load1.toFixed(2)} on ${cores} cores, ${gib(availableBytes)} GiB available (minimum ${gib(minAvailableBytes)} GiB). Wait for a worker to finish and try again.`, {
+    load1,
+    cores,
+    availableBytes,
+    minAvailableBytes,
+  });
+};
+
 const sameDirectory = (left, right) => typeof left === 'string' && typeof right === 'string'
   && resolve(left) === resolve(right);
 
@@ -78,7 +97,7 @@ export const ownedOperation = (document, opId, caller) => {
  * Step `reserved`: look the request up by its key or reserve a new slot.
  * Returns the operation id; an existing open or created operation is reused.
  */
-export const reserveSpawn = (document, { caller, clientRequestId, intent, workerLimit, opId, at, process }) => {
+export const reserveSpawn = (document, { caller, clientRequestId, intent, workerLimit, hostGate, opId, at, process }) => {
   if (clientRequestId) {
     const existingId = document.requestKeys[requestKey(caller, clientRequestId)];
     const existing = existingId ? document.operations[existingId] : undefined;
@@ -88,6 +107,7 @@ export const reserveSpawn = (document, { caller, clientRequestId, intent, worker
     }
   }
   assertFreeSlot(document, workerLimit);
+  assertHostIdle(hostGate);
   assertFreeDirectory(document, intent.cwd);
   document.operations[opId] = {
     kind: 'spawn',
@@ -146,6 +166,8 @@ export const recordSession = (document, opId, caller, session, at) => {
     ...(intent.role ? { role: intent.role } : {}),
     ...(intent.model ? { model: intent.model } : {}),
     ...(intent.thinking ? { thinking: intent.thinking } : {}),
+    ...(intent.issue ? { issue: intent.issue } : {}),
+    ...(intent.branch ? { branch: intent.branch } : {}),
     ...(session.sessionFile ? { sessionFile: session.sessionFile } : {}),
     ...(operation.process ? { process: operation.process } : {}),
     state: 'starting',

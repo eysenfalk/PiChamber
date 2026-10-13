@@ -14,6 +14,13 @@ export const readHostStatus = () => {
   };
 };
 
+/** The numbers the spawn gate compares and the digest shows, from a `readHostStatus` result. */
+export const hostGateNumbers = (status) => ({
+  load1: status.loadAverage['1m'],
+  cores: status.cpuCount,
+  availableBytes: status.memory.freeBytes,
+});
+
 /** Current git branch of a directory, or undefined outside a work tree. */
 export const readGitBranch = (cwd) => new Promise((resolve) => {
   execFile('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 2_000 }, (error, stdout) => {

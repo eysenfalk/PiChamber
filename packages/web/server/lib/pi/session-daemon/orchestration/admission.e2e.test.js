@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
-import { connectClient, credential, piAiFauxUrl } from './e2e-support.js';
+import { connectClient, credential, disableHostGate, piAiFauxUrl } from './e2e-support.js';
 import { createOrchestrationRegistryStore } from './registry-store.js';
 
 // A worker's slot through Pi SDK 1.1.0's own awaits in prompt(): input
@@ -80,8 +80,7 @@ const setup = async () => {
   await writeFile(join(agentDir, 'extensions', 'faux-admission.ts'), extension(piAiFauxUrl(), workerDir));
   process.env.PICHAMBER_DATA_DIR = join(root, 'data');
   // Each settle wakes the parent at once, so wakes count run ends.
-  await mkdir(join(root, 'data', 'pi'), { recursive: true });
-  await writeFile(join(root, 'data', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { wakes: { coalesceMs: 0 } } }));
+  disableHostGate(process.env.PICHAMBER_DATA_DIR, { wakes: { coalesceMs: 0 } });
   const endpoint = join(root, 'daemon.sock');
   const daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir });
   await daemon.start();

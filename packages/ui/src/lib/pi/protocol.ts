@@ -526,6 +526,7 @@ export interface PiSettingsSnapshot {
     /** Stored overrides only; `orchestration` on the snapshot is the effective value. */
     orchestration?: {
       workerLimit?: number;
+      gate?: Partial<PiOrchestrationGate>;
       roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel>>;
     };
   };
@@ -544,8 +545,15 @@ export interface PiOrchestrationRoleModel {
   thinking?: PiThinkingLevel;
 }
 
+/** A spawn is refused while the host load exceeds the core count or less memory than `minAvailableBytes` is available. */
+export interface PiOrchestrationGate {
+  enabled: boolean;
+  minAvailableBytes: number;
+}
+
 export interface PiOrchestrationSettings {
   workerLimit: number;
+  gate: PiOrchestrationGate;
   roles: Record<PiOrchestrationRole, PiOrchestrationRoleModel>;
 }
 
@@ -572,6 +580,7 @@ export interface PiChamberDefaultsUpdateInput {
   /** `null` clears every override; a role or the limit set to `null` returns to its default. */
   orchestration?: {
     workerLimit?: number | null;
+    gate?: Partial<PiOrchestrationGate> | null;
     roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel | null>> | null;
   } | null;
 }

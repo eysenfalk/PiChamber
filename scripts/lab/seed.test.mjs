@@ -56,6 +56,8 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     const extension = await readFile(join(root, 'pi-agent/extensions/faux-orchestration.js'), 'utf8');
     expect(extension).toContain('pi.registerProvider(faux.provider)');
     expect(extension).toContain(JSON.stringify(orchestrator.directory));
+    // The pod's memory is below the host gate's minimum, so the seed switches the gate off for the lab server.
+    expect(JSON.parse(await readFile(join(root, 'pichamber/pi/settings.json'), 'utf8'))).toEqual({ version: 1, orchestration: { gate: { enabled: false } } });
     // Sidebar tree fixtures: committed projects, linked worktrees, a fork chain, a home chat and a foreign folder.
     const alpha = seed.projects.find((p) => p.name === 'lab-alpha');
     const worktrees = spawnSync('git', ['-C', alpha.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout;
