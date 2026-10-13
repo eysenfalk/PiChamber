@@ -8,7 +8,8 @@ import { DEFAULT_ORCHESTRATION_SETTINGS } from '../../settings-store.js';
 // Events queue per worker. The owner is read from the registry when a batch
 // is sent, so a takeover in between delivers to the new owner. An idle owner
 // gets the batch `coalesceMs` after its first event; a busy one at its next
-// settle. Entries leave the queue only after the send resolved, so events
+// settle. Only the owner's own settle sends before the window ends; a
+// worker's settle and the watchdog tick wait for it. Entries leave the queue only after the send resolved, so events
 // emitted during a send arrive with the next message.
 
 export const EVENTS_MESSAGE = 'pichamber.orchestration.events';
@@ -43,6 +44,7 @@ export function createWakes({
   holdSession,
   stateOf,
   runStartedAt,
+  waitingForInput,
   readSettings,
   now,
   isGone,
@@ -56,6 +58,7 @@ export function createWakes({
   const lastActivity = new Map();
   const stalled = new Set();
   let timer;
+  let timerAt;
   let scheduling = false;
   let interval;
 
@@ -68,17 +71,26 @@ export function createWakes({
     };
   };
 
-  // One timer per burst: the first event arms it, later ones join the batch.
+  // One timer, due at the earliest end of a waiting batch's window.
+  const arm = (delayMs) => {
+    const at = now() + delayMs;
+    if (timer !== undefined && timerAt <= at) return;
+    clearTimeout(timer);
+    timerAt = at;
+    timer = setTimeout(() => {
+      timer = undefined;
+      void flush();
+    }, Math.max(0, delayMs));
+    timer.unref?.();
+  };
+
+  // The first event of a burst arms the timer; later ones join the batch.
   const schedule = () => {
     if (timer !== undefined || scheduling) return;
     scheduling = true;
     void settings().then(({ coalesceMs }) => {
       scheduling = false;
-      timer = setTimeout(() => {
-        timer = undefined;
-        void flush();
-      }, coalesceMs);
-      timer.unref?.();
+      arm(coalesceMs);
     });
   };
 
@@ -127,15 +139,22 @@ export function createWakes({
     if (delivered && queues.size > 0) void flush();
   };
 
-  /** Sends every idle owner the events of its workers; a busy owner waits for its settle. */
-  const flush = async () => {
+  /**
+   * Sends every idle owner whose window ended the events of its workers; a
+   * busy owner waits for its settle. `settledOwner` just settled and takes
+   * its batch without waiting for the window.
+   */
+  const flush = async (settledOwner) => {
     if (queues.size === 0) return;
     let document;
+    let coalesceMs;
     try {
-      document = await registry.read();
+      [document, { coalesceMs }] = await Promise.all([registry.read(), settings()]);
     } catch {
       return;
     }
+    const at = now();
+    let nextDue = Infinity;
     const byOwner = new Map();
     for (const [sessionId, events] of queues) {
       const worker = document.workers[sessionId];
@@ -149,9 +168,15 @@ export function createWakes({
     }
     for (const [owner, batch] of byOwner) {
       if (sending.has(owner) || BUSY_STATES.has(stateOf(owner))) continue;
+      const due = Math.min(...batch.map(({ event }) => event.at)) + coalesceMs;
+      if (owner !== settledOwner && due > at) {
+        nextDue = Math.min(nextDue, due);
+        continue;
+      }
       sending.add(owner);
       void send(owner, document.owners[owner]?.cwd, batch);
     }
+    if (nextDue !== Infinity) arm(nextDue - at);
   };
 
   /** A message or tool event of a session: progress for the watchdog. */
@@ -164,7 +189,7 @@ export function createWakes({
   const settled = (sessionId) => {
     lastActivity.delete(sessionId);
     stalled.delete(sessionId);
-    if (queues.size > 0) void flush();
+    if (queues.size > 0) void flush(sessionId);
   };
 
   /** One watchdog pass over the registered workers, then a delivery attempt. */
@@ -180,6 +205,12 @@ export function createWakes({
         if (!isLiveWorker(worker) || !BUSY_STATES.has(stateOf(sessionId))) {
           lastActivity.delete(sessionId);
           stalled.delete(sessionId);
+          continue;
+        }
+        // A worker waiting on a dialog is not stalled; its quiet time starts
+        // again once the dialog is answered.
+        if (waitingForInput(sessionId)) {
+          touch(sessionId);
           continue;
         }
         if (!lastActivity.has(sessionId)) lastActivity.set(sessionId, runStartedAt(sessionId) ?? at);
@@ -203,6 +234,7 @@ export function createWakes({
     clearTimeout(timer);
     interval = undefined;
     timer = undefined;
+    timerAt = undefined;
     queues.clear();
     lastActivity.clear();
     stalled.clear();

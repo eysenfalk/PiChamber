@@ -249,6 +249,7 @@ export function createOrchestrationService(deps) {
     holdSession,
     stateOf,
     runStartedAt: (sessionId) => getSessionActivity(sessionId)?.runStartedAt,
+    waitingForInput: (sessionId) => Boolean(getSessionActivity(sessionId)?.waitingForInput),
     readSettings,
     now,
     isGone,

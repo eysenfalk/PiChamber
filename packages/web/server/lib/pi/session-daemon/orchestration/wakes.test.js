@@ -14,6 +14,7 @@ const createHarness = ({ settings = {} } = {}) => {
     owners: { orch: { cwd: '/repo' }, successor: { cwd: '/other' } },
   };
   const states = new Map();
+  const dialogs = new Set();
   const runtimes = new Map();
   const addOwner = (sessionId) => {
     const runtime = {
@@ -36,6 +37,7 @@ const createHarness = ({ settings = {} } = {}) => {
     holdSession: (sessionId) => { held.push(sessionId); return () => {}; },
     stateOf: (sessionId) => states.get(sessionId) ?? (runtimes.has(sessionId) ? 'idle' : 'dormant'),
     runStartedAt: () => undefined,
+    waitingForInput: (sessionId) => dialogs.has(sessionId),
     readSettings: async () => ({ wakes: { coalesceMs: 3_000 }, watchdog: { stallAfterMs: 10 * MINUTE, enabled: true }, ...settings }),
     now: () => clock,
     isGone: (error) => error?.code === 'SESSION_NOT_FOUND',
@@ -45,7 +47,7 @@ const createHarness = ({ settings = {} } = {}) => {
     clock += ms;
     await vi.advanceTimersByTimeAsync(ms);
   };
-  return { wakes, deps, document, states, runtimes, orch, addOwner, advance, held };
+  return { wakes, deps, document, states, dialogs, runtimes, orch, addOwner, advance, held };
 };
 
 const lines = (entry) => entry.message.content.split('\n');
@@ -94,6 +96,22 @@ describe('orchestration wakes', () => {
     expect(orch.sent).toHaveLength(1);
     expect(lines(orch.sent[0])).toHaveLength(5);
     expect(orch.sent[0].message.details.events.map((event) => event.kind)).toEqual(['run_finished', 'question', 'run_failed']);
+  });
+
+  it('keeps the window when a worker settles or the watchdog ticks before it ends', async () => {
+    const { wakes, orch, advance } = createHarness();
+    wakes.emit('worker-1', 'question', 'which branch?');
+    await advance(1_000);
+    wakes.settled('worker-1');
+    wakes.settled('someone-else');
+    await vi.advanceTimersByTimeAsync(0);
+    wakes.emit('worker-1', 'run_finished', 'asked the owner');
+    await advance(1_500);
+    await wakes.tick();
+    expect(orch.sent).toHaveLength(0);
+    await advance(500);
+    expect(orch.sent).toHaveLength(1);
+    expect(orch.sent[0].message.details.events.map((event) => event.kind)).toEqual(['question', 'run_finished']);
   });
 
   it('keeps events for a busy owner until it settles', async () => {
@@ -192,6 +210,27 @@ describe('orchestration wakes', () => {
     await wakes.tick();
     await advance(3_000);
     expect(orch.sent).toHaveLength(2);
+  });
+
+  it('reports no stall while a worker waits on a dialog and counts quiet time again after the answer', async () => {
+    const { wakes, orch, advance, states, dialogs } = createHarness();
+    states.set('worker-1', 'busy');
+    dialogs.add('worker-1');
+    await wakes.tick();
+    await advance(30 * MINUTE);
+    await wakes.tick();
+    await advance(3_000);
+    expect(orch.sent).toHaveLength(0);
+    dialogs.delete('worker-1');
+    await advance(9 * MINUTE);
+    await wakes.tick();
+    await advance(3_000);
+    expect(orch.sent).toHaveLength(0);
+    await advance(MINUTE);
+    await wakes.tick();
+    await advance(3_000);
+    expect(orch.sent).toHaveLength(1);
+    expect(orch.sent[0].message.details.events).toMatchObject([{ sessionId: 'worker-1', kind: 'stalled' }]);
   });
 
   it('reports no stall when the watchdog is off or the worker is idle', async () => {
