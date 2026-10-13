@@ -187,8 +187,9 @@ test('a lab whose checkout is gone is abandoned: status says so and down removes
 test('up removes an abandoned lab before it starts a new one', () =>
   withHeldLab(goneCheckout, ['up'], async (result, calls) => {
     expect(await calls()).toContain('pod rm --force pichamber-lab');
-    // The new start then needs a built checkout; the fake host has none, which proves removal came first.
-    expect(result.stderr).toContain('Run bun install --frozen-lockfile and bun run build on the host first.');
+    // What the new start does afterwards depends on the checkout's build; it must not be refused as held.
+    expect(result.stderr).toContain('which no longer exists');
+    expect(result.stderr).not.toContain('Lab already exists');
   }));
 
 test('a pod without a checkout label stays refused', () =>
