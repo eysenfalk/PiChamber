@@ -326,7 +326,13 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
       touchDrag={hasTouchOnlyPointer}
       onDrop={applyTreeDrop}
     >
-      <div role="tree" aria-label="Workspaces" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+      <div
+        role="tree"
+        aria-label="Workspaces"
+        // Dedicated mobile floats the New session button over the list bottom,
+        // so the last rows (Add folder) need room to scroll clear of it.
+        className={`flex min-h-0 flex-1 flex-col overflow-y-auto px-2 ${mobileVariant ? 'pb-[calc(4rem+var(--oc-safe-area-bottom,0px))]' : 'pb-2'}`}
+      >
         {tree.sessionCount === 0 && emptyState ? emptyState : null}
         {rows.map((row) => {
           const container = row.node.kind === 'session' ? containerOf(row.key) : undefined;
