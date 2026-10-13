@@ -1046,11 +1046,53 @@ export function createOrchestrationService(deps) {
   // A refusal removes nothing and returns the reason. The target is stored
   // before the first step, so a repeated call finds it after the worktree is
   // gone. A helper bound by `servesPr` has no tree; only its session goes.
+  // The call holds the worker's `stopping` claim throughout, so no new input
+  // is admitted, and the session's idle guard, so it stays resident here.
   const cleanupWorker = async (_callerSessionId, { sessionId }) => {
+    const claim = { ...self, token: randomUUID() };
+    const claimed = await registry.update((document) => {
+      const worker = document.workers[sessionId];
+      if (!worker || worker.stopping) return false;
+      worker.stopping = claim;
+      return true;
+    });
+    if (!claimed) return { sessionId, removed: [], reason: 'The worker is being stopped or cleaned up; retry once that has finished.' };
+    try {
+      return await withSession(sessionId, () => cleanupClaimed(sessionId, claim));
+    } finally {
+      await registry.update((document) => {
+        const worker = document.workers[sessionId];
+        if (worker?.stopping?.token === claim.token) delete worker.stopping;
+      });
+    }
+  };
+
+  // Why the worker may not lose its work now, or null. As for takeover, only a
+  // session proven idle here counts: one resident in another daemon or that
+  // cannot be checked is not idle; a deleted one has no run left.
+  const cleanupBusy = async (sessionId, claim) => {
+    let runtime = getLiveRuntime(sessionId);
+    if (!runtime) {
+      try {
+        runtime = await activateSession(sessionId);
+      } catch (error) {
+        if (!isGone(error)) return 'The worker cannot be checked here, it may still run in another PiChamber instance.';
+      }
+    }
     const worker = (await registry.read()).workers[sessionId];
+    if (worker?.stopping?.token !== claim.token) return 'The worker was stopped meanwhile.';
     const activity = getSessionActivity(sessionId) ?? {};
-    const live = !isSettled(sessionId) || Boolean(activity.waitingForInput || activity.inputActive || worker.stopping || worker.admission);
+    if ((runtime && !isSettled(sessionId)) || activity.waitingForInput || activity.inputActive || worker.admission || ticketsOf(sessionId).length > 0) {
+      return 'The worker is running or waiting for input; stop it or wait until it is idle.';
+    }
+    return null;
+  };
+
+  const cleanupClaimed = async (sessionId, claim) => {
     const refused = (reason) => ({ sessionId, removed: [], reason });
+    const busy = await cleanupBusy(sessionId, claim);
+    if (busy) return refused(busy);
+    const worker = (await registry.read()).workers[sessionId];
     const lookup = async (read) => {
       if (!pullLookup) return { lookupError: 'GitHub is not available in this daemon.' };
       try {
@@ -1062,8 +1104,11 @@ export function createOrchestrationService(deps) {
     let removed = [];
     if (worker.servesPr && !worker.cleanup) {
       const { repo: repository, number } = worker.servesPr;
-      const reason = cleanupRefusal({ helper: true, live, ...(await lookup(() => pullLookup.pullByNumber({ repository, number }))) });
+      const reason = cleanupRefusal({ helper: true, ...(await lookup(() => pullLookup.pullByNumber({ repository, number }))) });
       if (reason) return refused(reason);
+      // Checked again after the GitHub read.
+      const busyNow = await cleanupBusy(sessionId, claim);
+      if (busyNow) return refused(busyNow);
     } else {
       let target = worker.cleanup;
       if (!target) {
@@ -1073,12 +1118,16 @@ export function createOrchestrationService(deps) {
           return refused(`${error.message} Without a servesPr binding it stays for the owner.`);
         }
       }
-      if (!target.branch) return refused(cleanupRefusal({ live }));
-      const tree = await readTreeState(target);
+      if (!target.branch) return refused(cleanupRefusal({}));
       const { pr, lookupError } = target.repository
         ? await lookup(() => pullLookup.pullForBranch({ repository: target.repository, branch: target.branch }))
         : { lookupError: 'The worktree has no github.com origin.' };
-      const reason = cleanupRefusal({ branch: target.branch, pr, lookupError, localTip: tree.localTip, clean: tree.clean, live });
+      // The run and the tree are read after the GitHub read, right before the
+      // first git step.
+      const busyNow = await cleanupBusy(sessionId, claim);
+      if (busyNow) return refused(busyNow);
+      const tree = await readTreeState(target);
+      const reason = cleanupRefusal({ branch: target.branch, pr, lookupError, ...tree });
       if (reason) return refused(reason);
       if (!worker.cleanup) {
         await registry.update((document) => {

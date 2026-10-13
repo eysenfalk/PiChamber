@@ -46,15 +46,21 @@ export const resolveCleanupTarget = async (cwd) => {
 
 const inRepo = (target, args) => ['--git-dir', target.gitDir, ...args];
 
-/** What is left of a target: the local tip, whether the worktree is registered and clean. */
+/**
+ * What is left of a target: the local tip, whether the worktree is
+ * registered, and if so whether it is clean and which branch and HEAD it holds.
+ */
 export const readTreeState = async (target) => {
   const localTip = await git(inRepo(target, ['for-each-ref', '--format=%(objectname)', `refs/heads/${target.branch}`])) || undefined;
   const listed = (await git(inRepo(target, ['worktree', 'list', '--porcelain'])))
     .split('\n').filter((line) => line.startsWith('worktree ')).map((line) => line.slice('worktree '.length));
   const wanted = await canonical(target.worktree);
   const present = (await Promise.all(listed.map(canonical))).includes(wanted);
-  const clean = !present || (await git(['status', '--porcelain'], target.worktree)) === '';
-  return { localTip, present, clean };
+  if (!present) return { localTip, present, clean: true };
+  const clean = (await git(['status', '--porcelain'], target.worktree)) === '';
+  const checkedOut = await git(['branch', '--show-current'], target.worktree);
+  const head = await git(['rev-parse', 'HEAD'], target.worktree);
+  return { localTip, present, clean, checkedOut, head };
 };
 
 /**

@@ -2448,6 +2448,91 @@ describe('worker_cleanup', () => {
     expect(deleteSession).not.toHaveBeenCalled();
   });
 
+  it('refuses new input while it runs and frees the worker after a refusal', async () => {
+    const h = await setup();
+    let release;
+    h.pullLookup.pullForBranch.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve(h.read); }));
+    const running = h.cleanup();
+    await vi.waitFor(() => expect(release).toBeDefined());
+
+    await expectCode(h.input(h.sessionId), 'ORCHESTRATION_WORKER_STOPPING');
+    release();
+    await expect(running).resolves.toMatchObject({ removed: [`worktree ${h.worktree}`, 'branch 9-fix', 'origin 9-fix', `session ${h.sessionId}`] });
+
+    const open = await setup({ pr: 'open' });
+    await expect(open.cleanup()).resolves.toMatchObject({ removed: [] });
+    expect((await open.workers())[open.sessionId].stopping).toBeUndefined();
+    await expect(open.input(open.sessionId)).resolves.toMatchObject({ accepted: true });
+  });
+
+  it('refuses while an input admitted before it is still deciding, and removes nothing', async () => {
+    const h = await setup();
+    let decide;
+    const deciding = new Promise((resolve) => { decide = resolve; });
+    let admitted;
+    const admittedNow = new Promise((resolve) => { admitted = resolve; });
+    // Admitted before the claim; Pi's verdict is still out.
+    const input = h.input(h.sessionId, { beforeVerdict: () => { admitted(); return deciding; } });
+    await admittedNow;
+
+    await expect(h.cleanup()).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/running or waiting/) });
+    expect(existsSync(h.worktree)).toBe(true);
+    expect(h.branchExists()).toBe(true);
+    expect(h.remoteExists()).toBe(true);
+    expect(h.deleteSession).not.toHaveBeenCalled();
+    decide();
+    await input;
+  });
+
+  it('refuses a worker it cannot prove idle here, such as one resident in another daemon', async () => {
+    const h = await setup();
+    h.runtimes.delete(h.sessionId);
+    h.deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('in use'), { code: 'SESSION_IN_USE' }));
+
+    await expect(h.cleanup()).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/another PiChamber instance/) });
+    expect(existsSync(h.worktree)).toBe(true);
+    expect(h.branchExists()).toBe(true);
+    expect(h.deleteSession).not.toHaveBeenCalled();
+    expect(h.pullLookup.pullForBranch).not.toHaveBeenCalled();
+  });
+
+  it('refuses a servesPr helper it cannot prove idle here', async () => {
+    const read = { number: 5, state: 'merged', mergedAt: MERGED_AT, headSha: 'a'.repeat(40), url: '' };
+    const deleteSession = vi.fn(async () => {});
+    const harness = createHarness({ overrides: { pullLookup: { pullForBranch: vi.fn(), pullByNumber: vi.fn(async () => read) }, deleteSession } });
+    const { sessionId } = await harness.service.call('orch', 'session_spawn', { cwd: '/work/review', task: 'review PR 5', servesPr: { repo: 'acme/app', number: 5 } });
+    await harness.settle(sessionId, 'done');
+    harness.runtimes.delete(sessionId);
+    harness.deps.activateSession.mockRejectedValueOnce(Object.assign(new Error('in use'), { code: 'SESSION_IN_USE' }));
+
+    await expect(harness.service.call('orch', 'worker_cleanup', { sessionId })).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/another PiChamber instance/) });
+    harness.states.set(sessionId, 'busy');
+    harness.runtimes.set(sessionId, createRuntime({ sessionId }));
+    await expect(harness.service.call('orch', 'worker_cleanup', { sessionId })).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/running or waiting/) });
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a detached commit', (h) => { git(h.worktree, 'checkout', '-q', '--detach'); }, /detached HEAD/],
+    ['another branch after the old one is gone', (h) => { git(h.worktree, 'checkout', '-q', '-b', '10-next'); git(h.repo, 'branch', '-D', '9-fix'); }, /holds 10-next/],
+  ])('on a retry leaves a worktree that now holds %s', async (_name, reuse, reason) => {
+    const h = await setup();
+    git(h.repo, 'worktree', 'lock', h.worktree);
+    await expect(h.cleanup()).rejects.toMatchObject({ code: 'WORKER_CLEANUP_FAILED', details: { step: 'worktree', removed: [] } });
+
+    git(h.repo, 'worktree', 'unlock', h.worktree);
+    reuse(h);
+    writeFileSync(join(h.worktree, 'next.txt'), 'next\n');
+    git(h.worktree, 'add', '.');
+    git(h.worktree, 'commit', '-q', '-m', 'next');
+    const head = git(h.worktree, 'rev-parse', 'HEAD');
+
+    await expect(h.cleanup()).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(reason) });
+    expect(git(h.worktree, 'rev-parse', 'HEAD')).toBe(head);
+    expect(h.deleteSession).not.toHaveBeenCalled();
+    expect(Object.keys(await h.workers())).toEqual([h.sessionId]);
+  });
+
   it('is the owning orchestrator\'s tool only', async () => {
     const h = await setup();
     await expectCode(h.service.call(h.sessionId, 'worker_cleanup', { sessionId: h.sessionId }), 'ORCHESTRATION_FORBIDDEN');

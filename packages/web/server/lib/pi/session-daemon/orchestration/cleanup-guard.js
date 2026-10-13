@@ -10,10 +10,12 @@ const PROTECTED_BRANCHES = new Set(['main', 'dev']);
  * merge and the live run decide for it.
  * @param {{ helper?: boolean, branch?: string, pr?: { number: number, state: string,
  *   mergedAt: string | null, headSha: string | null } | null, lookupError?: string,
- *   localTip?: string, clean?: boolean, live: boolean }} facts
- *   `localTip` is undefined when the local branch is already deleted.
+ *   localTip?: string, clean?: boolean, present?: boolean, checkedOut?: string, head?: string }} facts
+ *   `localTip` is undefined when the local branch is already deleted. With the
+ *   worktree still `present`, `checkedOut` (empty when detached) and `head`
+ *   are what it holds now. Whether the worker runs is the caller's check.
  */
-export const cleanupRefusal = ({ helper = false, branch, pr, lookupError, localTip, clean = true, live }) => {
+export const cleanupRefusal = ({ helper = false, branch, pr, lookupError, localTip, clean = true, present = false, checkedOut, head }) => {
   if (!helper) {
     if (!branch) return 'The worker\'s worktree has no branch checked out.';
     if (PROTECTED_BRANCHES.has(branch)) return `${branch} is never cleaned up.`;
@@ -25,7 +27,11 @@ export const cleanupRefusal = ({ helper = false, branch, pr, lookupError, localT
   if (!helper && (!pr.headSha || (localTip && localTip !== pr.headSha))) {
     return `${branch} is at ${localTip?.slice(0, 7)}, not at the merged head ${pr.headSha?.slice(0, 7) ?? '(unknown)'} of PR #${pr.number}; its later commits are not merged.`;
   }
+  // A retry finds the stored path again; only the proven branch at the
+  // merged head may go, a replaced or detached worktree stays.
+  if (!helper && present && (checkedOut !== branch || head !== pr.headSha)) {
+    return `The worktree now holds ${checkedOut || 'a detached HEAD'} at ${head?.slice(0, 7)}, not ${branch} at the merged head; it stays.`;
+  }
   if (!clean) return 'The worktree has uncommitted or untracked changes.';
-  if (live) return 'The worker is running or waiting for input; stop it or wait until it is idle.';
   return null;
 };
