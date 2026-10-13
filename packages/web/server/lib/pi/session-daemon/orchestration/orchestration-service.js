@@ -12,6 +12,7 @@ import {
   admitForInput,
   applySettle,
   beginStep,
+  closeQuestion,
   completeStart,
   ensureOwner,
   failOperation,
@@ -20,6 +21,7 @@ import {
   holdsStart,
   markUnresolved,
   ownedOperation,
+  recordReport,
   recordSession,
   rejectStart,
   releaseHold,
@@ -111,6 +113,51 @@ const lastTimestamp = (runtime) => {
   return Number.isFinite(timestamp) ? timestamp : undefined;
 };
 
+const ERROR_TEXT_LIMIT = 500;
+
+/** Pi's session totals, or null when it reports none or a value is no finite count. */
+const usageOf = (runtime) => {
+  let stats;
+  try {
+    stats = runtime.session.getSessionStats?.();
+  } catch {
+    return null;
+  }
+  const { input, output, cacheRead, cacheWrite } = stats?.tokens ?? {};
+  const usage = { input, output, cacheRead, cacheWrite, cost: stats?.cost };
+  return Object.values(usage).every((value) => Number.isFinite(value) && value >= 0) ? usage : null;
+};
+
+/**
+ * What must survive the runtime's disposal, taken from the runtime that just
+ * settled: last transcript change, the error of the last turn, usage totals.
+ */
+const settleSnapshot = (runtime, at) => {
+  const assistant = lastAssistant(runtime);
+  const error = typeof assistant?.errorMessage === 'string' ? assistant.errorMessage : undefined;
+  return {
+    at,
+    lastProgressAt: lastTimestamp(runtime) ?? null,
+    lastError: error
+      ? { message: truncate(error, ERROR_TEXT_LIMIT), at: Number.isFinite(assistant.timestamp) ? assistant.timestamp : at }
+      : null,
+    usage: usageOf(runtime),
+  };
+};
+
+// Rules `worker_report` checks beyond its schema, per kind.
+const reportViolation = (args) => {
+  if (args.kind === 'done' && !args.evidence?.length) return 'A done report needs evidence.';
+  if (args.kind === 'done' && args.pullRequest === undefined && args.noPullRequest === undefined) {
+    return 'A done report needs pullRequest or noPullRequest.';
+  }
+  if (args.kind === 'ready' && args.pullRequest === undefined) return 'A ready report needs pullRequest.';
+  if ((args.kind === 'question' || args.kind === 'blocked') && !args.audience) return `A ${args.kind} report needs audience.`;
+  return null;
+};
+
+const DIGEST_OPERATION_STATES = new Set(['reserved', 'failed', 'abandoned']);
+
 const toolByName = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool]));
 
 /**
@@ -133,6 +180,8 @@ export function createOrchestrationService(deps) {
     listModels,
     hostStatus,
     resolveBranch = async () => undefined,
+    // `owner/repo` of a directory's origin, for a reported pull request.
+    resolveRepository = async () => undefined,
     getSessionActivity = () => ({}),
     holdSession = () => () => {},
     // 'present' | 'absent' | 'unknown' for the worker's JSONL.
@@ -581,13 +630,19 @@ export function createOrchestrationService(deps) {
 
   const send = (callerSessionId, args) => withSession(args.sessionId, () => sendSession(callerSessionId, args));
 
-  const sendSession = async (_callerSessionId, args) => {
+  const sendSession = async (callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const receipt = await startTask(runtime.session.sessionId, args.text, args.delivery ?? 'prompt', args.clientRequestId);
+    // An accepted message from the worker's owner answers its open question.
+    const resolved = args.resolves === undefined ? undefined : await registry.update((document) => (
+      document.workers[args.sessionId]?.orchestratorSessionId === callerSessionId
+      && closeQuestion(document, args.sessionId, args.resolves)
+    ));
     return {
       sessionId: args.sessionId,
       accepted: true,
       ...(receipt?.deduplicated ? { deduplicated: true } : {}),
+      ...(resolved !== undefined ? { resolved } : {}),
       state: stateOf(args.sessionId),
     };
   };
@@ -796,8 +851,96 @@ export function createOrchestrationService(deps) {
     return { fromSessionId: from, workers: moved.workers, operations: moved.operations };
   };
 
+  /**
+   * A worker's report. A `done` binds to the run that makes it (frozen
+   * before any await): the worker becomes `done` and frees its slot when that
+   * run ends (`applySettle`), not now, since the run may still call tools.
+   */
+  const report = async (callerSessionId, args, _options, { runtime }) => {
+    const violation = reportViolation(args);
+    if (violation) throw new OrchestrationError('INVALID_ARGUMENT', violation);
+    const run = args.kind === 'done' ? liveRuns.get(callerSessionId) : undefined;
+    const repository = args.pullRequest === undefined
+      ? null
+      : (await resolveRepository(runtime.cwd).catch(() => undefined)) ?? null;
+    const { value, generation } = await withDoneReport(callerSessionId, run, (document) => recordReport(document, callerSessionId, args, {
+      at: now(), questionId: `q-${randomUUID().slice(0, 8)}`, repository,
+    }));
+    return {
+      sessionId: callerSessionId,
+      kind: args.kind,
+      ...(value.deduplicated ? { deduplicated: true } : {}),
+      ...(value.question ? { openQuestion: value.question.id } : {}),
+      ...(args.kind === 'done' && !value.deduplicated ? { doneAtRunEnd: generation !== null } : {}),
+    };
+  };
+
+  // Live state from the live channels only; a session without a resident
+  // runtime is `dormant` and is not opened.
+  const liveOf = (sessionId, runtime) => {
+    if (!runtime) return { live: 'dormant', liveSince: null };
+    const state = stateOf(sessionId);
+    if (state === 'dormant') return { live: state, liveSince: null };
+    // A dialog can wait before any run starts (an input hook or extension
+    // command asking the owner) while the runtime still reports idle.
+    const { runStartedAt, retry, waitingForInput } = getSessionActivity(sessionId) ?? {};
+    const liveSince = Number.isFinite(runStartedAt) ? runStartedAt : null;
+    if (waitingForInput) return { live: 'waiting_input', liveSince };
+    if (state === 'idle') return { live: state, liveSince: null };
+    if (retry || state === 'retry') return { live: 'retry', liveSince };
+    if (state === 'busy' || state === 'starting') return { live: 'busy', liveSince };
+    return { live: null, liveSince: null };
+  };
+
+  const digestWorker = async (sessionId, worker) => {
+    const runtime = getLiveRuntime(sessionId);
+    const settled = worker.snapshot;
+    const { requestId: _requestId, ...report } = worker.report ?? {};
+    return {
+      sessionId,
+      title: worker.title ?? null,
+      role: worker.role ?? null,
+      issue: worker.issue ?? null,
+      branch: (await resolveBranch(worker.cwd).catch(() => undefined)) ?? null,
+      worktree: worker.cwd ?? null,
+      pullRequest: worker.pullRequest ?? null,
+      lifecycle: worker.state,
+      lifecycleSince: worker.stateSince ?? null,
+      ...liveOf(sessionId, runtime),
+      lastProgressAt: (runtime ? lastTimestamp(runtime) : undefined) ?? settled?.lastProgressAt ?? null,
+      lastInputAt: worker.lastInputAt ?? null,
+      report: worker.report ? report : null,
+      question: worker.question ?? null,
+      lastError: settled?.lastError ?? null,
+      usage: settled?.usage ? { settled: settled.usage, settledAt: settled.at } : null,
+    };
+  };
+
+  /** All workers of the caller from the registry and the live channels; activates nothing. */
+  const digest = async (callerSessionId, args) => {
+    const [document, { workerLimit }] = await Promise.all([registry.read(), readSettings()]);
+    const wanted = args.sessionIds ? new Set(args.sessionIds) : undefined;
+    const operations = Object.entries(document.operations)
+      .filter(([, operation]) => operation.orchestratorSessionId === callerSessionId
+        && DIGEST_OPERATION_STATES.has(operation.state))
+      .map(([opId, operation]) => ({
+        opId,
+        kind: operation.kind,
+        state: operation.state,
+        step: operation.step,
+        error: operation.error ?? null,
+        since: operation.stateSince ?? null,
+      }));
+    const workers = await Promise.all(workersOf(document, callerSessionId)
+      .filter(([sessionId]) => !wanted || wanted.has(sessionId))
+      .map(([sessionId, worker]) => digestWorker(sessionId, worker)));
+    return { at: now(), limit: { workerLimit, used: slotsInUse(document) }, operations, workers };
+  };
+
   const handlers = {
     orchestration_capabilities: capabilities,
+    orchestration_digest: digest,
+    worker_report: report,
     session_spawn: spawn,
     session_list: list,
     session_read: read,
@@ -1024,6 +1167,7 @@ export function createOrchestrationService(deps) {
     const presence = document.workers[sessionId].state === 'starting'
       ? await sessionFileState(sessionId, document.workers[sessionId].sessionFile)
       : undefined;
+    const snapshot = runtime ? settleSnapshot(runtime, now()) : undefined;
     let settled;
     try {
       settled = await registry.update((current) => {
@@ -1043,6 +1187,7 @@ export function createOrchestrationService(deps) {
         const state = applySettle(current, sessionId, presence, now(), { generation, hold: hold || foreign });
         if (hold && !foreign) deferredSettles.set(sessionId, { generation });
         const worker = current.workers[sessionId];
+        if (worker && snapshot) worker.snapshot = snapshot;
         return { state, worker: worker ? { ...worker } : undefined };
       });
     } catch (error) {
@@ -1393,20 +1538,31 @@ export function createOrchestrationService(deps) {
     // of this service there is no proof, and nothing is recorded.
     const run = liveRuns.get(sessionId);
     if (!run) return false;
-    await run.committed;
-    const generation = await registry.update((document) => {
-      const worker = document.workers[sessionId];
-      if (!worker || (worker.state !== 'active' && worker.state !== 'starting')) return null;
-      const completed = completeStart(document, sessionId, now(), {
-        admission: run.admission, start: run.start, seq: run.seq, keep: admissionInUse(sessionId, run.admission),
-      });
-      if (completed.stale || !holdsStart(worker, run.start)) return null;
-      worker.doneReported = completed.generation;
-      return completed.generation;
+    return (await withDoneReport(sessionId, run, () => undefined)).generation !== null;
+  };
+
+  // `change` and the binding of `run`'s done rule share one transaction; a
+  // deduplicated change binds nothing.
+  const withDoneReport = async (sessionId, run, change) => {
+    if (run) await run.committed;
+    const outcome = await registry.update((document) => {
+      const value = change(document);
+      if (!run || value?.deduplicated) return { value, generation: null };
+      return { value, generation: bindDone(document, sessionId, run) };
     });
-    if (generation === null) return false;
-    if (run.generation === null) run.generation = generation;
-    return true;
+    if (outcome.generation !== null && run.generation === null) run.generation = outcome.generation;
+    return outcome;
+  };
+
+  const bindDone = (document, sessionId, run) => {
+    const worker = document.workers[sessionId];
+    if (!worker || (worker.state !== 'active' && worker.state !== 'starting')) return null;
+    const completed = completeStart(document, sessionId, now(), {
+      admission: run.admission, start: run.start, seq: run.seq, keep: admissionInUse(sessionId, run.admission),
+    });
+    if (completed.stale || !holdsStart(worker, run.start)) return null;
+    worker.doneReported = completed.generation;
+    return completed.generation;
   };
 
   // The check is lazy, not at daemon start: a daemon that never

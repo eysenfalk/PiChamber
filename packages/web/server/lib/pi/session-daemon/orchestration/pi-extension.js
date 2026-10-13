@@ -13,6 +13,10 @@ const CHILD_FORBIDDEN_TOOLS = new Set(
   ORCHESTRATION_TOOLS.filter((tool) => tool.childAllowed === false).map((tool) => qualifiedToolName(tool.name)),
 );
 
+const WORKER_ONLY_TOOLS = new Set(
+  ORCHESTRATION_TOOLS.filter((tool) => tool.orchestratorAllowed === false).map((tool) => qualifiedToolName(tool.name)),
+);
+
 const formatResult = (value) => ({
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
   details: value,
@@ -58,12 +62,16 @@ export const createOrchestrationExtension = (service) => ({
 
     // Workers keep read/list/send/wait/interrupt but never see spawn or stop;
     // the service rejects those calls independently.
+    // Orchestrators never see worker_report. A worker's lineage entry may
+    // arrive after its session_start, so a worker gets worker_report back.
     const restrictWorker = (ctx) => {
-      if (!service.isWorker(ctx.sessionManager)) return false;
+      const worker = service.isWorker(ctx.sessionManager);
       const active = pi.getActiveTools();
-      const allowed = active.filter((name) => !CHILD_FORBIDDEN_TOOLS.has(name));
-      if (allowed.length !== active.length) pi.setActiveTools(allowed);
-      return true;
+      const allowed = worker
+        ? [...new Set([...active.filter((name) => !CHILD_FORBIDDEN_TOOLS.has(name)), ...WORKER_ONLY_TOOLS])]
+        : active.filter((name) => !WORKER_ONLY_TOOLS.has(name));
+      if (allowed.length !== active.length || allowed.some((name, index) => name !== active[index])) pi.setActiveTools(allowed);
+      return worker;
     };
 
     pi.on('session_start', (_event, ctx) => {

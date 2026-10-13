@@ -22,6 +22,14 @@ export const readGitBranch = (cwd) => new Promise((resolve) => {
   });
 });
 
+/** `owner/repo` of a directory's `origin` remote, or undefined when there is none. */
+export const readGitRepository = (cwd) => new Promise((resolve) => {
+  execFile('git', ['-C', cwd, 'remote', 'get-url', 'origin'], { timeout: 2_000 }, (error, stdout) => {
+    const match = typeof stdout === 'string' ? stdout.trim().match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/) : null;
+    resolve(error || !match ? undefined : match[1]);
+  });
+});
+
 /** Orchestration settings from the PiChamber sidecar, merged over the defaults. */
 export const createOrchestrationSettingsReader = ({ dataDir }) => {
   const store = createPiSettingsStore({ file: join(dataDir, 'pi', 'settings.json') });

@@ -7,6 +7,7 @@ import { ORCHESTRATION_TOOLS } from './tool-contracts.js';
 // `session_send` and `session_interrupt` keep their reach to any session.
 
 const workerAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool.childAllowed !== false]));
+const orchestratorAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool.orchestratorAllowed !== false]));
 const OWNERSHIP_TOOLS = new Set(['session_stop']);
 
 /**
@@ -17,6 +18,9 @@ const OWNERSHIP_TOOLS = new Set(['session_stop']);
 export const authorize = ({ toolName, callerSessionId, callerKind, targetOwner }) => {
   if (callerKind === 'worker' && !workerAllowed.get(toolName)) {
     throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', `Workers cannot call ${toolName}.`);
+  }
+  if (callerKind === 'orchestrator' && !orchestratorAllowed.get(toolName)) {
+    throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', `Only workers can call ${toolName}.`);
   }
   if (OWNERSHIP_TOOLS.has(toolName) && targetOwner !== callerSessionId) {
     throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', 'Only your own workers can be stopped.');

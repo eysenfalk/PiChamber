@@ -57,7 +57,7 @@ import {
   validatePiSessionJsonlFile,
 } from './session-jsonl.js';
 import { resolvePiChamberDataDir } from '../../pichamber-data-dir.js';
-import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from './orchestration/host-info.js';
+import { createOrchestrationSettingsReader, readGitBranch, readGitRepository, readHostStatus } from './orchestration/host-info.js';
 import { OrchestrationError } from './orchestration/errors.js';
 import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
 import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
@@ -3969,6 +3969,7 @@ export function createSessionDaemon({
     }))),
     hostStatus: readHostStatus,
     resolveBranch: readGitBranch,
+    resolveRepository: readGitRepository,
     // Symlinks and `.` segments must not let two workers share a worktree.
     // A missing directory keeps its lexical form; worker creation rejects it.
     canonicalDirectory: (directory) => realpath(directory).catch(() => resolve(directory)),
