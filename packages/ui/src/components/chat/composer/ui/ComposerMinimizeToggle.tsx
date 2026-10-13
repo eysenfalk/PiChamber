@@ -1,7 +1,7 @@
 import React from 'react';
 
+import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/icon/Icon';
-import { cn } from '@/lib/utils';
 
 type ComposerMinimizeToggleProps = {
     minimized: boolean;
@@ -15,40 +15,37 @@ type ComposerMinimizeToggleProps = {
  * Mobile only: gives the transcript the whole screen. Expanded, it is a slim
  * handle above the composer card; minimized, it is the only thing left of the
  * composer and brings the card back.
+ *
+ * The handle keeps a 44px tap target (`h-11`) but sits in a 24px row: the
+ * negative margins let the target overlap the space around it instead of
+ * adding height to the composer.
  */
 export function ComposerMinimizeToggle({ minimized, hasDraft, onMinimize, onRestore }: ComposerMinimizeToggleProps) {
     if (minimized) {
         return (
-            <button
-                type="button"
+            <Button
+                variant="outline"
                 onClick={onRestore}
                 aria-label="Show message field"
                 title="Show message field"
-                className={cn(
-                    'flex h-10 w-full items-center justify-between rounded-full border border-border/80',
-                    'bg-[var(--surface-subtle)] px-4 typography-ui-label text-muted-foreground',
-                    'hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-interactive-focus',
-                )}
+                className="h-11 w-full justify-between rounded-full px-4 normal-case text-muted-foreground"
             >
                 <span>{hasDraft ? 'Message (draft)' : 'Message'}</span>
                 <Icon name="arrow-up-s" className="size-5" />
-            </button>
+            </Button>
         );
     }
     return (
-        <div className="flex h-6 w-full justify-center">
-            <button
-                type="button"
+        <div className="flex h-6 w-full items-center justify-center">
+            <Button
+                variant="ghost"
                 onClick={onMinimize}
                 aria-label="Minimize message field"
                 title="Minimize message field"
-                className={cn(
-                    'flex h-6 w-16 items-center justify-center rounded-full text-muted-foreground',
-                    'hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-interactive-focus',
-                )}
+                className="-my-2.5 h-11 w-16 rounded-full border-0 px-0 text-muted-foreground"
             >
                 <Icon name="arrow-down-s" className="size-5" />
-            </button>
+            </Button>
         </div>
     );
 }

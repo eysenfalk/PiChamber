@@ -38,7 +38,7 @@ import { composerLanguage, setLanguageContext } from './composerLanguage';
 import type { ComposerEditorViewStore } from './viewStore';
 import { composerEditorTheme, composerNativeSelectionExtension } from './theme';
 import { handleComposerHostMouseDown } from './hostMouseDown';
-import { composerHeightLimit, visibleBoundHeight } from './heightLimit';
+import { composerScrollerLimit } from './heightLimit';
 
 export interface ComposerSelection {
     start: number;
@@ -445,19 +445,26 @@ export const ComposerEditor = React.forwardRef<ComposerEditorHandle, ComposerEdi
             }
 
             const boundEl = boundSelector ? host.closest(boundSelector) : null;
+            // The whole composer (handle, card, footer, attachments) is what
+            // the third applies to; its form is the nearest common ancestor.
+            const surfaceEl = boundEl ? host.closest('form') : null;
 
             const applyLimit = () => {
                 const lineHeight = parseFloat(
                     getComputedStyle(view.contentDOM).lineHeight || '',
                 );
                 if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
-                const cap = composerHeightLimit({
+                const cap = composerScrollerLimit({
                     lineHeight,
                     maxLines,
-                    visibleHeight: boundEl
-                        ? visibleBoundHeight(boundEl, window.visualViewport?.height)
-                        : null,
+                    bound: boundEl,
+                    visualViewportHeight: window.visualViewport?.height,
+                    surface: surfaceEl,
+                    scroller: view.scrollDOM,
                 });
+                // Not laid out (minimized): keep the old limit and measure
+                // again when the composer comes back.
+                if (cap === null) return;
                 const next = `${cap}px`;
                 // The scroller growing re-fires the observer with an unchanged
                 // result; writing only on change keeps that loop silent.
@@ -472,6 +479,8 @@ export const ComposerEditor = React.forwardRef<ComposerEditorHandle, ComposerEdi
             const observer = new ResizeObserver(applyLimit);
             observer.observe(host);
             if (boundEl) observer.observe(boundEl);
+            // Attachments and the footer change the chrome around the text.
+            if (surfaceEl) observer.observe(surfaceEl);
             // A mobile browser opens the keyboard by shrinking only the visual
             // viewport, which no element observer sees.
             const visualViewport = boundEl ? window.visualViewport : null;

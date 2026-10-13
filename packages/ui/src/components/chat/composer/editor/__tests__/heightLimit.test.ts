@@ -1,39 +1,94 @@
 import { describe, expect, test } from 'bun:test';
 
-import { composerHeightLimit, visibleBoundHeight } from '../heightLimit';
+import { composerScrollerLimit } from '../heightLimit';
 
-describe('composerHeightLimit', () => {
-    test('takes a third of the visible area and scrolls beyond it', () => {
-        expect(composerHeightLimit({ lineHeight: 24, maxLines: 16, visibleHeight: 300 })).toBe(100);
+const el = (size: { clientHeight?: number; height?: number }) =>
+    ({ clientHeight: size.clientHeight ?? 0, getBoundingClientRect: () => ({ height: size.height ?? 0 }) }) as unknown as Element;
+
+/**
+ * A composer whose text is long: the scroller fills whatever max height it is
+ * given, and the surrounding chrome stays the same size. Returns the height of
+ * the whole composer after the limit applied.
+ */
+const composerHeightAfterLimit = (visible: number, chrome: number, viewport?: number) => {
+    const lineHeight = 24;
+    const contentHeight = 24 * 24;
+    const bound = el({ clientHeight: visible });
+    const unlimitedScroller = Math.min(contentHeight, lineHeight * 16);
+    const limit = composerScrollerLimit({
+        lineHeight,
+        maxLines: 16,
+        bound,
+        visualViewportHeight: viewport,
+        surface: el({ height: chrome + unlimitedScroller }),
+        scroller: el({ height: unlimitedScroller }),
+    });
+    return chrome + Math.min(unlimitedScroller, limit ?? unlimitedScroller);
+};
+
+describe('composerScrollerLimit', () => {
+    test('the whole composer, chrome included, stays within a third of the visible area', () => {
+        expect(composerHeightAfterLimit(600, 100)).toBe(200);
+        expect(composerHeightAfterLimit(900, 100)).toBe(300);
     });
 
-    test('a taller visible area gives a proportionally taller limit', () => {
-        expect(composerHeightLimit({ lineHeight: 24, maxLines: 16, visibleHeight: 600 })).toBe(200);
+    test('on 300px visible, chrome that eats the third leaves the field its two line floor, not more', () => {
+        // 100px of chrome leaves nothing of the 100px third, so the field keeps its two line floor.
+        expect(composerHeightAfterLimit(300, 100)).toBe(100 + 48);
+    });
+
+    test('a smaller chrome leaves more of the third to the text', () => {
+        expect(composerHeightAfterLimit(300, 40)).toBe(100);
+    });
+
+    test('the shrunken visual viewport counts when the browser pans instead of resizing', () => {
+        expect(composerHeightAfterLimit(800, 100, 450)).toBe(150);
+    });
+
+    test('the element counts when the shell already shrank for the keyboard', () => {
+        expect(composerHeightAfterLimit(420, 90, 800)).toBe(140);
     });
 
     test('the line limit still caps a very tall screen', () => {
-        expect(composerHeightLimit({ lineHeight: 24, maxLines: 5, visibleHeight: 2000 })).toBe(120);
+        expect(composerHeightAfterLimit(3000, 100)).toBe(100 + 24 * 16);
     });
 
     test('without a bound only the line limit applies (desktop)', () => {
-        expect(composerHeightLimit({ lineHeight: 24, maxLines: 5, visibleHeight: null })).toBe(120);
+        expect(
+            composerScrollerLimit({
+                lineHeight: 24,
+                maxLines: 5,
+                bound: null,
+                visualViewportHeight: 300,
+                surface: null,
+                scroller: el({ height: 120 }),
+            }),
+        ).toBe(120);
     });
 
     test('an unmeasured bound does not collapse the editor', () => {
-        expect(composerHeightLimit({ lineHeight: 24, maxLines: 5, visibleHeight: 0 })).toBe(120);
+        expect(
+            composerScrollerLimit({
+                lineHeight: 24,
+                maxLines: 5,
+                bound: el({ clientHeight: 0 }),
+                visualViewportHeight: undefined,
+                surface: null,
+                scroller: el({ height: 120 }),
+            }),
+        ).toBe(120);
     });
-});
 
-describe('visibleBoundHeight', () => {
-    test('uses the shrunken visual viewport when the browser pans instead of resizing', () => {
-        expect(visibleBoundHeight({ clientHeight: 800 } as Element, 450)).toBe(450);
-    });
-
-    test('uses the element when the shell already shrank for the keyboard', () => {
-        expect(visibleBoundHeight({ clientHeight: 420 } as Element, 800)).toBe(420);
-    });
-
-    test('works without a visual viewport', () => {
-        expect(visibleBoundHeight({ clientHeight: 700 } as Element, undefined)).toBe(700);
+    test('a minimized composer is not measured', () => {
+        expect(
+            composerScrollerLimit({
+                lineHeight: 24,
+                maxLines: 16,
+                bound: el({ clientHeight: 600 }),
+                visualViewportHeight: undefined,
+                surface: el({ height: 24 }),
+                scroller: el({ height: 0 }),
+            }),
+        ).toBeNull();
     });
 });

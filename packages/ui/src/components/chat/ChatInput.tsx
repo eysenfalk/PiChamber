@@ -116,8 +116,6 @@ import {
 } from "./composer/editor/ComposerEditor";
 import { createComposerEditorViewStore } from "./composer/editor/viewStore";
 import {
-  appendInlineText,
-  appendWithLineBreaks,
   withInlineInsertionBoundaries,
 } from "./composer/text";
 import { useComposerDrop } from "./composer/attachments/useComposerDrop";
@@ -145,6 +143,7 @@ import {
 import { useAutocompletePosition } from "./composer/state/useAutocompletePosition";
 import { useMessageHistory } from "./composer/state/useMessageHistory";
 import { useComposerDraft } from "./composer/state/useComposerDraft";
+import { usePendingComposerText } from "./composer/state/usePendingComposerText";
 import { useComposerAutocompleteHandlers } from "./composer/state/useComposerAutocompleteHandlers";
 import { useComposerKeyNavigation } from "./composer/state/useComposerKeyNavigation";
 import { useDraftTarget } from "./composer/state/useDraftTarget";
@@ -421,15 +420,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const attachedFiles = useInputStore((s) => s.attachedFiles);
   const addAttachedFile = useInputStore((s) => s.addAttachedFile);
   const detachAttachedFiles = useInputStore((s) => s.detachAttachedFiles);
-  const consumePendingInputText = useInputStore(
-    (s) => s.consumePendingInputText,
-  );
   const pendingStarterInsert = useInputStore((s) => s.pendingStarterInsert);
-  const pendingInputText = useInputStore((s) => s.pendingInputText);
-  const pendingRevertText = useInputStore((s) => s.pendingRevertText);
-  const consumePendingRevertText = useInputStore(
-    (s) => s.consumePendingRevertText,
-  );
   const consumePendingSyntheticParts = useInputStore(
     (s) => s.consumePendingSyntheticParts,
   );
@@ -845,42 +836,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   // Session activity for queue availability and controls
   const { phase: sessionPhase } = useCurrentSessionActivity();
 
-  // Consume pending input text (e.g., from revert action)
-  React.useEffect(() => {
-    if (pendingInputText !== null) {
-      const pending = consumePendingInputText();
-      if (pending?.text) {
-        if (pending.mode === "append") {
-          setMessage((prev) => {
-            const next = pending.text;
-            if (!next.trim()) return prev;
-            return appendWithLineBreaks(prev, next);
-          });
-        } else if (pending.mode === "append-inline") {
-          setMessage((prev) => appendInlineText(prev, pending.text));
-        } else {
-          setMessage(pending.text);
-        }
-        // Focus textarea after setting message
-        setTimeout(() => {
-          composerRef.current?.focus();
-        }, 0);
-      }
-    }
-  }, [pendingInputText, consumePendingInputText]);
-
-  // Consume pending revert text — only when composer is empty.
-  React.useEffect(() => {
-    if (pendingRevertText !== null) {
-      const text = consumePendingRevertText();
-      if (text && message.trim().length === 0) {
-        setMessage(text);
-        setTimeout(() => {
-          composerRef.current?.focus();
-        }, 0);
-      }
-    }
-  }, [pendingRevertText, consumePendingRevertText, message]);
+  // Consume pending input text ("Add to chat") and revert text. Both are
+  // explicit user actions, so a minimized composer comes back for them.
+  const revealComposerAndFocus = React.useCallback(() => {
+    setComposerMinimized(false);
+    setTimeout(() => {
+      composerRef.current?.focus();
+    }, 0);
+  }, []);
+  usePendingComposerText({ message, setMessage, onApplied: revealComposerAndFocus });
 
   // Consume an explicit worktree-restore request. The helper keeps the
   // task-owned snapshot until this applies it, so newer in-memory text wins
@@ -1058,13 +1022,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     currentVariant,
   ]);
 
-  const handleQueuedMessageEdit = React.useCallback((content: string) => {
-    setMessage(content);
-    setComposerMinimized(false);
-    setTimeout(() => {
-      composerRef.current?.focus();
-    }, 0);
-  }, []);
+  const handleQueuedMessageEdit = React.useCallback(
+    (content: string) => {
+      setMessage(content);
+      revealComposerAndFocus();
+    },
+    [revealComposerAndFocus],
+  );
 
   const handleQueuedMessageSend = React.useCallback((messageId: string) => {
     // Send now for a single pending follow-up steers irrespective of stale

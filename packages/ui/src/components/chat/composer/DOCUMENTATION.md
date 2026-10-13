@@ -223,14 +223,19 @@ frame where nothing is open.
 none of them is verifiable outside a real device.** Change them only against
 hardware.
 
-The editor's height on mobile is capped by `editor/heightLimit.ts`: at most a
-third of the visible height of the screen container (`data-composer-bound`),
-then it scrolls inside itself. "Visible" is the smaller of the container and
-`visualViewport`, because Capacitor shrinks the container for the keyboard
-while a mobile browser only shrinks the visual viewport. Desktop has no bound
-and keeps the line limit. The minimized state is local to `ChatInput`;
-restoring focuses the editor inside the tap, and editing a queued message
-restores it too.
+The whole composer on mobile (handle, card, footer, attachments) is capped at
+a third of the visible height of the screen container (`data-composer-bound`).
+`editor/heightLimit.ts` gives the text scroller what is left of that third
+after the measured chrome (form height minus scroller height), never less than
+two lines, and the text scrolls inside itself. On a very small visible height
+the composer can therefore exceed a third; minimizing is the way out.
+"Visible" is the smaller of the container and `visualViewport`, because
+Capacitor shrinks the container for the keyboard while a mobile browser only
+shrinks the visual viewport. Desktop has no bound and keeps the line limit.
+The minimized state is local to `ChatInput`; restoring focuses the editor
+inside the tap. Queued-message edits and text handed over by other surfaces
+("Add to chat", a reverted prompt; `state/usePendingComposerText.ts`) restore
+it too, because they target the editor; other text updates do not.
 
 ## Testing
 
