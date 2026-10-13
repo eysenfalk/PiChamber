@@ -2,6 +2,7 @@ import type { DesktopSettings } from '@/lib/desktop';
 import { useUIStore } from '@/stores/useUIStore';
 import { useMessageQueueStore, type FollowUpBehavior, isFollowUpBehavior, normalizeFollowUpBehavior } from '@/stores/messageQueueStore';
 import { isTerminalShell } from '@/lib/terminalShell';
+import { isAutoFetchIntervalMinutes } from '@/lib/autoFetchSettings';
 import { isUiFontOption, isMonoFontOption } from '@/lib/fontOptions';
 import { sanitizeStarterRefs } from '@/lib/draftStarters';
 import { normalizeMobileKeyboardMode } from '@/lib/mobileKeyboardMode';
@@ -355,6 +356,16 @@ export const applyDesktopUiPreferences = (settings: DesktopSettings): void => {
   ) {
     if (settings.gitChangesViewMode !== store.gitChangesViewMode) {
       store.setGitChangesViewMode(settings.gitChangesViewMode);
+    }
+  }
+  if (typeof settings.gitAutoFetchEnabled === 'boolean') {
+    if (settings.gitAutoFetchEnabled !== store.gitAutoFetchEnabled) {
+      store.setGitAutoFetchEnabled(settings.gitAutoFetchEnabled);
+    }
+  }
+  if (isAutoFetchIntervalMinutes(settings.gitAutoFetchIntervalMinutes)) {
+    if (settings.gitAutoFetchIntervalMinutes !== store.gitAutoFetchIntervalMinutes) {
+      store.setGitAutoFetchIntervalMinutes(settings.gitAutoFetchIntervalMinutes);
     }
   }
   // Retired directoryShowHidden is ignored; the directory surface owns its

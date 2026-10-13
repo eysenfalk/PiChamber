@@ -50,7 +50,7 @@ export function contactSheetArgs(files) {
   const positions = files.map((_, index) => (index % columns) * 720 + '_' + Math.floor(index / columns) * 520);
   if (files.length === 1) filters.push('[s0]null[out]');
   else filters.push(files.map((_, index) => '[s' + index + ']').join('') + 'xstack=inputs=' + files.length + ':layout=' + positions.join('|') + ':fill=0x202535[out]');
-  return [...ffmpegBase, '-filter_complex_threads', '1', ...files.flatMap(file => ['-i', file.image]), '-filter_complex', filters.join(';'), '-map', '[out]', '-frames:v', '1', 'contact-sheet.png'];
+  return [...ffmpegBase, '-filter_complex_threads', '1', ...files.flatMap(file => ['-threads', '1', '-i', file.image]), '-filter_complex', filters.join(';'), '-map', '[out]', '-frames:v', '1', 'contact-sheet.png'];
 }
 
 /** CDP timestamps are epoch seconds. Drop late frames, preserving retained static holds. */

@@ -40,9 +40,20 @@ describe('tours.mjs format', () => {
       { type: 'scroll', selector: '#x', y: Infinity }, { type: 'set-theme', theme: 'system' },
       { type: 'navigate', path: 'https://example.com' }, { type: 'navigate', path: '//example.com' },
       { type: 'click', text: 'x', button: 'middle' }, { type: 'press', key: 'a' }, { type: 'press' },
-      { type: 'drag', from: { text: 'x' } }, { type: 'drag', from: { text: 'x' }, to: { selector: '#y', text: 'y' } }]) {
+      { type: 'drag', from: { text: 'x' } }, { type: 'drag', from: { text: 'x' }, to: { selector: '#y', text: 'y' } },
+      { type: 'hover' }, { type: 'hover', selector: '#x', text: 'x' }, { type: 'long-press' }]) {
       tour.steps[0].actions = [action]; expect(() => validateTour(tour)).toThrow('Invalid tour');
     }
+  });
+  test('hover works on any viewport; long-press only where touch is emulated', () => {
+    const tour = copy();
+    tour.steps[0].viewport = 'desktop';
+    tour.steps[0].actions = [{ type: 'hover', selector: '#row' }];
+    expect(validateTour(tour)).toBe(tour);
+    tour.steps[0].actions = [{ type: 'long-press', selector: '#row' }];
+    expect(() => validateTour(tour)).toThrow('Invalid tour');
+    tour.steps[0].viewport = 'mobile';
+    expect(validateTour(tour)).toBe(tour);
   });
   test('lab title and project evidence are taken from the seed manifest, never row position', () => {
     const tour = labTour({ projects: [{ name: 'lab-one', path: '/one' }, { name: 'lab_two', path: '/two' }], sessions: [{ project: 'lab-one', title: 'Long named session', role: 'long' }, { project: 'lab_two', title: 'Short session', role: 'short' }] });

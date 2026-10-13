@@ -10,20 +10,29 @@ export const SEED_MANIFEST = {
     { project: 'lab-gamma', title: 'Lab: release notes', role: 'short' },
     // A fork of the long session, renamed and then worked on until the rename
     // lies far before the end of a large file (issue #51).
-    { project: 'lab-alpha', title: 'Lab: renamed fork', role: 'fork' },
+    { project: 'lab-alpha', title: 'Lab: renamed', role: 'fork' },
     // The sidebar tree (issue #95): a fork chain, sessions in worktrees, a chat
     // without a project in the lab home and a session in an unregistered folder.
     { project: 'lab-alpha', title: 'Lab: fork child', role: 'fork-child' },
     { project: 'lab-alpha', worktree: 'sidebar-tree', title: 'Lab: tree row layout', role: 'worktree' },
-    { project: 'lab-alpha', worktree: 'search-filter', title: 'Lab: project filter', role: 'worktree' },
+    { project: 'lab-alpha', worktree: 'quick-find', title: 'Lab: project filter', role: 'worktree' },
     { title: 'Lab: quick chat', role: 'chat' },
     { folder: 'scratch', title: 'Lab: scratch notes', role: 'foreign' },
     // Issue #107: an orchestrator on the scripted faux model (scripts/lab/faux-orchestration.mjs).
     { project: 'lab-alpha', title: 'Lab: orchestrator', role: 'orchestrator' },
   ],
   // Linked worktrees of a project, checked out next to it as <project>-worktrees/<name>.
+  // `git` is the state the git pills show (slice 5 of #95). Every worktree with a state
+  // tracks the project's main, which moves on by one commit after they branch off.
   worktrees: [
-    { project: 'lab-alpha', name: 'sidebar-tree' },
-    { project: 'lab-alpha', name: 'search-filter' },
+    // Two uncommitted changes, one commit behind main.
+    { project: 'lab-alpha', name: 'sidebar-tree', git: 'dirty' },
+    // Two commits ahead of main and one behind, nothing uncommitted.
+    { project: 'lab-alpha', name: 'quick-find', git: 'ahead-behind' },
+    // A rebase onto main stopped on a conflict.
+    { project: 'lab-alpha', name: 'rebase-stop', git: 'rebase' },
+    // Tracks a branch on a local bare remote (slice 6 of #95). The remote has one commit
+    // the worktree has not fetched, so no `↓` shows until a fetch happens.
+    { project: 'lab-alpha', name: 'fetch-me', git: 'remote-ahead' },
   ],
 };
