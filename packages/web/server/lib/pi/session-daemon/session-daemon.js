@@ -3168,6 +3168,9 @@ export function createSessionDaemon({
       });
       const result = await runSessionInput(payload, delivery, {
         onAccepted: (disposition) => { startedRun = disposition !== 'handled'; },
+        confirmStart: () => orchestration.confirmSessionInput(payload.sessionId).catch((error) => {
+          throw error instanceof OrchestrationError ? new SessionDaemonProtocolError(error.code, error.message) : error;
+        }),
       });
       claimEntry?.settle({ accepted: true, receipt: { accepted: true, messageId: result.messageId } });
       return result;
@@ -3187,7 +3190,7 @@ export function createSessionDaemon({
   // deleted when its assigned JSONL is positively absent (see
   // disposeIdleSessionRuntime).
 
-  const runSessionInput = async (payload, delivery, { onAccepted } = {}) => {
+  const runSessionInput = async (payload, delivery, { onAccepted, confirmStart } = {}) => {
     if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string'
       || typeof payload.text !== 'string' || payload.text.length === 0 || Buffer.byteLength(payload.text) > 64 * 1024) {
       throw new SessionDaemonProtocolError('INVALID_PROMPT', 'The session prompt is invalid.');
@@ -3266,6 +3269,10 @@ export function createSessionDaemon({
     // pending for the whole agent loop, which can legitimately exceed the
     // 30-second HTTP/private-IPC request budget. Own it in the daemon and
     // report asynchronous failure through the existing session event channel.
+    // The orchestration gate decides again now that this daemon holds the
+    // session: a stop or a settle elsewhere may have freed the worker's slot
+    // since the input was let in.
+    await confirmStart?.();
     const generation = (sendGenerationBySession.get(payload.sessionId) ?? 0) + 1;
     sendGenerationBySession.set(payload.sessionId, generation);
     // Slash-prefixed input dispatches extension commands and skill/template

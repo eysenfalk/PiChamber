@@ -824,64 +824,84 @@ export function createOrchestrationService(deps) {
   };
 
   // A parent that cannot be reached is retried with backoff. Every decision
-  // after a failed attempt is taken against the registry as it is then: a
-  // stopped or removed worker ends the delivery silently, an owner change
-  // retries at once with the new owner and its own attempts, a deleted
-  // current owner drops the result, and a final failure is reported for the
-  // current owner through onDeliveryFailed. Owner changes are bounded too.
+  // is taken against a registry read that succeeded: a stopped or removed
+  // worker ends the delivery silently, an owner change goes on at once with
+  // the new owner and its own attempts, a deleted current owner drops the
+  // result, and a final failure is reported for the current owner through
+  // onDeliveryFailed. A failed read confirms no recipient, old or new; it is
+  // retried with backoff and, after the last try, reported as it is. Every
+  // owner change the loop sees counts against one budget, also one that flips
+  // back before the next read.
   const deliverWithRetry = async (sessionId, result, lineage) => {
     let owner;
     let ownerCwd;
     let attempts = 0;
     let ownerChanges = 0;
+    let readFailures = 0;
+    // The failed attempt to `owner`, judged against the next successful read.
+    let failure;
+    const read = () => resultRecipient(sessionId, lineage).then((recipient) => ({ recipient }), (error) => ({ error }));
+    const report = (error) => onDeliveryFailed({
+      sessionId,
+      parentSessionId: owner ?? lineage?.parentSessionId,
+      parentDirectory: ownerCwd ?? lineage?.parentDirectory,
+      error,
+    });
+    let next = await read();
     for (;;) {
-      let failure;
-      let recipient;
-      try {
-        recipient = await resultRecipient(sessionId, lineage);
-      } catch (error) {
-        failure = error;
-      }
-      if (!failure) {
-        if (!recipient) return;
-        if (owner !== undefined && recipient.owner !== owner) {
-          ownerChanges += 1;
-          attempts = 0;
-        }
-        ({ owner, cwd: ownerCwd } = recipient);
-        if (ownerChanges > DELIVERY_ATTEMPTS) {
-          onDeliveryFailed({ sessionId, parentSessionId: owner, parentDirectory: ownerCwd, error: new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker kept changing its owner during delivery.', { sessionId }) });
+      if (next.error) {
+        readFailures += 1;
+        if (readFailures >= DELIVERY_ATTEMPTS) {
+          report(next.error);
           return;
         }
-        try {
-          // The owner's guard covers its activation and the send until Pi
-          // accepted it, but not the backoff between attempts.
-          const settled = await withSession(owner, async () => {
-            const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
-            const current = await resultRecipient(sessionId, lineage);
-            if (!current) return true;
-            if (current.owner !== owner) return false;
-            await deliverResult(parent, sessionId, result, current.worker);
-            return true;
-          });
-          if (settled) return;
-          continue;
-        } catch (error) {
-          failure = error;
-        }
-        // The failed attempt says something about `owner` only while it is
-        // still the recipient.
-        const current = await resultRecipient(sessionId, lineage).catch(() => recipient);
-        if (!current) return;
-        if (current.owner !== owner) continue;
-        if (isGone(failure)) return;
+        await delay(DELIVERY_RETRY_MS * 2 ** (readFailures - 1));
+        next = await read();
+        continue;
       }
-      attempts += 1;
-      if (attempts >= DELIVERY_ATTEMPTS) {
-        onDeliveryFailed({ sessionId, parentSessionId: owner, parentDirectory: ownerCwd, error: failure });
+      readFailures = 0;
+      const { recipient } = next;
+      if (!recipient) return;
+      if (owner !== undefined && recipient.owner !== owner) {
+        ownerChanges += 1;
+        attempts = 0;
+        // A failure of the old owner says nothing about the new one.
+        failure = undefined;
+      }
+      ({ owner, cwd: ownerCwd } = recipient);
+      if (ownerChanges > DELIVERY_ATTEMPTS) {
+        report(new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker kept changing its owner during delivery.', { sessionId }));
         return;
       }
-      await delay(DELIVERY_RETRY_MS * 2 ** (attempts - 1));
+      if (failure) {
+        // `owner` is still the recipient, so the failure is its own.
+        if (isGone(failure)) return;
+        attempts += 1;
+        if (attempts >= DELIVERY_ATTEMPTS) {
+          report(failure);
+          return;
+        }
+        failure = undefined;
+        await delay(DELIVERY_RETRY_MS * 2 ** (attempts - 1));
+        next = await read();
+        continue;
+      }
+      try {
+        // The owner's guard covers its activation and the send until Pi
+        // accepted it, but not the backoff between attempts. A recipient read
+        // in it that differs is decided by the loop like any other read.
+        next = await withSession(owner, async () => {
+          const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
+          const current = await resultRecipient(sessionId, lineage);
+          if (current?.owner !== owner) return { recipient: current };
+          await deliverResult(parent, sessionId, result, current.worker);
+          return { delivered: true };
+        });
+        if (next.delivered) return;
+      } catch (error) {
+        failure = error;
+        next = await read();
+      }
     }
   };
 
@@ -973,6 +993,7 @@ export function createOrchestrationService(deps) {
         throw error;
       }
       if (!document.workers[sessionId]) return {};
+      gate.worker = true;
       await reconciled();
       const worker = (await registry.read()).workers[sessionId];
       // A stop that claimed the worker waits for the inputs it let in; a new
@@ -989,6 +1010,30 @@ export function createOrchestrationService(deps) {
       await afterSessionInput(sessionId, {}, { startedRun: false }).catch(() => {});
       throw error;
     }
+  };
+
+  /**
+   * Called by the daemon once it holds the session and right before the
+   * prompt that may start a run. An input let in earlier is decided again
+   * against the registry as it is now: a stop of another service (any
+   * daemon) refuses it, and a worker that became `done` or `stopped` in the
+   * meantime (a foreign stop, a settle) takes a slot like a new input or the
+   * input is refused. A stop of this service waits for the gate instead.
+   */
+  const confirmSessionInput = async (sessionId) => {
+    const gate = inputGates.get(sessionId);
+    if (!gate?.worker) return;
+    const document = await registry.read();
+    const worker = document.workers[sessionId];
+    if (!worker) return;
+    if (worker.stopping && worker.stopping.service !== self.service) {
+      throw new OrchestrationError('ORCHESTRATION_WORKER_STOPPING', 'This worker is being stopped; retry once session_stop has finished.', { sessionId });
+    }
+    if (gate.token && worker.gate?.token !== gate.token) gate.token = null;
+    if (gate.token || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return;
+    const { workerLimit } = await readSettings();
+    const token = await registry.update((current) => reserveForInput(current, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
+    if (token) gate.token = token;
   };
 
   // Parallel inputs share one gate. The last one to finish decides: the slot
@@ -1091,6 +1136,7 @@ export function createOrchestrationService(deps) {
     call,
     onSessionSettled,
     beforeSessionInput,
+    confirmSessionInput,
     afterSessionInput,
     recordDoneReport,
     onInputCompleted,
