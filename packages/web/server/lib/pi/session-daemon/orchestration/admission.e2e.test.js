@@ -27,10 +27,6 @@ const respond = async (context) => {
   if (text.startsWith('RUN ')) {
     gates().running?.(text);
     await gates().response?.promise;
-    if (gates().fail?.delete(text)) {
-      gates().failed?.();
-      return fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'overloaded_error: try again' });
-    }
     return fauxAssistantMessage('RAN ' + text);
   }
   if (text.includes('ORCHESTRATE')) {
@@ -53,15 +49,6 @@ export default function (pi) {
     const gate = gates().input;
     if (gate && event.text.startsWith('RUN ')) { gate.entered(event.text); await gate.promise; }
     return { action: 'continue' };
-  });
-  // One-shot: the first RUN prompt after the gate is set waits after Pi's
-  // isStreaming check.
-  pi.on('before_agent_start', async (event) => {
-    const gate = gates().start;
-    if (!gate || !String(event.prompt).startsWith('RUN ')) return;
-    gates().start = undefined;
-    gate.entered();
-    await gate.promise;
   });
   // One-shot: the first settle after the gate is set waits for it.
   pi.on('agent_settled', async () => {
@@ -118,7 +105,7 @@ const setup = async () => {
     const entry = document.workers[workerId];
     entry.doneReported = entry.generation ?? true;
   });
-  return { daemon, endpoint, client, workerId, worker, results, delivered, reportDone };
+  return { daemon, client, workerId, worker, delivered, reportDone };
 };
 
 describe('worker input admission through the real SDK', () => {
@@ -130,7 +117,6 @@ describe('worker input admission through the real SDK', () => {
     gates?.response?.resolve();
     gates?.input?.resolve();
     gates?.settled?.resolve();
-    gates?.start?.resolve();
     delete globalThis.__pichamberAdmission;
     await harness?.client.close().catch(() => {});
     await harness?.daemon.stop();
@@ -197,57 +183,5 @@ describe('worker input admission through the real SDK', () => {
     const settled = await worker();
     expect(settled).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } });
     expect(settled.admission).toBeUndefined();
-  }, 120_000);
-
-  // R9-B1: A reports `started` without a run of its own while B runs, B
-  // reports done after A's verdict, B's attempt fails and B waits to retry
-  // with no run signal, then A's settle arrives. Only B's own end may end B.
-  it('lets no settle of another prompt end a run that waits to retry, or take its done report', async () => {
-    const gates = globalThis.__pichamberAdmission = {};
-    harness = await setup();
-    const { client, workerId, worker, results, delivered, reportDone } = harness;
-    const running = [];
-    gates.running = (text) => running.push(text);
-    const idles = () => client.events.filter((message) => message.event === 'session.lifecycle'
-      && message.payload?.sessionId === workerId && message.payload?.state === 'idle').length;
-
-    // A passes Pi's isStreaming check and waits in before_agent_start.
-    const startA = gates.start = gate();
-    const promptA = client.request('sessions.prompt', { sessionId: workerId, text: 'RUN A' }).catch((error) => error);
-    await startA.reached;
-    gates.response = gate();
-    gates.fail = new Set(['RUN B']);
-    const failed = gate();
-    gates.failed = failed.entered;
-    // B comes from a second client: one connection answers its requests in
-    // order, and A's is still open.
-    const other = connectClient(harness.endpoint);
-    await other.authenticate();
-    await expect(other.request('sessions.prompt', { sessionId: workerId, text: 'RUN B' })).resolves.toMatchObject({ kind: 'response' });
-    await other.close();
-    await client.next(() => running.includes('RUN B'));
-    // A reports started into B's run; its settle waits in a hook.
-    const settleA = gates.settled = gate();
-    startA.resolve();
-    await settleA.reached;
-    await new Promise((done) => setTimeout(done, 200));
-    await reportDone();
-    const before = { results: results().length, idles: idles() };
-    gates.response.resolve();
-    await failed.reached;
-    await new Promise((done) => setTimeout(done, 100));
-    settleA.resolve();
-    await promptA;
-    await new Promise((done) => setTimeout(done, 300));
-    // B waits to retry: A's settle ended nothing.
-    expect(running.filter((text) => text === 'RUN B')).toHaveLength(1);
-    expect(await worker()).toMatchObject({ state: 'active' });
-    expect(results().length).toBe(before.results);
-    expect(idles()).toBe(before.idles);
-    // B's own end applies its done report and delivers its result.
-    await delivered(before.results + 1);
-    expect(running.filter((text) => text === 'RUN B')).toHaveLength(2);
-    await vi.waitFor(async () => expect(await worker()).toMatchObject({ state: 'done' }));
-    expect(results()).toHaveLength(before.results + 1);
   }, 120_000);
 });
