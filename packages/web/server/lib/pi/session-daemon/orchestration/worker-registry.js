@@ -215,16 +215,21 @@ export const applyDurability = (document, sessionId, presence, at) => {
 /**
  * A worker's run settled. The JSONL check comes first, then the `done` rule,
  * so a worker that reported `done` in its first durable run is `done` after
- * this one settle (R3-S1).
+ * this one settle (R3-S1). The `done` rule applies only to the run that
+ * settled: `generation` is the settled run's generation (null when this
+ * process did not start it), and a later run's `done` report or start is not
+ * touched by an earlier run's settle. `hold` defers the `done` rule while an
+ * admitted input has no outcome yet, since that input may start the next run.
  */
-export const applySettle = (document, sessionId, presence, at) => {
+export const applySettle = (document, sessionId, presence, at, { generation = null, hold = false } = {}) => {
   const worker = document.workers[sessionId];
   if (!worker) return undefined;
   applyDurability(document, sessionId, presence, at);
   const current = document.workers[sessionId];
   if (!current) return 'removed';
-  delete current.gate;
-  if (current.doneReported && current.state === 'active') {
+  const currentGeneration = current.generation ?? 0;
+  if (hold || (generation !== null && generation !== currentGeneration)) return current.state;
+  if ((current.doneReported === true || current.doneReported === currentGeneration) && current.state === 'active') {
     setWorkerState(current, 'done', at);
   }
   if (current.state !== 'starting') delete current.doneReported;
@@ -232,35 +237,71 @@ export const applySettle = (document, sessionId, presence, at) => {
 };
 
 /**
- * Input gate. A `done` or `stopped` worker takes a slot before a new run
- * starts, in the same transaction as the limit check. Returns the gate token,
- * or null when the input needs no slot.
+ * Input admission, taken by the daemon that holds the session lease right
+ * before the prompt. A `done` or `stopped` worker takes a slot and its
+ * directory in the same transaction as the limit check; `admission` records
+ * that this process holds them for an input whose outcome is still open.
+ * Another admission of this process is shared. Returns whether this call
+ * reserved.
  */
-export const reserveForInput = (document, sessionId, { workerLimit, token, at, process }) => {
+export const admitForInput = (document, sessionId, { workerLimit, token, at, process, ownsProcess }) => {
   const worker = document.workers[sessionId];
-  if (!worker || !RESTARTABLE_STATES.has(worker.state)) return null;
+  if (!worker) return { worker: false, reserved: false };
+  if (worker.stopping) {
+    throw new OrchestrationError('ORCHESTRATION_WORKER_STOPPING', 'This worker is being stopped; retry once session_stop has finished.', { sessionId });
+  }
+  if (worker.admission) {
+    if (ownsProcess(worker.admission.process)) return { worker: true, reserved: false };
+    throw new OrchestrationError('ORCHESTRATION_WORKER_BUSY', 'Another daemon is admitting an input to this worker; retry shortly.', { sessionId });
+  }
+  if (!RESTARTABLE_STATES.has(worker.state)) return { worker: true, reserved: false };
   assertFreeSlot(document, workerLimit);
   assertFreeDirectory(document, worker.cwd, sessionId);
-  worker.gate = { token, previous: worker.state, process };
+  worker.admission = { token, previous: worker.state, process, since: at, state: 'pending' };
   setWorkerState(worker, 'active', at);
-  return token;
+  return { worker: true, reserved: true };
 };
 
-/** The input started no run: return the slot if this token still holds it. */
-export const releaseInput = (document, sessionId, token, at) => {
+/**
+ * An admitted input started a run. The run takes the worker's slot as a new
+ * generation; an admission's slot passes to it, so nothing is counted twice.
+ * A stopped worker has no slot for it: the caller aborts the run.
+ */
+export const commitStart = (document, sessionId, at) => {
   const worker = document.workers[sessionId];
-  if (!worker?.gate || worker.gate.token !== token) return false;
-  const { previous } = worker.gate;
-  delete worker.gate;
-  if (worker.state !== 'active') return false;
-  setWorkerState(worker, previous, at);
+  if (!worker) return null;
+  if (worker.state === 'stopped' || worker.state === 'removed') return { stopped: true };
+  delete worker.admission;
+  delete worker.doneReported;
+  if (RESTARTABLE_STATES.has(worker.state)) setWorkerState(worker, 'active', at);
+  worker.generation = (worker.generation ?? 0) + 1;
+  return { generation: worker.generation };
+};
+
+/**
+ * Every admitted input of this process ended without a run: the slot an
+ * admission took goes back. An unresolved admission without a slot of its own
+ * only clears its mark.
+ */
+export const releaseAdmission = (document, sessionId, at, ownsProcess) => {
+  const worker = document.workers[sessionId];
+  if (!worker?.admission || !ownsProcess(worker.admission.process)) return false;
+  const { previous } = worker.admission;
+  delete worker.admission;
+  if (previous && worker.state === 'active') setWorkerState(worker, previous, at);
   return true;
 };
 
-/** The input started a run: it keeps the slot until that run settles. */
-export const keepInput = (document, sessionId, token) => {
+/**
+ * Pi accepted an input without saying whether it started a run (a prompt
+ * deferred while the previous run settles). The slot stays, and the
+ * registry shows the open admission so a watchdog can report it.
+ */
+export const markUnresolved = (document, sessionId, { token, at, process }) => {
   const worker = document.workers[sessionId];
-  if (worker?.gate?.token === token) delete worker.gate;
+  if (!worker || worker.state === 'stopped' || worker.state === 'removed') return false;
+  worker.admission = { ...(worker.admission ?? { token, process }), since: worker.admission?.since ?? at, state: 'unresolved', unresolvedAt: at };
+  return true;
 };
 
 /**

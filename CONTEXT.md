@@ -20,6 +20,14 @@ An RPC host receives the async status snapshot as widget `subagent-async`, line 
 
 The lab image carries no provider credentials, so a recording of agent behavior needs a scripted model. Pi's faux provider registers a model whose replies, including tool calls, come from a script; the orchestration daemon test drives a real runtime with it.
 
+### Pi's prompt() decides between a new run and a queued input only after its own awaits
+
+- Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `prompt()` at line 1517, the deferral at 1518 to 1521, the `isStreaming` check at 1551, `_emitAgentSettled()` at 684 to 707; checked with the faux provider in `session-daemon/orchestration/admission.e2e.test.js` (#125 round 5)
+- Date: 2026-10-13
+- Settled by: a Pi release that decides and starts a run without awaiting in between, or that always calls `preflightResult`
+
+`prompt()` awaits extension commands (slash input) and the `input` handlers before it checks `isStreaming`. A run that was live when the caller checked can settle inside that window, and Pi then starts a new run instead of queueing the input, so a check before the call cannot decide whether the input takes a slot; only the `preflightResult` verdict (`started`, `queued`, `handled`) can. A `prompt()` made while `agent_settled` handlers run is pushed onto the deferred settled actions and resolves at once without calling `preflightResult`; its run, and its `started` signal, come after the handlers. The daemon treats that return as accepted and keeps a worker's admission `unresolved` until the late signal (`session-daemon/DOCUMENTATION.md`).
+
 ### Pi maps thinking levels to Anthropic effort; Claude 5.5 always thinks
 
 - Source: Anthropic docs `choosing-a-model` and `build-with-claude/effort` ("Recommended effort levels", read by the orchestrator 2026-10-12); `@earendil-works/pi-ai` 1.1.0 `providers/data/anthropic.json` (`thinkingLevelMap`) and `api/anthropic-messages.js`, checked with a payload probe through `onPayload`

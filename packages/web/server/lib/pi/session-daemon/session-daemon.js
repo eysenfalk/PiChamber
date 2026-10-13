@@ -3158,27 +3158,22 @@ export function createSessionDaemon({
       }
       claimEntry = claimed.entry;
     }
-    // Orchestration input gate: a finished worker takes a slot before its
-    // new run starts and gets it back when the input started no run.
-    let gateTicket;
-    let startedRun = false;
+    // Orchestration admission: a fast refusal before activation; the slot
+    // is decided under the session lease right before the prompt and ended
+    // by Pi's verdict on it (see the orchestration service).
+    const toProtocolError = (error) => {
+      throw error instanceof OrchestrationError ? new SessionDaemonProtocolError(error.code, error.message) : error;
+    };
     try {
-      gateTicket = await orchestration.beforeSessionInput(payload.sessionId).catch((error) => {
-        throw error instanceof OrchestrationError ? new SessionDaemonProtocolError(error.code, error.message) : error;
-      });
+      await orchestration.beforeSessionInput(payload.sessionId).catch(toProtocolError);
       const result = await runSessionInput(payload, delivery, {
-        onAccepted: (disposition) => { startedRun = disposition !== 'handled'; },
-        confirmStart: () => orchestration.confirmSessionInput(payload.sessionId).catch((error) => {
-          throw error instanceof OrchestrationError ? new SessionDaemonProtocolError(error.code, error.message) : error;
-        }),
+        admit: () => orchestration.admitInput(payload.sessionId).catch(toProtocolError),
       });
       claimEntry?.settle({ accepted: true, receipt: { accepted: true, messageId: result.messageId } });
       return result;
     } catch (error) {
       claimEntry?.settle({ accepted: false, error });
       throw error;
-    } finally {
-      if (gateTicket) await orchestration.afterSessionInput(payload.sessionId, gateTicket, { startedRun }).catch(() => {});
     }
   };
 
@@ -3190,7 +3185,7 @@ export function createSessionDaemon({
   // deleted when its assigned JSONL is positively absent (see
   // disposeIdleSessionRuntime).
 
-  const runSessionInput = async (payload, delivery, { onAccepted, confirmStart } = {}) => {
+  const runSessionInput = async (payload, delivery, { admit } = {}) => {
     if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string'
       || typeof payload.text !== 'string' || payload.text.length === 0 || Buffer.byteLength(payload.text) > 64 * 1024) {
       throw new SessionDaemonProtocolError('INVALID_PROMPT', 'The session prompt is invalid.');
@@ -3269,10 +3264,12 @@ export function createSessionDaemon({
     // pending for the whole agent loop, which can legitimately exceed the
     // 30-second HTTP/private-IPC request budget. Own it in the daemon and
     // report asynchronous failure through the existing session event channel.
-    // The orchestration gate decides again now that this daemon holds the
-    // session: a stop or a settle elsewhere may have freed the worker's slot
-    // since the input was let in.
-    await confirmStart?.();
+    // A worker input is admitted now that this daemon holds the session;
+    // Pi's verdict on the prompt below ends the admission.
+    const admission = await admit?.();
+    const resolveAdmission = (outcome) => (admission
+      ? orchestration.resolveInput(admission, outcome).catch(() => {})
+      : Promise.resolve());
     const generation = (sendGenerationBySession.get(payload.sessionId) ?? 0) + 1;
     sendGenerationBySession.set(payload.sessionId, generation);
     // Slash-prefixed input dispatches extension commands and skill/template
@@ -3296,12 +3293,18 @@ export function createSessionDaemon({
     // it and instead rejects, which must propagate to the caller so dedup does
     // not cache it as accepted.
     let preflightOutcome = null;
+    let admissionVerdict = Promise.resolve();
     let notifyPreflight;
     const preflightGate = new Promise((resolve) => { notifyPreflight = resolve; });
     const onPreflightResult = (disposition) => {
-      if (preflightOutcome !== null) return;
+      // A verdict after the prompt resolved without one belongs to a
+      // deferred prompt; it still ends the admission.
+      if (preflightOutcome !== null) {
+        if (preflightOutcome === 'unresolved') void resolveAdmission(disposition);
+        return;
+      }
       preflightOutcome = true;
-      onAccepted?.(disposition);
+      admissionVerdict = resolveAdmission(disposition);
       notifyPreflight(true);
     };
     try {
@@ -3321,14 +3324,23 @@ export function createSessionDaemon({
           });
     } catch (error) {
       removeUserStart(payload.sessionId, generation);
+      await resolveAdmission('rejected');
       throw error;
     }
     // A settlement without a preflight signal resolves the gate so a missing
     // callback cannot hang acceptance. Resolve implies acceptance; reject
-    // implies preflight failure whose real error is propagated below. The
-    // installed SDK signals on every accepted prompt, so this only covers test doubles.
+    // implies preflight failure whose real error is propagated below. Pi
+    // 1.1.0 resolves a prompt made while `agent_settled` is being emitted
+    // without a signal and runs it afterwards (CONTEXT.md): the admission is
+    // then unresolved, keeps its slot and takes the late signal.
     Promise.resolve(promptPromise).then(
-      () => { if (preflightOutcome === null) { preflightOutcome = true; notifyPreflight(true); } },
+      () => {
+        if (preflightOutcome === null) {
+          preflightOutcome = 'unresolved';
+          admissionVerdict = resolveAdmission('unresolved');
+          notifyPreflight(true);
+        }
+      },
       () => { if (preflightOutcome === null) { preflightOutcome = false; notifyPreflight(false); } },
     );
     const preflightAccepted = await preflightGate;
@@ -3341,8 +3353,10 @@ export function createSessionDaemon({
         preflightError = error;
       }
       removeUserStart(payload.sessionId, generation);
+      await resolveAdmission('rejected');
       throw preflightError;
     }
+    await admissionVerdict;
     Promise.resolve(promptPromise).then(() => {
       // Queued sends resolve on queueing, before the queued user message
       // starts. Keep that file metadata until the per-delivery
@@ -3940,6 +3954,10 @@ export function createSessionDaemon({
     onDeliveryFailed: ({ sessionId, parentSessionId, parentDirectory, error }) => {
       const message = `The result of worker ${sessionId} could not be delivered: ${redactAttachmentPaths(error?.message ?? String(error))}`;
       publish('session.error', { code: 'ORCHESTRATION_RESULT_UNDELIVERED', message }, parentSessionId, parentDirectory);
+    },
+    onAdmissionUnresolved: ({ sessionId, error }) => {
+      const message = `The worker slot of ${sessionId} could not be updated after Pi accepted its input; the slot stays taken until the worker settles or stops: ${redactAttachmentPaths(error?.message ?? String(error))}`;
+      publish('session.error', { code: 'ORCHESTRATION_ADMISSION_UNRESOLVED', message }, sessionId);
     },
   });
   const orchestrationExtension = createOrchestrationExtension(orchestration);

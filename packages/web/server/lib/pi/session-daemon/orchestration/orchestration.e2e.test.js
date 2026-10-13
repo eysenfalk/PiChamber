@@ -1,29 +1,16 @@
-import { createConnection } from 'node:net';
-import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
+import { connectClient, credential, piAiFauxUrl } from './e2e-support.js';
 import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
 
 // Orchestration through the real Pi SDK: the daemon's inline extension gives
 // a session the mcp__pichamber__* tools, a scripted faux model calls
 // session_spawn, and the worker's result comes back as a parent turn. Pi's
 // faux provider stands in for a model; its script reacts to the transcript.
-const credential = 'a-private-daemon-credential';
-
-// pi-ai is a dependency of the pinned SDK, not of PiChamber; locate it next
-// to (or inside) the SDK package the daemon actually loads.
-const piAiFauxUrl = () => {
-  const sdkDir = realpathSync(fileURLToPath(new URL('../../../../../node_modules/@earendil-works/pi-coding-agent', import.meta.url)));
-  const candidates = [join(dirname(sdkDir), 'pi-ai'), join(sdkDir, 'node_modules', '@earendil-works', 'pi-ai')];
-  const piAiDir = candidates.find((candidate) => existsSync(join(candidate, 'dist', 'providers', 'faux.js')));
-  if (!piAiDir) throw new Error('Pi faux provider not found next to the SDK.');
-  return pathToFileURL(join(piAiDir, 'dist', 'providers', 'faux.js')).href;
-};
 
 const fauxExtension = (fauxUrl, workerDir) => `
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from ${JSON.stringify(fauxUrl)};
@@ -62,58 +49,6 @@ export default function (pi) {
   pi.registerProvider(faux.provider);
 }
 `;
-
-function connectClient(endpoint) {
-  const socket = createConnection({ path: endpoint });
-  let buffer = '';
-  const messages = [];
-  const waiters = [];
-  const publish = (message) => {
-    messages.push(message);
-    for (let index = waiters.length - 1; index >= 0; index -= 1) {
-      if (waiters[index].predicate(message)) waiters.splice(index, 1)[0].resolve(message);
-    }
-  };
-  socket.on('data', (chunk) => {
-    buffer += chunk.toString('utf8');
-    while (true) {
-      const newline = buffer.indexOf('\n');
-      if (newline === -1) break;
-      const line = buffer.slice(0, newline).replace(/\r$/, '');
-      buffer = buffer.slice(newline + 1);
-      if (line) publish(JSON.parse(line));
-    }
-  });
-  const next = (predicate, timeoutMs = 30_000) => {
-    const existing = messages.find(predicate);
-    if (existing) return Promise.resolve(existing);
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Timed out waiting for daemon message')), timeoutMs);
-      waiters.push({ predicate, resolve: (message) => { clearTimeout(timer); resolve(message); } });
-    });
-  };
-  return {
-    async authenticate() {
-      await new Promise((resolve, reject) => {
-        socket.once('connect', resolve);
-        socket.once('error', reject);
-      });
-      socket.write(`${JSON.stringify({ kind: 'authenticate', credential })}\n`);
-      await next((message) => message.kind === 'authenticated');
-    },
-    request(command, payload = {}) {
-      const requestId = `request-${Math.random()}`;
-      socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId, command, payload })}\n`);
-      return next((message) => (message.kind === 'response' && message.requestId === requestId) || message.kind === 'error');
-    },
-    next,
-    events: messages,
-    async close() {
-      socket.end();
-      await new Promise((resolve) => socket.once('close', resolve));
-    },
-  };
-}
 
 describe('orchestration end-to-end through the real SDK', () => {
   let daemon;

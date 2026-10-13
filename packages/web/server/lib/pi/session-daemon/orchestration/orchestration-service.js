@@ -9,19 +9,20 @@ import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTi
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
 import {
   applyDurability,
+  admitForInput,
   applySettle,
   beginStep,
+  commitStart,
   ensureOwner,
   failOperation,
   finishStep,
   importLineage,
-  keepInput,
+  markUnresolved,
   ownedOperation,
   recordSession,
   rejectStart,
-  releaseInput,
+  releaseAdmission,
   requestKey,
-  reserveForInput,
   reserveSpawn,
   slotsInUse,
   takeOver,
@@ -135,6 +136,9 @@ export function createOrchestrationService(deps) {
     // Canonical form of a worker directory, so spellings share one lock.
     canonicalDirectory = async (directory) => directory,
     onDeliveryFailed = () => {},
+    // An admitted input whose outcome could not be recorded keeps its slot;
+    // the daemon reports it to the session.
+    onAdmissionUnresolved = () => {},
     delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
     processId = process.pid,
     processInstance = PROCESS_INSTANCE,
@@ -162,8 +166,12 @@ export function createOrchestrationService(deps) {
   // In-process guards only; the registry is the durable record.
   const inflightSpawns = new Map();
   const runningOperations = new Map();
-  // Inputs on their way per session; the slot decision waits for the last.
-  const inputGates = new Map();
+  // Admitted inputs per session by token (see `admitInput`).
+  const tickets = new Map();
+  // Generation of the run this service started last, per worker.
+  const runGenerations = new Map();
+  // A settle whose `done` rule waits for the admitted inputs, per worker.
+  const deferredSettles = new Map();
   // Stops running in this service per worker; a second stop shares the first.
   const stopsInFlight = new Map();
   const imported = new Set();
@@ -176,10 +184,6 @@ export function createOrchestrationService(deps) {
   const isSettled = (sessionId) => {
     const state = stateOf(sessionId);
     return state === 'idle' || state === 'dormant';
-  };
-  const hasLiveRun = (sessionId) => {
-    const state = getSessionState(sessionId);
-    return state === 'busy' || state === 'retry';
   };
 
   // Holds a target session's idle guard for the whole use, so a session
@@ -666,9 +670,11 @@ export function createOrchestrationService(deps) {
       if (!await stopTree(childId, sessionId, result)) failure = 'ORCHESTRATION_DESCENDANT_STOP_FAILED';
     }
     if (!failure) {
-      // Inputs that passed the gate before the claim finish first, so a run
-      // one of them starts is aborted too; later inputs are refused.
-      while (inputGates.has(sessionId)) await inputGates.get(sessionId).done;
+      // Inputs admitted before the claim get their outcome first, so a run
+      // one of them starts is aborted too; later inputs are refused. An
+      // unresolved input is not waited for: a run it starts later finds
+      // the worker stopped and is aborted then.
+      await openTicketsDone(sessionId);
       try {
         await withSession(sessionId, () => abortSession(sessionId));
       } catch (error) {
@@ -690,7 +696,7 @@ export function createOrchestrationService(deps) {
       if (!holdsClaim(worker)) return false;
       delete worker.stopping;
       delete worker.doneReported;
-      delete worker.gate;
+      delete worker.admission;
       worker.state = 'stopped';
       worker.stateSince = now();
       return true;
@@ -700,6 +706,7 @@ export function createOrchestrationService(deps) {
       return { ok: false, ...result };
     }
     pendingRuns.delete(sessionId);
+    deferredSettles.delete(sessionId);
     result.stopped.push(sessionId);
     return { ok: true, ...result };
   };
@@ -924,17 +931,23 @@ export function createOrchestrationService(deps) {
    * transition, resolves waits and delivers a worker's result to its current
    * owner as a custom message that starts a turn, or queues as follow-up
    * while the owner is busy.
+   * The `done` rule applies only to the generation that settled. While an
+   * admitted input has no outcome yet it waits, because that input may start
+   * the next run in the same slot (`resolveInput` applies or drops it).
    */
   const onSessionSettled = async (sessionId, runtime) => {
     pendingRuns.delete(sessionId);
     notifyWaiters();
-    // The settled turn's result, taken before any await: a later turn of the
-    // worker must not replace it while the settle or a delivery retry waits.
+    // The settled turn's result and generation, taken before any await: a
+    // later turn of the worker must not replace them while the settle or a
+    // delivery retry waits.
     const result = {
       assistant: lastAssistant(runtime),
       title: runtime.session.sessionManager?.getSessionName?.(),
       cwd: runtime.cwd,
     };
+    const generation = runGenerations.get(sessionId) ?? null;
+    expireUnresolved(sessionId);
     const lineage = lineageOf(runtime);
     let document = await registry.read();
     if (!document.workers[sessionId] && lineage?.parentSessionId && !imported.has(lineage.parentSessionId)) {
@@ -953,7 +966,12 @@ export function createOrchestrationService(deps) {
       ? await sessionFileState(sessionId, document.workers[sessionId].sessionFile)
       : undefined;
     const settled = await registry.update((current) => {
-      const state = applySettle(current, sessionId, presence, now());
+      const hold = (tickets.get(sessionId)?.size ?? 0) > 0;
+      // With no admitted input left, an admission this process still shows
+      // (unresolved, or kept after a failed commit) ends with the run.
+      if (!hold) releaseAdmission(current, sessionId, now(), ownsAdmission);
+      const state = applySettle(current, sessionId, presence, now(), { generation, hold });
+      if (hold) deferredSettles.set(sessionId, { generation });
       const worker = current.workers[sessionId];
       return { state, worker: worker ? { ...worker } : undefined };
     });
@@ -961,102 +979,174 @@ export function createOrchestrationService(deps) {
     await deliverWithRetry(sessionId, result, lineage);
   };
 
-  /**
-   * Input gate, called by the daemon's one input path before it activates a
-   * session. A `done` or `stopped` worker reserves its slot here, unless a run
-   * is live (steer and follow-up need no slot). The returned ticket goes back
-   * to `afterSessionInput` once the input started a run or ended without one.
+  /*
+   * Input admission. The daemon's one input path calls `beforeSessionInput`
+   * before it activates a session, `admitInput` once it holds the session's
+   * lease right before the prompt, and `resolveInput` with Pi's verdict on
+   * that prompt. Only the admission decides about a slot, and only Pi's
+   * verdict ends it:
+   * - `started`: the run takes the slot as a new generation (`commitStart`).
+   * - `queued`, `handled`, `rejected`: no run; once no admitted input of the
+   *   worker is left, a slot the admission took goes back and a settle that
+   *   waited for the inputs applies.
+   * - `unresolved`: Pi accepted the prompt without a verdict (a prompt
+   *   deferred while the previous run settles). Nothing is rolled back: the
+   *   slot stays and the registry shows `admission.state: 'unresolved'`
+   *   until a late verdict, a stop, or the settle of the run it may have
+   *   started.
    */
-  // The inputs of one session between the gate and their outcome. `done`
-  // resolves once the last of them finished and the gate closed.
-  const openGate = () => {
-    let drained;
-    const done = new Promise((resolve) => { drained = resolve; });
-    return { inputs: 0, token: null, started: false, done, drained };
+  const ticketsOf = (sessionId) => [...(tickets.get(sessionId)?.values() ?? [])];
+  const openTicketsDone = async (sessionId) => {
+    let open = ticketsOf(sessionId).filter((ticket) => ticket.state === 'open');
+    while (open.length > 0) {
+      await Promise.all(open.map((ticket) => ticket.decided));
+      open = ticketsOf(sessionId).filter((ticket) => ticket.state === 'open');
+    }
   };
+  // An unresolved input is over once the run it may have started settled;
+  // that is the second settle it sees at the latest (the first may be the
+  // one it was deferred behind).
+  const expireUnresolved = (sessionId) => {
+    for (const ticket of ticketsOf(sessionId)) {
+      if (ticket.state !== 'unresolved') continue;
+      ticket.settles += 1;
+      if (ticket.settles >= 2) tickets.get(sessionId).delete(ticket.token);
+    }
+    if (tickets.get(sessionId)?.size === 0) tickets.delete(sessionId);
+  };
+  const ownsAdmission = (process) => sameStamp(process, self);
 
-  const beforeSessionInput = async (sessionId) => {
-    // A gate that is deciding keep or release finishes before a new input joins.
-    while (inputGates.get(sessionId)?.closing) await inputGates.get(sessionId).closing;
-    const gate = inputGates.get(sessionId) ?? openGate();
-    gate.inputs += 1;
-    inputGates.set(sessionId, gate);
+  // Reads the registry for an input. A broken registry must not block
+  // sessions that are provably no workers; a worker or an undecided session
+  // fails closed. Returns null for a session that is no worker.
+  const readForInput = async (sessionId) => {
+    let document;
     try {
-      let document;
-      try {
-        document = await registry.read();
-      } catch (error) {
-        // A broken registry must not block sessions that are provably no
-        // workers; a worker or an undecided session still fails closed.
-        const runtime = getLiveRuntime(sessionId) ?? await activateSession(sessionId).catch(() => undefined);
-        if (runtime && !lineageOf(runtime)) return {};
-        throw error;
-      }
-      if (!document.workers[sessionId]) return {};
-      gate.worker = true;
-      await reconciled();
-      const worker = (await registry.read()).workers[sessionId];
-      // A stop that claimed the worker waits for the inputs it let in; a new
-      // one must not start a run behind it.
-      if (worker?.stopping) {
-        throw new OrchestrationError('ORCHESTRATION_WORKER_STOPPING', 'This worker is being stopped; retry once session_stop has finished.', { sessionId });
-      }
-      if (gate.token || !worker || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return {};
-      const { workerLimit } = await readSettings();
-      const token = await registry.update((current) => reserveForInput(current, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
-      if (token) gate.token = token;
-      return {};
+      document = await registry.read();
     } catch (error) {
-      await afterSessionInput(sessionId, {}, { startedRun: false }).catch(() => {});
+      const runtime = getLiveRuntime(sessionId) ?? await activateSession(sessionId).catch(() => undefined);
+      if (runtime && !lineageOf(runtime)) return null;
       throw error;
     }
+    if (!document.workers[sessionId]) return null;
+    await reconciled();
+    return (await registry.read()).workers[sessionId] ?? null;
+  };
+
+  const workerStopping = (sessionId) => new OrchestrationError(
+    'ORCHESTRATION_WORKER_STOPPING',
+    'This worker is being stopped; retry once session_stop has finished.',
+    { sessionId },
+  );
+
+  // Fails fast before the daemon activates a session; decides nothing.
+  const beforeSessionInput = async (sessionId) => {
+    const worker = await readForInput(sessionId);
+    if (worker?.stopping) throw workerStopping(sessionId);
   };
 
   /**
-   * Called by the daemon once it holds the session and right before the
-   * prompt that may start a run. An input let in earlier is decided again
-   * against the registry as it is now: a stop of another service (any
-   * daemon) refuses it, and a worker that became `done` or `stopped` in the
-   * meantime (a foreign stop, a settle) takes a slot like a new input or the
-   * input is refused. A stop of this service waits for the gate instead.
+   * Admits an input to a worker. Called by the daemon that holds the
+   * session's lease, right before the prompt; returns the ticket for
+   * `resolveInput`, or null for a session that is no worker.
    */
-  const confirmSessionInput = async (sessionId) => {
-    const gate = inputGates.get(sessionId);
-    if (!gate?.worker) return;
-    const document = await registry.read();
-    const worker = document.workers[sessionId];
-    if (!worker) return;
-    if (worker.stopping && worker.stopping.service !== self.service) {
-      throw new OrchestrationError('ORCHESTRATION_WORKER_STOPPING', 'This worker is being stopped; retry once session_stop has finished.', { sessionId });
-    }
-    if (gate.token && worker.gate?.token !== gate.token) gate.token = null;
-    if (gate.token || (worker.state !== 'done' && worker.state !== 'stopped') || hasLiveRun(sessionId)) return;
+  const admitInput = async (sessionId) => {
+    if (!await readForInput(sessionId)) return null;
     const { workerLimit } = await readSettings();
-    const token = await registry.update((current) => reserveForInput(current, sessionId, { workerLimit, token: randomUUID(), at: now(), process: self }));
-    if (token) gate.token = token;
+    const ticket = { sessionId, token: randomUUID(), state: 'open', settles: 0 };
+    ticket.decided = new Promise((resolve) => { ticket.decide = resolve; });
+    // Registered before the registry write, so a settle meanwhile waits.
+    if (!tickets.has(sessionId)) tickets.set(sessionId, new Map());
+    tickets.get(sessionId).set(ticket.token, ticket);
+    let admitted;
+    try {
+      admitted = await registry.update((current) => admitForInput(current, sessionId, {
+        workerLimit, token: ticket.token, at: now(), process: self, ownsProcess: ownsAdmission,
+      }));
+    } catch (error) {
+      await closeTicket(ticket);
+      throw error;
+    }
+    if (!admitted.worker) {
+      await closeTicket(ticket);
+      return null;
+    }
+    return ticket;
   };
 
-  // Parallel inputs share one gate. The last one to finish decides: the slot
-  // stays when any of them started a run or a run is live, and returns
-  // otherwise (S1).
-  const afterSessionInput = async (sessionId, _ticket, { startedRun = false } = {}) => {
-    const gate = inputGates.get(sessionId);
-    if (!gate || gate.closing) return;
-    gate.inputs -= 1;
-    if (startedRun) gate.started = true;
-    if (gate.inputs > 0) return;
-    const { token } = gate;
-    const keep = gate.started || hasLiveRun(sessionId);
-    gate.closing = (token
-      ? registry.update((document) => (keep
-        ? keepInput(document, sessionId, token)
-        : releaseInput(document, sessionId, token, now())))
-      : Promise.resolve()
-    ).finally(() => {
-      if (inputGates.get(sessionId) === gate) inputGates.delete(sessionId);
-      gate.drained();
-    });
-    await gate.closing;
+  const reportUnresolved = (sessionId, error) => {
+    try {
+      onAdmissionUnresolved({ sessionId, error });
+    } catch {
+      // Reporting is best effort; the registry keeps the admission.
+    }
+  };
+
+  // Ends a ticket without a run. The last one of the worker returns a slot
+  // its admission took and applies a settle that waited for the inputs.
+  const closeTicket = async (ticket) => {
+    const { sessionId } = ticket;
+    tickets.get(sessionId)?.delete(ticket.token);
+    ticket.state = 'closed';
+    ticket.decide();
+    if ((tickets.get(sessionId)?.size ?? 0) > 0) return;
+    tickets.delete(sessionId);
+    const deferredSettle = deferredSettles.get(sessionId);
+    deferredSettles.delete(sessionId);
+    try {
+      await registry.update((document) => {
+        releaseAdmission(document, sessionId, now(), ownsAdmission);
+        if (deferredSettle) applySettle(document, sessionId, undefined, now(), deferredSettle);
+      });
+    } catch (error) {
+      reportUnresolved(sessionId, error);
+    }
+    if (deferredSettle) notifyWaiters();
+  };
+
+  /**
+   * Pi's verdict on an admitted input: `started`, `queued` or `handled`
+   * (preflight), `rejected`, or `unresolved` (accepted without a verdict). A
+   * late verdict of an unresolved input still counts.
+   */
+  const resolveInput = async (ticket, outcome) => {
+    if (!ticket || ticket.state === 'closed') return;
+    const { sessionId } = ticket;
+    if (outcome === 'unresolved') {
+      if (ticket.state !== 'open') return;
+      ticket.state = 'unresolved';
+      ticket.decide();
+      try {
+        await registry.update((document) => markUnresolved(document, sessionId, { token: ticket.token, at: now(), process: self }));
+      } catch (error) {
+        reportUnresolved(sessionId, error);
+      }
+      return;
+    }
+    if (outcome !== 'started') {
+      await closeTicket(ticket);
+      return;
+    }
+    tickets.get(sessionId)?.delete(ticket.token);
+    if ((tickets.get(sessionId)?.size ?? 0) === 0) tickets.delete(sessionId);
+    ticket.state = 'closed';
+    let committed;
+    try {
+      committed = await registry.update((document) => commitStart(document, sessionId, now()));
+    } catch (error) {
+      // No rollback: the admission keeps the slot for the run.
+      reportUnresolved(sessionId, error);
+      ticket.decide();
+      return;
+    }
+    if (committed?.generation) {
+      runGenerations.set(sessionId, committed.generation);
+      // The waiting settle belonged to the previous run; this run keeps the slot.
+      deferredSettles.delete(sessionId);
+    }
+    ticket.decide();
+    // A worker stopped meanwhile has no slot for the run.
+    if (committed?.stopped) await withSession(sessionId, () => abortSession(sessionId)).catch(() => {});
   };
 
   /**
@@ -1066,7 +1156,8 @@ export function createOrchestrationService(deps) {
   const recordDoneReport = (sessionId) => registry.update((document) => {
     const worker = document.workers[sessionId];
     if (!worker || (worker.state !== 'active' && worker.state !== 'starting')) return false;
-    worker.doneReported = true;
+    // Bound to the reporting run, so it never ends a later run.
+    worker.doneReported = worker.generation ?? 0;
     return true;
   });
 
@@ -1086,7 +1177,7 @@ export function createOrchestrationService(deps) {
   /**
    * Recovery of transitions whose process died: adopt or release reserved
    * starts, check `starting` workers against the disk, and finish an
-   * interrupted stop or input gate. Every change is bound to the stamp read
+   * interrupted stop or input admission. Every change is bound to the stamp read
    * before it, so a transition another process claimed meanwhile stays (B3).
    */
   const reconcile = async () => {
@@ -1124,7 +1215,7 @@ export function createOrchestrationService(deps) {
           && !belongsToLiveProcess(live.process)) {
           applyDurability(current, sessionId, presence, now());
         }
-        if (live.gate && !belongsToLiveProcess(live.gate.process)) releaseInput(current, sessionId, live.gate.token, now());
+        if (live.admission && !belongsToLiveProcess(live.admission.process)) releaseAdmission(current, sessionId, now(), () => true);
         // A stop whose process died may not have aborted the run: the worker
         // keeps its state and slot, and session_stop can be retried.
         if (live.stopping && !belongsToLiveProcess(live.stopping)) delete live.stopping;
@@ -1136,8 +1227,8 @@ export function createOrchestrationService(deps) {
     call,
     onSessionSettled,
     beforeSessionInput,
-    confirmSessionInput,
-    afterSessionInput,
+    admitInput,
+    resolveInput,
     recordDoneReport,
     onInputCompleted,
     verifyCaller,
