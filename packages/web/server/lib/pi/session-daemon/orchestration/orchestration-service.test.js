@@ -1722,6 +1722,68 @@ describe('orchestration input admission (#125 round 5)', () => {
     await expect(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'two' })).resolves.toMatchObject({ sessionId: 'worker-2' });
   });
 
+  it('keeps the slot of a run whose start could not be recorded when a sibling input starts no run', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    const { service } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await finishWorker(harness, 'worker-1');
+    await harness.input('worker-1', { beforeVerdict: async () => {
+      vi.spyOn(harness.registry, 'update').mockRejectedValueOnce(Object.assign(new Error('disk'), { code: 'EIO' }));
+    } });
+    // A follow-up of the same admission is queued behind the running run.
+    await harness.input('worker-1', { outcome: 'queued' });
+    expect((await harness.workers())['worker-1'].state).toBe('active');
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    await finishWorker(harness, 'worker-1');
+    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'done' });
+    expect((await harness.workers())['worker-1'].admission).toBeUndefined();
+  });
+
+  it('keeps the slot for a second deferred input after the first one\'s run settled', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    const { service, settle } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    // Pi defers both prompts behind the settle of the running run.
+    const first = await harness.input('worker-1', { outcome: 'unresolved' });
+    const second = await harness.input('worker-1', { outcome: 'unresolved' });
+    await settle('worker-1', 'first');
+    // Pi runs the first deferred prompt; that run reports done and settles
+    // while the second prompt has not reached its preflight.
+    await service.resolveInput(first.ticket, 'started');
+    await service.recordDoneReport('worker-1');
+    await settle('worker-1', 'second');
+    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'active', admission: { state: 'unresolved' } });
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    // The second prompt starts no run: the held settle applies.
+    await service.resolveInput(second.ticket, 'queued');
+    expect((await harness.workers())['worker-1'].state).toBe('done');
+    expect((await harness.workers())['worker-1'].admission).toBeUndefined();
+  });
+
+  it('aborts the late run of an input a stop ended and keeps the admission of a later input', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await finishWorker(harness, 'worker-1');
+    const old = await harness.input('worker-1', { outcome: 'unresolved' });
+    await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ stopped: ['worker-1'] });
+    // A new input reserves the stopped worker before Pi runs the old prompt.
+    const fresh = await harness.input('worker-1', { outcome: 'unresolved' });
+    const reserved = (await harness.workers())['worker-1'].admission;
+    expect(reserved).toMatchObject({ state: 'unresolved', previous: 'stopped' });
+    deps.abortSession.mockClear();
+    await service.resolveInput(old.ticket, 'started');
+    expect(deps.abortSession).toHaveBeenCalledWith('worker-1');
+    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'active', admission: { token: reserved.token } });
+    // The new input's own run takes the slot.
+    deps.abortSession.mockClear();
+    await service.resolveInput(fresh.ticket, 'started');
+    expect(deps.abortSession).not.toHaveBeenCalled();
+    expect((await harness.workers())['worker-1'].admission).toBeUndefined();
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+  });
+
   it('refuses an input while another daemon\'s admission of the worker is open', async () => {
     const first = createHarness();
     const second = createHarness({ file: first.file, workerPrefix: 'other' });

@@ -168,8 +168,9 @@ export function createOrchestrationService(deps) {
   const runningOperations = new Map();
   // Admitted inputs per session by token (see `admitInput`).
   const tickets = new Map();
-  // Generation of the run this service started last, per worker.
-  const runGenerations = new Map();
+  // The run an admitted input of this service started, per worker, until it
+  // settles: its admission and the generation its commit recorded.
+  const liveRuns = new Map();
   // A settle whose `done` rule waits for the admitted inputs, per worker.
   const deferredSettles = new Map();
   // Stops running in this service per worker; a second stop shares the first.
@@ -675,6 +676,9 @@ export function createOrchestrationService(deps) {
       // unresolved input is not waited for: a run it starts later finds
       // the worker stopped and is aborted then.
       await openTicketsDone(sessionId);
+      // Inputs still unresolved now belong to this stop: their late verdict
+      // aborts the run instead of confirming an admission.
+      invalidateTickets(sessionId);
       try {
         await withSession(sessionId, () => abortSession(sessionId));
       } catch (error) {
@@ -946,8 +950,11 @@ export function createOrchestrationService(deps) {
       title: runtime.session.sessionManager?.getSessionName?.(),
       cwd: runtime.cwd,
     };
-    const generation = runGenerations.get(sessionId) ?? null;
-    expireUnresolved(sessionId);
+    const run = liveRuns.get(sessionId);
+    liveRuns.delete(sessionId);
+    // A run whose start could not be recorded settles in its admission's slot.
+    const generation = run ? await run.committed : null;
+    const uncommitted = run && generation === null ? run.admission : null;
     const lineage = lineageOf(runtime);
     let document = await registry.read();
     if (!document.workers[sessionId] && lineage?.parentSessionId && !imported.has(lineage.parentSessionId)) {
@@ -967,10 +974,9 @@ export function createOrchestrationService(deps) {
       : undefined;
     const settled = await registry.update((current) => {
       const hold = (tickets.get(sessionId)?.size ?? 0) > 0;
-      // With no admitted input left, an admission this process still shows
-      // (unresolved, or kept after a failed commit) ends with the run.
-      if (!hold) releaseAdmission(current, sessionId, now(), ownsAdmission);
-      const state = applySettle(current, sessionId, presence, now(), { generation, hold });
+      const state = applySettle(current, sessionId, presence, now(), {
+        generation, hold, admission: uncommitted, keep: uncommitted !== null && admissionInUse(sessionId, uncommitted),
+      });
       if (hold) deferredSettles.set(sessionId, { generation });
       const worker = current.workers[sessionId];
       return { state, worker: worker ? { ...worker } : undefined };
@@ -992,8 +998,12 @@ export function createOrchestrationService(deps) {
    * - `unresolved`: Pi accepted the prompt without a verdict (a prompt
    *   deferred while the previous run settles). Nothing is rolled back: the
    *   slot stays and the registry shows `admission.state: 'unresolved'`
-   *   until a late verdict, a stop, or the settle of the run it may have
-   *   started.
+   *   until the late verdict (Pi runs the deferred prompt again) or a stop.
+   * Every step names the ticket's admission, and the registry applies it
+   * only while the worker still shows that admission. A stop deletes it and
+   * makes the remaining tickets stale: their late `started` aborts the run
+   * and confirms nothing. Neither a settle nor the end of a ticket ends a
+   * started run's occupancy; only that run's own settle does.
    */
   const ticketsOf = (sessionId) => [...(tickets.get(sessionId)?.values() ?? [])];
   const openTicketsDone = async (sessionId) => {
@@ -1003,18 +1013,19 @@ export function createOrchestrationService(deps) {
       open = ticketsOf(sessionId).filter((ticket) => ticket.state === 'open');
     }
   };
-  // An unresolved input is over once the run it may have started settled;
-  // that is the second settle it sees at the latest (the first may be the
-  // one it was deferred behind).
-  const expireUnresolved = (sessionId) => {
-    for (const ticket of ticketsOf(sessionId)) {
-      if (ticket.state !== 'unresolved') continue;
-      ticket.settles += 1;
-      if (ticket.settles >= 2) tickets.get(sessionId).delete(ticket.token);
-    }
-    if (tickets.get(sessionId)?.size === 0) tickets.delete(sessionId);
-  };
+  // Whether an input of this admission is still open; a ticket still being
+  // admitted will share it.
+  const admissionInUse = (sessionId, admission, except) => ticketsOf(sessionId)
+    .some((ticket) => ticket !== except && (ticket.admission === undefined || ticket.admission === admission));
   const ownsAdmission = (process) => sameStamp(process, self);
+  // A stop ends the admission; its remaining inputs can no longer confirm a run.
+  const invalidateTickets = (sessionId) => {
+    for (const ticket of ticketsOf(sessionId)) {
+      ticket.state = 'stale';
+      ticket.decide();
+    }
+    tickets.delete(sessionId);
+  };
 
   // Reads the registry for an input. A broken registry must not block
   // sessions that are provably no workers; a worker or an undecided session
@@ -1053,7 +1064,7 @@ export function createOrchestrationService(deps) {
   const admitInput = async (sessionId) => {
     if (!await readForInput(sessionId)) return null;
     const { workerLimit } = await readSettings();
-    const ticket = { sessionId, token: randomUUID(), state: 'open', settles: 0 };
+    const ticket = { sessionId, token: randomUUID(), state: 'open' };
     ticket.decided = new Promise((resolve) => { ticket.decide = resolve; });
     // Registered before the registry write, so a settle meanwhile waits.
     if (!tickets.has(sessionId)) tickets.set(sessionId, new Map());
@@ -1071,6 +1082,7 @@ export function createOrchestrationService(deps) {
       await closeTicket(ticket);
       return null;
     }
+    ticket.admission = admitted.admission;
     return ticket;
   };
 
@@ -1085,7 +1097,7 @@ export function createOrchestrationService(deps) {
   // Ends a ticket without a run. The last one of the worker returns a slot
   // its admission took and applies a settle that waited for the inputs.
   const closeTicket = async (ticket) => {
-    const { sessionId } = ticket;
+    const { sessionId, admission } = ticket;
     tickets.get(sessionId)?.delete(ticket.token);
     ticket.state = 'closed';
     ticket.decide();
@@ -1093,9 +1105,13 @@ export function createOrchestrationService(deps) {
     tickets.delete(sessionId);
     const deferredSettle = deferredSettles.get(sessionId);
     deferredSettles.delete(sessionId);
+    // A started run whose start is not recorded keeps the admission's slot
+    // until it settles.
+    const run = liveRuns.get(sessionId);
+    const occupied = run !== undefined && run.admission === admission && run.generation === null;
     try {
       await registry.update((document) => {
-        releaseAdmission(document, sessionId, now(), ownsAdmission);
+        if (!occupied) releaseAdmission(document, sessionId, now(), admission);
         if (deferredSettle) applySettle(document, sessionId, undefined, now(), deferredSettle);
       });
     } catch (error) {
@@ -1109,15 +1125,23 @@ export function createOrchestrationService(deps) {
    * (preflight), `rejected`, or `unresolved` (accepted without a verdict). A
    * late verdict of an unresolved input still counts.
    */
+  const abortStale = (sessionId) => withSession(sessionId, () => abortSession(sessionId)).catch(() => {});
+
   const resolveInput = async (ticket, outcome) => {
     if (!ticket || ticket.state === 'closed') return;
-    const { sessionId } = ticket;
+    const { sessionId, admission } = ticket;
+    if (ticket.state === 'stale') {
+      // A stop ended this input's admission: a run it starts has no slot.
+      ticket.state = 'closed';
+      if (outcome === 'started') await abortStale(sessionId);
+      return;
+    }
     if (outcome === 'unresolved') {
       if (ticket.state !== 'open') return;
       ticket.state = 'unresolved';
       ticket.decide();
       try {
-        await registry.update((document) => markUnresolved(document, sessionId, { token: ticket.token, at: now(), process: self }));
+        await registry.update((document) => markUnresolved(document, sessionId, { admission, at: now() }));
       } catch (error) {
         reportUnresolved(sessionId, error);
       }
@@ -1127,26 +1151,34 @@ export function createOrchestrationService(deps) {
       await closeTicket(ticket);
       return;
     }
+    // Before any await: from here the run holds the admission's slot until
+    // its own settle, whatever happens to the other tickets.
     tickets.get(sessionId)?.delete(ticket.token);
     if ((tickets.get(sessionId)?.size ?? 0) === 0) tickets.delete(sessionId);
     ticket.state = 'closed';
+    // The waiting settle belonged to the previous run; this run keeps the slot.
+    deferredSettles.delete(sessionId);
+    const run = { admission, generation: null };
+    let settleRun;
+    run.committed = new Promise((resolve) => { settleRun = resolve; });
+    liveRuns.set(sessionId, run);
     let committed;
     try {
-      committed = await registry.update((document) => commitStart(document, sessionId, now()));
+      committed = await registry.update((document) => commitStart(document, sessionId, now(), {
+        admission, keep: admissionInUse(sessionId, admission),
+      }));
     } catch (error) {
-      // No rollback: the admission keeps the slot for the run.
+      // No rollback: the admission keeps the slot, and the run's settle
+      // passes it to the run.
       reportUnresolved(sessionId, error);
-      ticket.decide();
-      return;
     }
-    if (committed?.generation) {
-      runGenerations.set(sessionId, committed.generation);
-      // The waiting settle belonged to the previous run; this run keeps the slot.
-      deferredSettles.delete(sessionId);
-    }
+    run.generation = committed?.generation ?? null;
+    settleRun(run.generation);
     ticket.decide();
-    // A worker stopped meanwhile has no slot for the run.
-    if (committed?.stopped) await withSession(sessionId, () => abortSession(sessionId)).catch(() => {});
+    if (committed?.stale) {
+      if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
+      await abortStale(sessionId);
+    }
   };
 
   /**
@@ -1215,7 +1247,7 @@ export function createOrchestrationService(deps) {
           && !belongsToLiveProcess(live.process)) {
           applyDurability(current, sessionId, presence, now());
         }
-        if (live.admission && !belongsToLiveProcess(live.admission.process)) releaseAdmission(current, sessionId, now(), () => true);
+        if (live.admission && !belongsToLiveProcess(live.admission.process)) releaseAdmission(current, sessionId, now(), live.admission.token);
         // A stop whose process died may not have aborted the run: the worker
         // keeps its state and slot, and session_stop can be retried.
         if (live.stopping && !belongsToLiveProcess(live.stopping)) delete live.stopping;
