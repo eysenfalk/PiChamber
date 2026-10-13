@@ -3896,8 +3896,9 @@ export function createSessionDaemon({
     },
     // Resident sessions first, then the persisted ones of the start's
     // directory; a failed read throws, so the start stays undecided.
-    findSessionByOperation: async ({ opId, cwd: operationCwd }) => {
+    findSessionByOperation: async ({ opId, cwd: operationCwd, exclude = [] }) => {
       const live = (runtimeRegistry?.listAll() ?? []).find((candidate) => {
+        if (exclude.includes(candidate.session?.sessionId)) return false;
         const entries = candidate.session?.sessionManager?.getEntries?.() ?? [];
         return entries.some((entry) => entry?.type === 'custom' && entry.customType === LINEAGE_ENTRY && entry.data?.opId === opId);
       });
@@ -3908,6 +3909,7 @@ export function createSessionDaemon({
         cwd: operationCwd,
         listSessions: ({ cwd: listCwd }) => listSessions({ cwd: listCwd, agentDir }),
         lineageType: LINEAGE_ENTRY,
+        exclude,
       });
     },
     sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(

@@ -118,8 +118,9 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
     resolveBranch: async () => 'main',
     getSessionActivity: (sessionId) => activity.get(sessionId),
     sessionFileState: vi.fn(async (sessionId) => fileStates.get(sessionId) ?? 'absent'),
-    findSessionByOperation: vi.fn(async ({ opId }) => {
-      const runtime = [...runtimes.values()].find((candidate) => candidate.session.sessionManager.getEntries()
+    findSessionByOperation: vi.fn(async ({ opId, exclude = [] }) => {
+      const runtime = [...runtimes.values()].find((candidate) => !exclude.includes(candidate.session.sessionId)
+        && candidate.session.sessionManager.getEntries()
         .some((entry) => entry.customType === LINEAGE_ENTRY && entry.data?.opId === opId));
       return runtime ? { sessionId: runtime.session.sessionId, cwd: runtime.cwd, sessionFile: runtime.session.sessionFile } : undefined;
     }),
@@ -331,6 +332,25 @@ describe('orchestration service', () => {
     expect(Object.keys(document.workers)).toEqual(['after-1']);
     expect(document.workers['after-1'].state).toBe('active');
     expect(document.operations[opId]).toMatchObject({ state: 'created', sessionId: 'after-1' });
+  });
+
+  it('never adopts the session a recreate replaced, also when the new create fails late', async () => {
+    const first = createHarness();
+    await first.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' });
+    first.crash();
+    const restarted = createHarness({ file: first.file, workerPrefix: 'after' });
+    await restarted.service.call('orch', 'orchestration_capabilities');
+    const opId = (await restarted.registry.read()).requestKeys['orch:job-1'];
+    expect((await restarted.registry.read()).operations[opId]).toMatchObject({ recreate: true, replaced: ['worker-1'] });
+
+    // The replaced session turns up again with the same lineage, and the new
+    // create fails after it may have made a session.
+    restarted.add(createRuntime({ sessionId: 'worker-1', cwd: '/work/a', lineage: { parentSessionId: 'orch', opId } }));
+    restarted.deps.createWorkerSession.mockRejectedValueOnce(Object.assign(new Error('late'), { code: 'CREATE_FAILED' }));
+    await expectCode(restarted.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one', clientRequestId: 'job-1' }), 'CREATE_FAILED');
+    expect(restarted.deps.findSessionByOperation).toHaveBeenLastCalledWith(expect.objectContaining({ opId, exclude: ['worker-1'] }));
+    expect(await restarted.workers()).toEqual({});
+    expect(restarted.deps.sendInput).not.toHaveBeenCalled();
   });
 
   it('leaves the open start of another live daemon process alone', async () => {

@@ -344,9 +344,10 @@ export function createOrchestrationService(deps) {
       const { intent } = operation;
       if (operation.state === 'reserved') {
         await registry.update((current) => beginStep(current, opId, caller, 'session', now(), self));
-        // A recreate follows a JSONL that never reached disk; the resident
-        // session of that attempt must not be adopted again.
-        let session = operation.recreate ? undefined : await findSessionByOperation({ opId, cwd: intent.cwd });
+        // A recreate follows a JSONL that never reached disk; the sessions it
+        // replaced must not be adopted again, by either lookup.
+        const exclude = operation.replaced ?? [];
+        let session = operation.recreate ? undefined : await findSessionByOperation({ opId, cwd: intent.cwd, exclude });
         if (!session) {
           try {
             session = await createWorkerSession({
@@ -365,7 +366,7 @@ export function createOrchestrationService(deps) {
           } catch (error) {
             // The session may exist although the create call failed late. An
             // undecided lookup keeps the reservation for a retry.
-            session = await findSessionByOperation({ opId, cwd: intent.cwd }).catch(() => { throw error; });
+            session = await findSessionByOperation({ opId, cwd: intent.cwd, exclude }).catch(() => { throw error; });
             if (!session) {
               await registry.update((current) => failOperation(current, opId, caller, 'session', error?.message ?? String(error), now()))
                 .catch(() => {});

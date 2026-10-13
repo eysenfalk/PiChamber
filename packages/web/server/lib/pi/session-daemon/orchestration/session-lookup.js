@@ -42,13 +42,15 @@ const lineageOpIdOf = async (file, lineageType) => {
  * session of `cwd` was read. A session file removed since the listing is
  * skipped. A failed read, or a prefix entry that cannot be parsed, does not
  * stop the scan; when no session matched it throws SESSION_LOOKUP_FAILED
- * (incomplete), so the caller cannot take it for a negative answer.
+ * (incomplete), so the caller cannot take it for a negative answer. Sessions
+ * in `exclude` are known not to be the answer and are skipped, so they do not
+ * hide a later one with the same opId.
  */
-export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions, lineageType }) => {
+export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions, lineageType, exclude = [] }) => {
   const sessions = await listSessions({ cwd });
   const unreadable = [];
   for (const session of Array.isArray(sessions) ? sessions : []) {
-    if (typeof session?.path !== 'string' || typeof session.id !== 'string') continue;
+    if (typeof session?.path !== 'string' || typeof session.id !== 'string' || exclude.includes(session.id)) continue;
     let found;
     try {
       found = await lineageOpIdOf(session.path, lineageType);

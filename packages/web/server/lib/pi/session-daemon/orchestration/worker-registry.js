@@ -202,6 +202,9 @@ export const applyDurability = (document, sessionId, presence, at) => {
       operation.step = 'session';
       operation.sessionId = null;
       operation.recreate = true;
+      // The vanished session keeps the opId in its lineage; a later lookup must
+      // not take it for the recreated one.
+      operation.replaced = [...(operation.replaced ?? []), sessionId];
       for (const step of ['session', 'prompted', 'durable']) delete operation.steps[step];
     }
     return 'removed';

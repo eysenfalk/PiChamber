@@ -53,6 +53,21 @@ describe('persisted session lookup by start operation', () => {
     await vi.waitFor(() => expect(openFiles()).toBeLessThan(before + 5));
   });
 
+  it('skips excluded sessions and finds a later one with the same operation', async () => {
+    const lineage = { type: 'custom', customType: LINEAGE, data: { opId: 'op_1' } };
+    const sessions = await sessionsIn({
+      replaced: jsonl({ type: 'session', id: 'replaced' }, lineage),
+      target: jsonl({ type: 'session', id: 'target' }, lineage),
+    });
+    await expect(findPersistedSessionByOperation({
+      opId: 'op_1',
+      cwd: '/work/a',
+      exclude: ['replaced'],
+      listSessions: async () => sessions,
+      lineageType: LINEAGE,
+    })).resolves.toMatchObject({ sessionId: 'target' });
+  });
+
   it('ignores a lineage entry after the first message and sessions removed since the listing', async () => {
     const sessions = await sessionsIn({
       late: jsonl({ type: 'session' }, { type: 'message' }, { type: 'custom', customType: LINEAGE, data: { opId: 'op_1' } }),
