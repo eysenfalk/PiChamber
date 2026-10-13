@@ -1163,6 +1163,26 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('answers the private pull request watch command with targets and accepts reads', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-prwatch-'));
+    const endpoint = testDaemonEndpoint(root);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir: join(root, 'agent'),
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.prWatch', {})).resolves.toMatchObject({ result: { targets: [] } });
+    await expect(client.request('orchestration.prWatch', { reads: [] })).resolves.toMatchObject({ result: { targets: [] } });
+    await client.close();
+  });
+
   it('keeps live message aliases across idle disposal and runtime reopening', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-message-alias-idle-'));
     const endpoint = testDaemonEndpoint(root);
