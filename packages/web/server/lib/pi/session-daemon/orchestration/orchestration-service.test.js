@@ -2484,6 +2484,32 @@ describe('worker_cleanup', () => {
     await input;
   });
 
+  it.each(['worktree', 'servesPr'])('refuses a %s worker whose stop left a hold for an unsettled input, and removes nothing', async (kind) => {
+    const read = { number: 5, state: 'merged', mergedAt: MERGED_AT, headSha: 'a'.repeat(40), url: '' };
+    const h = kind === 'worktree'
+      ? await setup()
+      : await (async () => {
+        const harness = createHarness({ overrides: { pullLookup: { pullForBranch: vi.fn(), pullByNumber: vi.fn(async () => read) }, deleteSession: vi.fn(async () => {}) } });
+        const { sessionId } = await harness.service.call('orch', 'session_spawn', { cwd: '/work/review', task: 'review PR 5', servesPr: { repo: 'acme/app', number: 5 } });
+        await harness.settle(sessionId, 'done');
+        return { ...harness, sessionId, deleteSession: harness.deps.deleteSession, cleanup: () => harness.service.call('orch', 'worker_cleanup', { sessionId }) };
+      })();
+    // Pi accepted an input the stop could not settle; the live fields are idle.
+    await h.input(h.sessionId, { outcome: 'unresolved' });
+    await h.service.call('orch', 'session_stop', { sessionId: h.sessionId });
+    expect((await h.workers())[h.sessionId]).toMatchObject({ state: 'stopped', hold: { reason: 'unresolved_input' } });
+
+    await expect(h.cleanup()).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/unsettled input/) });
+    if (kind === 'worktree') {
+      expect(existsSync(h.worktree)).toBe(true);
+      expect(h.branchExists()).toBe(true);
+      expect(h.remoteExists()).toBe(true);
+    }
+    expect(h.deleteSession).not.toHaveBeenCalled();
+    expect((await h.workers())[h.sessionId]).toMatchObject({ hold: { reason: 'unresolved_input' } });
+    expect((await h.workers())[h.sessionId].stopping).toBeUndefined();
+  });
+
   it('refuses a worker it cannot prove idle here, such as one resident in another daemon', async () => {
     const h = await setup();
     h.runtimes.delete(h.sessionId);

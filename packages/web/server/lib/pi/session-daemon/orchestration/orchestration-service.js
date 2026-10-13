@@ -1081,6 +1081,9 @@ export function createOrchestrationService(deps) {
     }
     const worker = (await registry.read()).workers[sessionId];
     if (worker?.stopping?.token !== claim.token) return 'The worker was stopped meanwhile.';
+    // A stop leaves a hold for an input or run it could not settle; Pi may
+    // still start it, so the hold counts as busy until it is released.
+    if (worker.hold) return `The worker still holds an unsettled input or run from a stop (${worker.hold.reason}); retry once it is released.`;
     const activity = getSessionActivity(sessionId) ?? {};
     if ((runtime && !isSettled(sessionId)) || activity.waitingForInput || activity.inputActive || worker.admission || ticketsOf(sessionId).length > 0) {
       return 'The worker is running or waiting for input; stop it or wait until it is idle.';
