@@ -2189,7 +2189,32 @@ describe('worker reports and digest', () => {
     expect(await liveOf()).toEqual({ live: 'waiting_input', liveSince: 500 });
     const [unsettled] = (await digest(harness)).workers;
     expect(unsettled).toMatchObject({ lastProgressAt: null, lastError: null, usage: null, lastInputAt: expect.any(Number) });
+    activity.delete('worker-1');
     await harness.settle('worker-1', 'done');
+    expect(await liveOf()).toEqual({ live: 'idle', liveSince: null });
+  });
+
+  it('reports waiting_input while an input preflight waits in a dialog before any run starts', async () => {
+    const activity = new Map();
+    const harness = createHarness({ activity });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'done');
+    const liveOf = async () => {
+      const [worker] = (await digest(harness)).workers;
+      return { live: worker.live, liveSince: worker.liveSince };
+    };
+    // An extension command or input hook asks the owner before Pi starts the
+    // agent: the runtime is still idle, only the dialog channel knows.
+    const preflight = harness.input('worker-1', {
+      outcome: 'rejected',
+      beforeVerdict: async () => {
+        expect(harness.states.get('worker-1')).toBe('idle');
+        activity.set('worker-1', { waitingForInput: true });
+        expect(await liveOf()).toEqual({ live: 'waiting_input', liveSince: null });
+        activity.delete('worker-1');
+      },
+    });
+    await expect(preflight).rejects.toMatchObject({ code: 'PROMPT_REJECTED' });
     expect(await liveOf()).toEqual({ live: 'idle', liveSince: null });
   });
 

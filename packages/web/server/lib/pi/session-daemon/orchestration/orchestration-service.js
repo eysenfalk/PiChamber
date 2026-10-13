@@ -880,10 +880,13 @@ export function createOrchestrationService(deps) {
   const liveOf = (sessionId, runtime) => {
     if (!runtime) return { live: 'dormant', liveSince: null };
     const state = stateOf(sessionId);
-    if (state === 'idle' || state === 'dormant') return { live: state, liveSince: null };
+    if (state === 'dormant') return { live: state, liveSince: null };
+    // A dialog can wait before any run starts (an input hook or extension
+    // command asking the owner) while the runtime still reports idle.
     const { runStartedAt, retry, waitingForInput } = getSessionActivity(sessionId) ?? {};
     const liveSince = Number.isFinite(runStartedAt) ? runStartedAt : null;
     if (waitingForInput) return { live: 'waiting_input', liveSince };
+    if (state === 'idle') return { live: state, liveSince: null };
     if (retry || state === 'retry') return { live: 'retry', liveSince };
     if (state === 'busy' || state === 'starting') return { live: 'busy', liveSince };
     return { live: null, liveSince: null };
