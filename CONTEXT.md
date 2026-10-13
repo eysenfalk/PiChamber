@@ -20,6 +20,14 @@ An RPC host receives the async status snapshot as widget `subagent-async`, line 
 
 The lab image carries no provider credentials, so a recording of agent behavior needs a scripted model. Pi's faux provider registers a model whose replies, including tool calls, come from a script; the orchestration daemon test drives a real runtime with it.
 
+### Pi starts a prompt's run in the same synchronous step that reports `started`, and gives the run no identity
+
+- Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `preflightResult?.("started")` at line 1630 and `await this._runAgentPrompt(messages)` at 1631, the `before_agent_start` emit at 1591, `abort()` at 1909; `@earendil-works/pi-agent-core` 1.1.0 `dist/agent.js`: `signal` at 214 (`activeRun.abortController.signal`), `abort()` at 219, `prompt()` refusing while `activeRun` exists at 342, `activeRun` set at 350; checked with the faux provider in `session-daemon/orchestration/run-binding.e2e.test.js` (#125 round 7)
+- Date: 2026-10-13
+- Settled by: a Pi release that gives a prompt a run id, or that awaits between `started` and the run start
+
+Pi's `started` callback carries no run handle, and `AgentSession.abort()` aborts whatever run the agent has. Between the `isStreaming` check and `started` lie more awaits (auth, compaction, `before_agent_start`), so a prompt can report `started` while another prompt's run owns the agent; its own `Agent.prompt()` then fails, and a session wide abort would hit the other run. PiChamber reads the agent's `signal` one microtask after `started`: a new signal is this prompt's run, the old one means it got none. This depends on Pi starting the run without an await after the callback. If a Pi update breaks that order, `run-binding.e2e.test.js` fails.
+
 ### Pi's prompt() decides between a new run and a queued input only after its own awaits
 
 - Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `prompt()` at line 1517, the deferral at 1518 to 1521, the `isStreaming` check at 1551, `_emitAgentSettled()` at 684 to 707; checked with the faux provider in `session-daemon/orchestration/admission.e2e.test.js` (#125 round 5)

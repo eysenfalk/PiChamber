@@ -78,7 +78,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
   alivePids.add(pid);
   // The daemon's one input path: a fast check, the admission under the
   // session lease right before the prompt, and Pi's verdict on the prompt.
-  const input = async (sessionId, { outcome = 'started', beforeStart, beforeVerdict } = {}) => {
+  const input = async (sessionId, { outcome = 'started', beforeStart, beforeVerdict, run } = {}) => {
     await service.beforeSessionInput(sessionId);
     // The daemon's activation and lease lie between the check and the admission.
     await beforeStart?.();
@@ -91,7 +91,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
       throw Object.assign(new Error('rejected by preflight'), { code: 'PROMPT_REJECTED' });
     }
     if (outcome === 'started') states.set(sessionId, 'busy');
-    await service.resolveInput(ticket, outcome);
+    await service.resolveInput(ticket, outcome, { run });
     return { accepted: true, ticket };
   };
   const deps = {
@@ -111,6 +111,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
     }),
     sendInput: vi.fn(async ({ sessionId }) => input(sessionId)),
     abortSession: vi.fn(async (sessionId) => { states.set(sessionId, 'idle'); }),
+    abortRun: vi.fn(() => true),
     readSettings: async () => ({ workerLimit, roles: ROLES }),
     listModels: async () => [
       { providerId: 'anthropic', modelId: 'claude-opus-5-5', available: true },
@@ -1690,8 +1691,10 @@ describe('orchestration input admission (#125 round 5)', () => {
     await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ stopped: ['worker-1'] });
     expect((await harness.workers())['worker-1'].admission).toBeUndefined();
     deps.abortSession.mockClear();
-    await service.resolveInput(ticket, 'started');
-    expect(deps.abortSession).toHaveBeenCalledWith('worker-1');
+    const run = new AbortController().signal;
+    await service.resolveInput(ticket, 'started', { run });
+    expect(deps.abortRun).toHaveBeenCalledWith('worker-1', run);
+    expect(deps.abortSession).not.toHaveBeenCalled();
     expect((await harness.workers())['worker-1'].state).toBe('stopped');
   });
 
@@ -1773,8 +1776,11 @@ describe('orchestration input admission (#125 round 5)', () => {
     const reserved = (await harness.workers())['worker-1'].admission;
     expect(reserved).toMatchObject({ state: 'unresolved', previous: 'stopped' });
     deps.abortSession.mockClear();
-    await service.resolveInput(old.ticket, 'started');
-    expect(deps.abortSession).toHaveBeenCalledWith('worker-1');
+    const run = new AbortController().signal;
+    await service.resolveInput(old.ticket, 'started', { run });
+    // Only the old prompt's own run is aborted, never the session's.
+    expect(deps.abortRun).toHaveBeenCalledWith('worker-1', run);
+    expect(deps.abortSession).not.toHaveBeenCalled();
     expect((await harness.workers())['worker-1']).toMatchObject({ state: 'active', admission: { token: reserved.token } });
     // The new input's own run takes the slot.
     deps.abortSession.mockClear();
@@ -1782,6 +1788,81 @@ describe('orchestration input admission (#125 round 5)', () => {
     expect(deps.abortSession).not.toHaveBeenCalled();
     expect((await harness.workers())['worker-1'].admission).toBeUndefined();
     await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+  });
+
+  it.each(['limit', 'directory'])('keeps the slot of a run whose start could not be recorded against the settle of the run before it (%s)', async (guard) => {
+    const harness = createHarness({ workerLimit: guard === 'limit' ? 1 : 2 });
+    const { service, settle } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await service.recordDoneReport('worker-1');
+    // The run that reported done settles; its settle waits on the registry.
+    const paused = pausedRead(harness);
+    const settling = settle('worker-1', 'first');
+    await paused.reached;
+    // Pi starts the next run meanwhile; recording its start fails.
+    await harness.input('worker-1', { beforeVerdict: async () => {
+      vi.spyOn(harness.registry, 'update').mockRejectedValueOnce(Object.assign(new Error('disk'), { code: 'EIO' }));
+    } });
+    paused.release();
+    await settling;
+    expect((await harness.workers())['worker-1'].state).toBe('active');
+    if (guard === 'limit') {
+      await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    } else {
+      await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'two' }), 'ORCHESTRATION_CWD_BUSY');
+    }
+    // The new run ends the worker only through its own done report.
+    await finishWorker(harness, 'worker-1');
+    expect((await harness.workers())['worker-1'].admission).toBeUndefined();
+  });
+
+  it('never ends a run whose start could not be recorded with the done report of the run before it', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    const { service, settle } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await service.recordDoneReport('worker-1');
+    const handlers = deferred();
+    const admitted = deferred();
+    const prompt = harness.input('worker-1', { beforeVerdict: async () => {
+      admitted.resolve();
+      await handlers.promise;
+      vi.spyOn(harness.registry, 'update').mockRejectedValueOnce(Object.assign(new Error('disk'), { code: 'EIO' }));
+    } });
+    await admitted.promise;
+    await settle('worker-1', 'first');
+    handlers.resolve();
+    await prompt;
+    // The new run settles without a done report of its own.
+    await settle('worker-1', 'second');
+    expect((await harness.workers())['worker-1'].state).toBe('active');
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    await finishWorker(harness, 'worker-1');
+  });
+
+  it('holds a slot for a run a stopped worker\'s input started when that run cannot be aborted on its own', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    const { service, deps, settle } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await finishWorker(harness, 'worker-1');
+    const { ticket } = await harness.input('worker-1', { outcome: 'unresolved' });
+    await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    deps.abortSession.mockClear();
+    // No handle names the started run, so nothing is aborted: another run of
+    // the session might be hit.
+    await service.resolveInput(ticket, 'started');
+    expect(deps.abortSession).not.toHaveBeenCalled();
+    expect((await harness.workers())['worker-1']).toMatchObject({
+      state: 'active', admission: { state: 'unresolved', unbound: true },
+    });
+    expect(deps.onAdmissionUnresolved).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'worker-1', error: expect.objectContaining({ code: 'ORCHESTRATION_RUN_UNBOUND' }),
+    }));
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    // Its settle gives the slot back.
+    await settle('worker-1', 'ran anyway');
+    expect((await harness.workers())['worker-1'].state).toBe('stopped');
+    expect((await harness.workers())['worker-1'].admission).toBeUndefined();
+    await expect(service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' })).resolves.toMatchObject({ sessionId: 'worker-2' });
   });
 
   it('refuses an input while another daemon\'s admission of the worker is open', async () => {

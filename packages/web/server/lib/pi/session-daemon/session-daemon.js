@@ -61,6 +61,7 @@ import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from
 import { OrchestrationError } from './orchestration/errors.js';
 import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
 import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
+import { abortBoundRun, bindStartedRun } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
@@ -3267,8 +3268,12 @@ export function createSessionDaemon({
     // A worker input is admitted now that this daemon holds the session;
     // Pi's verdict on the prompt below ends the admission.
     const admission = await admit?.();
+    // A started verdict carries the run Pi starts right after it, so a stale
+    // admission aborts that run only (run-binding.js).
     const resolveAdmission = (outcome) => (admission
-      ? orchestration.resolveInput(admission, outcome).catch(() => {})
+      ? orchestration.resolveInput(admission, outcome, {
+        run: outcome === 'started' ? bindStartedRun(activeRuntime.session) : undefined,
+      }).catch(() => {})
       : Promise.resolve());
     const generation = (sendGenerationBySession.get(payload.sessionId) ?? 0) + 1;
     sendGenerationBySession.set(payload.sessionId, generation);
@@ -3938,6 +3943,7 @@ export function createSessionDaemon({
       delivery === 'prompt' ? undefined : delivery,
     ),
     abortSession: (sessionId) => abortSession(sessionId),
+    abortRun: (sessionId, run) => abortBoundRun(runtimeRegistry?.findBySessionId(sessionId)?.session, run),
     readSettings: createOrchestrationSettingsReader({ dataDir: resolvePiChamberDataDir() }),
     listModels: async () => (await listProviders()).providers.flatMap((provider) => provider.models.map((model) => ({
       providerId: model.providerId,

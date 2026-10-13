@@ -220,22 +220,16 @@ export const applyDurability = (document, sessionId, presence, at) => {
  * process did not start it), and a later run's `done` report or start is not
  * touched by an earlier run's settle. `hold` defers the `done` rule while an
  * admitted input has no outcome yet, since that input may start the next run.
- * `admission` names the admission of a run whose start could not be
- * recorded: its slot passes to the run now, as `commitStart` would have
- * done (kept without a slot of its own when `keep`).
+ * Nor does it apply while the worker shows an admission: that admission's
+ * run, or its verdict, decides about the slot (R7-S1).
  */
-export const applySettle = (document, sessionId, presence, at, { generation = null, hold = false, admission = null, keep = false } = {}) => {
-  const worker = document.workers[sessionId];
-  if (!worker) return undefined;
-  if (holdsAdmission(worker, admission)) {
-    if (keep) worker.admission = { ...worker.admission, previous: null };
-    else delete worker.admission;
-  }
+export const applySettle = (document, sessionId, presence, at, { generation = null, hold = false } = {}) => {
+  if (!document.workers[sessionId]) return undefined;
   applyDurability(document, sessionId, presence, at);
   const current = document.workers[sessionId];
   if (!current) return 'removed';
   const currentGeneration = current.generation ?? 0;
-  if (hold || (generation !== null && generation !== currentGeneration)) return current.state;
+  if (hold || current.admission || (generation !== null && generation !== currentGeneration)) return current.state;
   if ((current.doneReported === true || current.doneReported === currentGeneration) && current.state === 'active') {
     setWorkerState(current, 'done', at);
   }
@@ -283,7 +277,7 @@ const holdsAdmission = (worker, admission) => Boolean(admission) && worker?.admi
  * own. An admission the worker no longer shows (a stop deleted it) is
  * `stale`: the run has no slot, and the caller aborts it.
  */
-export const commitStart = (document, sessionId, at, { admission, keep = false }) => {
+const commitStart = (document, sessionId, at, { admission, keep = false }) => {
   const worker = document.workers[sessionId];
   if (!holdsAdmission(worker, admission)) return { stale: true };
   if (keep) worker.admission = { ...worker.admission, previous: null };
@@ -291,7 +285,21 @@ export const commitStart = (document, sessionId, at, { admission, keep = false }
   delete worker.doneReported;
   if (RESTARTABLE_STATES.has(worker.state)) setWorkerState(worker, 'active', at);
   worker.generation = (worker.generation ?? 0) + 1;
+  worker.runAdmission = admission;
   return { generation: worker.generation };
+};
+
+/**
+ * `commitStart` for a run whose commit failed, retried by that run's next
+ * registry step. Idempotent: an admission whose run already holds the
+ * current generation (`runAdmission`) returns it; one the worker shows no
+ * more and that started no generation is `stale`.
+ */
+export const completeStart = (document, sessionId, at, { admission, keep = false }) => {
+  const worker = document.workers[sessionId];
+  if (holdsAdmission(worker, admission)) return commitStart(document, sessionId, at, { admission, keep });
+  if (worker && admission && worker.runAdmission === admission) return { generation: worker.generation ?? 0 };
+  return { stale: true };
 };
 
 /**
@@ -316,6 +324,23 @@ export const markUnresolved = (document, sessionId, { admission, at }) => {
   const worker = document.workers[sessionId];
   if (!holdsAdmission(worker, admission)) return false;
   worker.admission = { ...worker.admission, state: 'unresolved', unresolvedAt: at };
+  return true;
+};
+
+/**
+ * A run started whose admission a stop ended, and the daemon could not tell
+ * that run apart from another one to abort it. It runs anyway, so a worker
+ * without a slot takes one again, without the limit check (the slot is in
+ * use), and shows an `unresolved` admission (`unbound`) until the run's
+ * settle releases it or a stop ends it. Returns whether it took the slot.
+ */
+export const holdUnboundRun = (document, sessionId, { admission, at, process }) => {
+  const worker = document.workers[sessionId];
+  if (!worker || worker.stopping || worker.admission || !RESTARTABLE_STATES.has(worker.state)) return false;
+  worker.admission = {
+    token: admission, previous: worker.state, process, since: at, state: 'unresolved', unresolvedAt: at, unbound: true,
+  };
+  setWorkerState(worker, 'active', at);
   return true;
 };
 
