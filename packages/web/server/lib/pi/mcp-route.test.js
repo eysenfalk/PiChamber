@@ -6,7 +6,11 @@ import {
   createOrchestrationCredentialStore,
   isOrchestrationMcpRequest,
 } from '../client-auth/orchestration-credentials.js';
-import { ORCHESTRATION_TOOL_NAMES } from './session-daemon/orchestration/tool-contracts.js';
+import { ORCHESTRATION_TOOLS } from './session-daemon/orchestration/tool-contracts.js';
+
+const names = (predicate) => ORCHESTRATION_TOOLS.filter(predicate).map((tool) => tool.name);
+const ORCHESTRATOR_TOOLS = names((tool) => tool.orchestratorAllowed !== false);
+const WORKER_TOOLS = names((tool) => tool.childAllowed !== false);
 
 const listen = (app) => new Promise((resolve, reject) => {
   const server = app.listen(0, '127.0.0.1', () => resolve(server));
@@ -19,16 +23,19 @@ const createRuntime = () => {
   const calls = [];
   // Sessions the daemon no longer has, e.g. removed by its idle cleanup.
   const gone = new Set(['never-existed']);
+  // The kind the daemon decides per session; sessions not listed are marked orchestrators.
+  const kinds = new Map();
   return {
     calls,
     gone,
+    kinds,
     request: async (command, payload) => {
       calls.push({ command, payload });
       if (command === 'sessions.delete') return { deleted: true };
       if (gone.has(payload.sessionId) && command.startsWith('orchestration.')) {
         return { error: { code: 'ORCHESTRATION_CALLER_GONE', message: 'The calling session no longer exists.' } };
       }
-      if (command === 'orchestration.caller') return { value: { sessionId: payload.sessionId } };
+      if (command === 'orchestration.caller') return { value: { sessionId: payload.sessionId, kind: kinds.get(payload.sessionId) ?? 'orchestrator' } };
       if (command !== 'orchestration.call') throw Object.assign(new Error('unexpected'), { code: 'UNSUPPORTED' });
       if (payload.tool === 'session_stop') {
         return { error: { code: 'ORCHESTRATION_NOT_DESCENDANT', message: 'Not your worker.' } };
@@ -80,7 +87,7 @@ describe('orchestration MCP route', () => {
     expect(notified.status).toBe(202);
 
     const list = await (await rpc(token, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json();
-    expect(list.result.tools.map((tool) => tool.name)).toEqual(ORCHESTRATION_TOOL_NAMES);
+    expect(list.result.tools.map((tool) => tool.name)).toEqual(ORCHESTRATOR_TOOLS);
     expect(list.result.tools[0].inputSchema).toMatchObject({ type: 'object' });
 
     // A session id in the arguments or body cannot redirect the caller.
@@ -91,6 +98,42 @@ describe('orchestration MCP route', () => {
     expect(call.result.isError).toBeUndefined();
     expect(JSON.parse(call.result.content[0].text)).toEqual({ caller: 'parent-1', tool: 'session_list', args: { sessionId: 'other' } });
     expect(runtime.calls.at(-1)).toEqual({ command: 'orchestration.call', payload: { sessionId: 'parent-1', tool: 'session_list', args: { sessionId: 'other' } } });
+  });
+
+  it('lists the tools of the caller kind the daemon decides at each discovery', async () => {
+    const { mint, rpc, runtime } = await start();
+    const list = async (token) => (await (await rpc(token, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json()).result.tools.map((tool) => tool.name);
+    runtime.kinds.set('plain', 'unmarked');
+    runtime.kinds.set('worker-1', 'worker');
+    const plain = await mint('plain');
+    const worker = await mint('worker-1');
+    const marked = await mint('marked');
+
+    expect(await list(plain.token)).toEqual([]);
+    expect(await list(worker.token)).toEqual(WORKER_TOOLS);
+    expect(await list(worker.token)).toContain('worker_report');
+    expect(await list(worker.token)).not.toContain('session_spawn');
+    expect(await list(marked.token)).toEqual(ORCHESTRATOR_TOOLS);
+    expect(await list(marked.token)).not.toContain('worker_report');
+
+    // The owner removes the mark: the next discovery offers nothing.
+    runtime.kinds.set('marked', 'unmarked');
+    expect(await list(marked.token)).toEqual([]);
+  });
+
+  it('answers a failed discovery with an error, never with an empty list', async () => {
+    const { mint, rpc, runtime } = await start();
+    const { token } = await mint('ephemeral');
+    runtime.gone.add('ephemeral');
+    const gone = await (await rpc(token, { jsonrpc: '2.0', id: 1, method: 'tools/list' })).json();
+    expect(gone.result).toBeUndefined();
+    expect(gone.error).toMatchObject({ code: -32603 });
+    expect((await rpc(token, { jsonrpc: '2.0', id: 2, method: 'ping' })).status).toBe(401);
+
+    const other = await mint('other');
+    runtime.request = async () => { throw new Error('daemon down'); };
+    const down = await (await rpc(other.token, { jsonrpc: '2.0', id: 3, method: 'tools/list' })).json();
+    expect(down.error).toMatchObject({ code: -32603, message: 'The PiChamber session daemon did not answer.' });
   });
 
   it('returns tool failures as error results and unknown methods as JSON-RPC errors', async () => {

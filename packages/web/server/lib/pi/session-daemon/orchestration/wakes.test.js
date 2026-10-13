@@ -38,7 +38,7 @@ const createHarness = ({ settings = {} } = {}) => {
     stateOf: (sessionId) => states.get(sessionId) ?? (runtimes.has(sessionId) ? 'idle' : 'dormant'),
     runStartedAt: () => undefined,
     waitingForInput: (sessionId) => dialogs.has(sessionId),
-    readSettings: async () => ({ wakes: { coalesceMs: 3_000 }, watchdog: { stallAfterMs: 10 * MINUTE, enabled: true }, ...settings }),
+    readSettings: async () => ({ wakes: { coalesceMs: 3_000 }, watchdog: { stallAfterMs: 10 * MINUTE, enabled: true }, orchestrators: ['orch', 'successor'], ...settings }),
     now: () => clock,
     isGone: (error) => error?.code === 'SESSION_NOT_FOUND',
   };
@@ -155,6 +155,19 @@ describe('orchestration wakes', () => {
     await advance(3_000);
     expect(orch.sent).toHaveLength(0);
     expect(successor.sent).toHaveLength(1);
+  });
+
+  it('keeps the events of an unmarked owner until the owner is marked', async () => {
+    const settings = { orchestrators: [] };
+    const { wakes, orch, advance } = createHarness({ settings });
+    wakes.emit('worker-1', 'run_finished', 'one');
+    await advance(3_000);
+    await wakes.tick();
+    expect(orch.sent).toHaveLength(0);
+    settings.orchestrators = ['orch'];
+    await wakes.tick();
+    expect(orch.sent).toHaveLength(1);
+    expect(orch.sent[0].message.details.events).toMatchObject([{ sessionId: 'worker-1', kind: 'run_finished' }]);
   });
 
   it('reopens a dormant owner and keeps the queue while its session is in use', async () => {

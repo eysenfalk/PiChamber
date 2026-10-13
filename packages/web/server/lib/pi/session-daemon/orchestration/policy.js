@@ -11,11 +11,16 @@ const orchestratorAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name
 const OWNERSHIP_TOOLS = new Set(['session_stop', 'session_rewind', 'worker_cleanup']);
 
 /**
- * @param {{ toolName: string, callerSessionId: string, callerKind: 'worker' | 'orchestrator',
+ * @param {{ toolName: string, callerSessionId: string, callerKind: 'worker' | 'orchestrator' | 'unmarked',
  *   targetOwner?: string | null }} call targetOwner is the registry owner of
  *   `args.sessionId`, or null when the session is no registered worker.
  */
 export const authorize = ({ toolName, callerSessionId, callerKind, targetOwner }) => {
+  // A session that is neither a worker nor marked as orchestrator has no
+  // orchestration tools; the mark is set in the session menu or settings.json.
+  if (callerKind === 'unmarked') {
+    throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', `Only a session marked as orchestrator can call ${toolName}.`);
+  }
   if (callerKind === 'worker' && !workerAllowed.get(toolName)) {
     throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', `Workers cannot call ${toolName}.`);
   }

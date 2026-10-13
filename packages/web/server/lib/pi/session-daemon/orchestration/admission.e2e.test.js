@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
-import { connectClient, credential, disableHostGate, piAiFauxUrl } from './e2e-support.js';
+import { connectClient, credential, disableHostGate, markOrchestrator, piAiFauxUrl } from './e2e-support.js';
 import { createOrchestrationRegistryStore } from './registry-store.js';
 
 // A worker's slot through Pi SDK 1.1.0's own awaits in prompt(): input
@@ -89,6 +89,7 @@ const setup = async () => {
 
   const created = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
   const parentId = created.result.session.id;
+  markOrchestrator(process.env.PICHAMBER_DATA_DIR, parentId);
   const results = () => client.events.filter((message) => message.event === 'extension.message'
     && message.payload?.sessionId === parentId
     && message.payload?.customType === 'pichamber.orchestration.events')

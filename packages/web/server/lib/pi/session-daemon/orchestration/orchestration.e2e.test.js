@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
-import { connectClient, credential, disableHostGate, piAiFauxUrl } from './e2e-support.js';
+import { connectClient, credential, disableHostGate, markOrchestrator, piAiFauxUrl } from './e2e-support.js';
 import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
 
 // Orchestration through the real Pi SDK: the daemon's inline extension gives
@@ -99,10 +99,12 @@ describe('orchestration end-to-end through the real SDK', () => {
     await daemon.start();
     const client = connectClient(endpoint);
     await client.authenticate();
-    const createSession = async () => {
+    const createSession = async ({ orchestrator = true } = {}) => {
       const created = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
       expect(created.kind).toBe('response');
-      return created.result.session.id;
+      const sessionId = created.result.session.id;
+      if (orchestrator) markOrchestrator(process.env.PICHAMBER_DATA_DIR, sessionId);
+      return sessionId;
     };
     return { root, projectDir, workerDir, client, createSession };
   };
@@ -178,8 +180,7 @@ describe('orchestration end-to-end through the real SDK', () => {
 
     // A successor takes the worker over through the IPC path; the old
     // orchestrator then cannot stop it, and a worker cannot take over.
-    const successor = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
-    const successorId = successor.result.session.id;
+    const successorId = await createSession();
     const workerTakeover = await client.request('orchestration.call', { sessionId: workerId, tool: 'orchestration_takeover', args: { fromSessionId: parentId } });
     expect(workerTakeover.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
     let takeover;
@@ -192,6 +193,19 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(oldStop.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
     const listed = await client.request('orchestration.call', { sessionId: successorId, tool: 'session_list', args: {} });
     expect(listed.result.value.sessions).toEqual([expect.objectContaining({ sessionId: workerId, lifecycle: 'active' })]);
+
+    // A session without the mark sees no orchestration tool and no
+    // instructions, and the IPC path refuses it too.
+    const plainId = await createSession({ orchestrator: false });
+    const plainAnswered = client.next((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === plainId, 30_000);
+    await client.request('sessions.prompt', { sessionId: plainId, text: 'PLAIN SESSION' });
+    await plainAnswered;
+    const plainTurn = globalThis.__pichamberOrchestrationLog.find((entry) => entry.lastText === 'PLAIN SESSION');
+    expect(plainTurn.tools.filter((name) => name.startsWith('mcp__pichamber__'))).toEqual([]);
+    expect(plainTurn.hasInstructions).toBe(false);
+    const plainCall = await client.request('orchestration.call', { sessionId: plainId, tool: 'orchestration_capabilities', args: {} });
+    expect(plainCall.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
 
     await client.close();
   }, 120_000);

@@ -240,9 +240,6 @@ async function seedOrchestrator({ root, agentDir, now, projects, sessions }) {
   const cwd = projects.find((project) => project.name === spec.project).path;
   await mkdir(join(agentDir, 'extensions'), { recursive: true });
   await writeFile(join(agentDir, 'extensions', 'faux-orchestration.js'), fauxOrchestrationExtension({ fauxUrl: resolveFauxUrl(), workerCwd: cwd }));
-  // The pod's 4 GiB would always trip the host gate (lab.yaml: PICHAMBER_DATA_DIR=/lab/pichamber); the host protects itself.
-  await mkdir(join(root, 'pichamber', 'pi'), { recursive: true });
-  await writeFile(join(root, 'pichamber', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { gate: { enabled: false } } }) + '\n');
   const createdAt = now - 600000;
   let manager;
   withSeedClock(createdAt, () => {
@@ -253,6 +250,11 @@ async function seedOrchestrator({ root, agentDir, now, projects, sessions }) {
     manager.appendMessage(assistant('Scripted lab model: send ORCHESTRATE, STATUS or GO.', createdAt + 1000));
   });
   await utimes(manager.getSessionFile(), new Date(createdAt), new Date(createdAt + 1000));
+  // The pod's 4 GiB would always trip the host gate (lab.yaml: PICHAMBER_DATA_DIR=/lab/pichamber); the host protects itself.
+  // Only a marked session orchestrates (#136), so the seed marks this one.
+  await mkdir(join(root, 'pichamber', 'pi'), { recursive: true });
+  const orchestration = { gate: { enabled: false }, orchestrators: { [manager.getSessionId()]: true } };
+  await writeFile(join(root, 'pichamber', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration }) + '\n');
   sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory: cwd });
 }
 

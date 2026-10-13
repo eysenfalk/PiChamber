@@ -141,6 +141,20 @@ const normalizeGroup = (value, fields) => {
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
+// Sessions marked as orchestrator: `{ "<sessionId>": true }`. Only these get
+// the orchestration instructions, the tools and the wakes of their workers.
+const normalizeOrchestrators = (value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+  const result = {};
+  for (const [sessionId, marked] of Object.entries(value)) {
+    if (marked === null || marked === undefined) continue;
+    if (marked !== true || sessionId.trim().length === 0 || sessionId.length > 256) throw invalidSettings();
+    result[sessionId] = true;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+};
+
 const normalizeOrchestration = (value) => {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
@@ -186,6 +200,8 @@ const normalizeOrchestration = (value) => {
     if (typeof value.worktreeRoot !== 'string' || !isAbsolute(value.worktreeRoot) || value.worktreeRoot.length > 4096) throw invalidSettings();
     result.worktreeRoot = value.worktreeRoot;
   }
+  const orchestrators = normalizeOrchestrators(value.orchestrators);
+  if (orchestrators) result.orchestrators = orchestrators;
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
@@ -212,6 +228,15 @@ const mergeOrchestration = (current, incoming) => {
     }
   }
   if (Object.hasOwn(incoming, 'worktreeRoot')) next.worktreeRoot = incoming.worktreeRoot;
+  // Per session: `true` marks it, `null` removes the mark.
+  if (Object.hasOwn(incoming, 'orchestrators')) {
+    if (incoming.orchestrators === null) {
+      delete next.orchestrators;
+    } else {
+      if (!incoming.orchestrators || typeof incoming.orchestrators !== 'object' || Array.isArray(incoming.orchestrators)) throw invalidSettings();
+      next.orchestrators = { ...(current?.orchestrators ?? {}), ...incoming.orchestrators };
+    }
+  }
   if (Object.hasOwn(incoming, 'roles')) {
     if (incoming.roles === null) {
       delete next.roles;
@@ -237,6 +262,8 @@ export const resolveOrchestrationSettings = (stored) => {
     github: { ...DEFAULT_ORCHESTRATION_SETTINGS.github, ...overrides.github },
     gate: { ...DEFAULT_ORCHESTRATION_SETTINGS.gate, ...(overrides.gate ?? {}) },
     roles,
+    // Session ids marked as orchestrator; empty unless someone marked one.
+    orchestrators: Object.keys(overrides.orchestrators ?? {}),
     // Where `worker_start` adds worktrees; unset means next to the caller's worktree.
     ...(overrides.worktreeRoot ? { worktreeRoot: overrides.worktreeRoot } : {}),
   };

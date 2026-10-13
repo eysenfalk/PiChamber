@@ -42,6 +42,7 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
         setLeaf: (id) => { leafId = id; },
         appendCustomEntry: (customType, data) => { entries.push({ type: 'custom', customType, data }); },
         getSessionName: () => `title ${sessionId}`,
+        getSessionId: () => sessionId,
       },
       sendCustomMessage: async (message, options) => { runtime.delivered.push({ message, options }); },
       getSessionStats: () => runtime.stats,
@@ -50,6 +51,9 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
   if (lineage) runtime.session.sessionManager.appendCustomEntry(LINEAGE_ENTRY, lineage);
   return runtime;
 };
+
+// The sessions these tests use as orchestrators carry the mark.
+const MARKED = ['orch', 'orch-2', 'other', 'owner-session', 'legacy', 'other-orch'];
 
 const registryFile = () => join(mkdtempSync(join(tmpdir(), 'pichamber-orchestration-service-')), 'registry.json');
 
@@ -70,7 +74,7 @@ const GIB = 1024 ** 3;
  * One daemon process. Two harnesses on the same `file` are two processes
  * sharing the durable registry; a new harness on the same file is a restart.
  */
-const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker', delay = async () => {}, pid: reusedPid, startTime, holdSession, gate = { enabled: true, minAvailableBytes: 8 * GIB }, overrides = {} } = {}) => {
+const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker', delay = async () => {}, pid: reusedPid, startTime, holdSession, gate = { enabled: true, minAvailableBytes: 8 * GIB }, orchestrators = MARKED, overrides = {} } = {}) => {
   // Mutable, so a test can make the host busy between calls.
   const host = { cpuCount: 8, loadAverage: { '1m': 1 }, memory: { freeBytes: 16 * GIB } };
   const runtimes = new Map();
@@ -155,7 +159,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
     sendInput: vi.fn(async ({ sessionId }) => input(sessionId)),
     abortSession: vi.fn(async (sessionId) => { states.set(sessionId, 'idle'); }),
     abortRun: vi.fn(() => true),
-    readSettings: async () => ({ workerLimit, gate, roles: ROLES, wakes: { coalesceMs: 0 } }),
+    readSettings: async () => ({ workerLimit, gate, roles: ROLES, wakes: { coalesceMs: 0 }, orchestrators }),
     listModels: async () => [
       { providerId: 'anthropic', modelId: 'claude-opus-5-5', available: true },
       { providerId: 'anthropic', modelId: 'claude-sonnet-5-5', available: true },
@@ -255,8 +259,8 @@ describe('orchestration service', () => {
     expect(Object.keys(document.operations[lineage.opId].steps)).toEqual(['reserved', 'session', 'prompted']);
     // The registry is the record; nothing is written into the orchestrator's JSONL.
     expect(orchestrator.session.sessionManager.getEntries()).toEqual([]);
-    expect(service.isWorker(runtimes.get('worker-1').session.sessionManager)).toBe(true);
-    expect(service.isWorker(orchestrator.session.sessionManager)).toBe(false);
+    await expect(service.sessionKind(runtimes.get('worker-1').session.sessionManager)).resolves.toBe('worker');
+    await expect(service.sessionKind(orchestrator.session.sessionManager)).resolves.toBe('orchestrator');
 
     const capabilities = await service.call('orch', 'orchestration_capabilities');
     expect(capabilities).toMatchObject({ workerLimit: 4, freeSlots: 3, canSpawn: true, host: { cpuCount: 8 } });
@@ -317,6 +321,33 @@ describe('orchestration service', () => {
     await expect(service.call('orch', 'session_send', { sessionId: 'other', text: 'hi', delivery: 'steer' })).resolves.toMatchObject({ accepted: true });
     await expect(service.call('orch', 'session_interrupt', { sessionId: 'other' })).resolves.toEqual({ sessionId: 'other', interrupted: true });
     await expect(service.call('orch', 'session_read', { sessionId: 'other' })).resolves.toMatchObject({ sessionId: 'other', cwd: '/work/main' });
+  });
+
+  it('gives the tools only to a session marked as orchestrator, and to workers', async () => {
+    const orchestrators = ['orch'];
+    const { service, deps, runtimes } = createHarness({ orchestrators });
+    const plain = createRuntime({ sessionId: 'plain' });
+    runtimes.set('plain', plain);
+    await expect(service.sessionKind(plain.session.sessionManager)).resolves.toBe('unmarked');
+    // MCP discovery (Adapter B) asks the same decision.
+    await expect(service.verifyCaller('plain')).resolves.toEqual({ sessionId: 'plain', kind: 'unmarked' });
+    await expectCode(service.call('plain', 'orchestration_capabilities'), 'ORCHESTRATION_FORBIDDEN');
+    await expectCode(service.call('plain', 'session_spawn', { cwd: '/work/a', task: 'one' }), 'ORCHESTRATION_FORBIDDEN');
+    expect(deps.createWorkerSession).not.toHaveBeenCalled();
+
+    // The mark acts on the next call, and removing it takes the tools away again.
+    orchestrators.push('plain');
+    await expect(service.call('plain', 'orchestration_capabilities')).resolves.toMatchObject({ canSpawn: true });
+    await expect(service.verifyCaller('plain')).resolves.toMatchObject({ kind: 'orchestrator' });
+    await service.call('plain', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    orchestrators.pop();
+    await expectCode(service.call('plain', 'session_list'), 'ORCHESTRATION_FORBIDDEN');
+
+    // A marked worker stays a worker.
+    orchestrators.push('worker-1');
+    await expect(service.sessionKind(runtimes.get('worker-1').session.sessionManager)).resolves.toBe('worker');
+    await expect(service.verifyCaller('worker-1')).resolves.toEqual({ sessionId: 'worker-1', kind: 'worker' });
+    await expectCode(service.call('worker-1', 'session_spawn', { cwd: '/work/b', task: 'x' }), 'ORCHESTRATION_FORBIDDEN');
   });
 
   it('deduplicates retried and concurrent spawns by clientRequestId', async () => {
@@ -2298,7 +2329,7 @@ describe('worker_start', () => {
 
   it('places the worktree under the configured root and is for orchestrators only', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pichamber-worktree-root-'));
-    const harness = setup({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: true, minAvailableBytes: 8 * GIB }, roles: ROLES, worktreeRoot: root }) } });
+    const harness = setup({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: true, minAvailableBytes: 8 * GIB }, roles: ROLES, worktreeRoot: root, orchestrators: ['orch'] }) } });
     await expect(harness.service.call('orch', 'worker_start', args)).resolves.toMatchObject({ worktree: join(root, '7-fix') });
     await expectCode(harness.service.call('worker-1', 'worker_start', { ...args, clientRequestId: 'start-8', branchName: '8-fix' }), 'ORCHESTRATION_FORBIDDEN');
   });

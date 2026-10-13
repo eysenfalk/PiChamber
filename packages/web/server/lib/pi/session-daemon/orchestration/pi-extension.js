@@ -1,5 +1,5 @@
 import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
-import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
+import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName, toolsForKind } from './tool-contracts.js';
 
 // Adapter A: an inline Pi extension the daemon adds to every session runtime.
 // The runtime already knows which session calls a tool, so no credential is
@@ -9,13 +9,7 @@ import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName } from 
 
 const ORCHESTRATION_EXTENSION_NAME = 'pichamber-orchestration';
 
-const CHILD_FORBIDDEN_TOOLS = new Set(
-  ORCHESTRATION_TOOLS.filter((tool) => tool.childAllowed === false).map((tool) => qualifiedToolName(tool.name)),
-);
-
-const WORKER_ONLY_TOOLS = new Set(
-  ORCHESTRATION_TOOLS.filter((tool) => tool.orchestratorAllowed === false).map((tool) => qualifiedToolName(tool.name)),
-);
+const ALL_TOOLS = new Set(ORCHESTRATION_TOOLS.map((tool) => qualifiedToolName(tool.name)));
 
 const formatResult = (value) => ({
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -31,7 +25,7 @@ const toToolError = (error) => {
 };
 
 /**
- * @param {{ call: Function, isWorker: (sessionManager) => boolean }} service
+ * @param {{ call: Function, sessionKind: (sessionManager) => Promise<'worker' | 'orchestrator' | 'unmarked'> }} service
  */
 export const createOrchestrationExtension = (service) => ({
   name: ORCHESTRATION_EXTENSION_NAME,
@@ -61,29 +55,29 @@ export const createOrchestrationExtension = (service) => ({
     }
 
     // Workers keep read/list/send/wait/interrupt but never see spawn or stop;
-    // the service rejects those calls independently.
-    // Orchestrators never see worker_report. A worker's lineage entry may
-    // arrive after its session_start, so a worker gets worker_report back.
-    const restrictWorker = (ctx) => {
-      const worker = service.isWorker(ctx.sessionManager);
+    // orchestrators never see worker_report; unmarked sessions see none. The
+    // service rejects forbidden calls independently. The kind is decided again
+    // before every run: a worker's lineage entry may arrive after its
+    // session_start, and a mark may be set or removed between runs. A failed
+    // settings read counts as unmarked until the next run.
+    const applyKind = async (ctx) => {
+      const kind = await service.sessionKind(ctx.sessionManager).catch(() => 'unmarked');
       const active = pi.getActiveTools();
-      const allowed = worker
-        ? [...new Set([...active.filter((name) => !CHILD_FORBIDDEN_TOOLS.has(name)), ...WORKER_ONLY_TOOLS])]
-        : active.filter((name) => !WORKER_ONLY_TOOLS.has(name));
-      if (allowed.length !== active.length || allowed.some((name, index) => name !== active[index])) pi.setActiveTools(allowed);
-      return worker;
+      const allowed = [...active.filter((name) => !ALL_TOOLS.has(name)), ...toolsForKind(kind).map((tool) => qualifiedToolName(tool.name))];
+      const current = new Set(active);
+      if (allowed.length !== current.size || allowed.some((name) => !current.has(name))) pi.setActiveTools(allowed);
+      return kind;
     };
 
-    pi.on('session_start', (_event, ctx) => {
-      restrictWorker(ctx);
+    pi.on('session_start', async (_event, ctx) => {
+      await applyKind(ctx);
     });
 
     // Like t3code's Pi bridge: the base instructions extend the system prompt
-    // of every turn of a session that may orchestrate. They never enter the
-    // transcript, and the first user message stays untouched so slash commands
-    // still expand.
-    pi.on('before_agent_start', (event, ctx) => {
-      if (restrictWorker(ctx)) return undefined;
+    // of every turn of a marked orchestrator. They never enter the transcript,
+    // and the first user message stays untouched so slash commands still expand.
+    pi.on('before_agent_start', async (event, ctx) => {
+      if (await applyKind(ctx) !== 'orchestrator') return undefined;
       return { systemPrompt: `${event.systemPrompt}\n\n${ORCHESTRATION_INSTRUCTIONS}` };
     });
   },
