@@ -387,6 +387,20 @@ export const setHold = (document, sessionId, { token, process, at, reason }) => 
 };
 
 /**
+ * An occupancy whose end has no proof (a run whose prompt could not prove
+ * its end): the worker shows a hold with reason `unproven_run`, taking one
+ * with `token` if it has none. Only reconcile ends it, once its process died.
+ */
+export const holdUnproven = (document, sessionId, { token, process, at }) => {
+  const worker = document.workers[sessionId];
+  if (!worker) return undefined;
+  worker.hold = worker.hold
+    ? { ...worker.hold, reason: 'unproven_run' }
+    : { token, process, since: at, reason: 'unproven_run' };
+  return worker.hold.token;
+};
+
+/**
  * #107 kept workers as JSONL entries in the orchestrator's session. They are
  * read once per orchestrator and then live here; stopped ones become
  * `stopped`, the others `active`.

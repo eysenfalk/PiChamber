@@ -24,6 +24,7 @@ import {
   rejectStart,
   releaseHold,
   setHold,
+  holdUnproven,
   releaseAdmission,
   requestKey,
   reserveSpawn,
@@ -179,6 +180,8 @@ export function createOrchestrationService(deps) {
   const liveRuns = new Map();
   // The order in which Pi started runs of this service (`seq` of a start).
   let startSeq = 0;
+  // The `seq` of the latest start per worker.
+  const latestStart = new Map();
   // Inputs per worker whose end this service cannot prove yet (a stop could
   // not settle them, or their run started without a slot), and the registry
   // hold that keeps the worker's slot and directory until each is settled.
@@ -954,36 +957,57 @@ export function createOrchestrationService(deps) {
     }, { triggerTurn: true, deliverAs: 'followUp' });
   };
 
+  const captureResult = (runtime) => ({
+    assistant: lastAssistant(runtime),
+    title: runtime?.session.sessionManager?.getSessionName?.(),
+    cwd: runtime?.cwd,
+  });
+
   /**
-   * Called by the daemon for every agent_settled. Applies the worker's state
-   * transition, resolves waits and delivers a worker's result to its current
-   * owner as a custom message that starts a turn, or queues as follow-up
-   * while the owner is busy.
-   * The `done` rule applies only to the generation that settled. While an
+   * Called by the daemon for every agent_settled. A run this service tracks
+   * ends with its prompt (`finishRun`); any other settle applies the worker's
+   * state transition, resolves waits and delivers a worker's result to its
+   * current owner as a custom message that starts a turn, or queues as
+   * follow-up while the owner is busy.
+   * The `done` rule applies only to the generation that ended. While an
    * admitted input has no outcome yet it waits, because that input may start
    * the next run in the same slot (`resolveInput` applies or drops it).
    */
   const onSessionSettled = async (sessionId, runtime) => {
     pendingRuns.delete(sessionId);
     notifyWaiters();
-    // The settled turn's result and generation, taken before any await: a
-    // later turn of the worker must not replace them while the settle or a
-    // delivery retry waits.
-    const result = {
-      assistant: lastAssistant(runtime),
-      title: runtime.session.sessionManager?.getSessionName?.(),
-      cwd: runtime.cwd,
-    };
-    // The daemon reports only a settle after which no run is left (`isSettleFinal`),
-    // so this settle ends the live run and every bound stale run.
+    // Taken before any await: a later turn must not replace it.
+    const result = captureResult(runtime);
+    // A run of this service ends only with its own prompt (`finishRun`). The
+    // event is no proof of that: Pi 1.1.0 can emit it for an earlier prompt
+    // while this run waits in its retry backoff. It only records the result
+    // of the run that started last.
     const run = liveRuns.get(sessionId);
-    liveRuns.delete(sessionId);
-    const staleRuns = [...(staleInputs.get(sessionId)?.pending ?? [])].filter((ticket) => ticket.run);
-    for (const ticket of staleRuns) await settleStale(ticket);
-    // A run whose start could not be recorded completes its commit in the
-    // settle (R7-S1).
+    if (run) {
+      if (latestStart.get(sessionId) === run.seq) run.result = result;
+      return;
+    }
+    await applyRunEnd(sessionId, runtime, undefined, result);
+  };
+
+  // The prompt that started `run` ended: the proven end of exactly this run.
+  const finishRun = async (sessionId, run) => {
+    if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
+    const runtime = getLiveRuntime(sessionId);
+    try {
+      await applyRunEnd(sessionId, runtime, run, run.result ?? captureResult(runtime));
+    } finally {
+      notifyWaiters();
+    }
+  };
+
+  // Applies a run's end: durability, the `done` rule of its generation (none
+  // for a run of no tracked start), and the result delivery.
+  const applyRunEnd = async (sessionId, runtime, run, result) => {
+    // A run whose start could not be recorded completes its commit at its
+    // end (R7-S1).
     if (run) await run.committed;
-    const lineage = lineageOf(runtime);
+    const lineage = runtime ? lineageOf(runtime) : undefined;
     let document = await registry.read();
     if (!document.workers[sessionId] && lineage?.parentSessionId && !imported.has(lineage.parentSessionId)) {
       await withSession(lineage.parentSessionId, async () => {
@@ -1048,7 +1072,8 @@ export function createOrchestrationService(deps) {
    * only while the worker still shows that admission. A stop deletes it and
    * makes the remaining tickets stale: their late `started` aborts the run
    * and confirms nothing. Neither a settle nor the end of a ticket ends a
-   * started run's occupancy; only that run's own settle does.
+   * started run's occupancy; only the end of the prompt that started it
+   * does (`finished`), and without that proof it stays held.
    */
   const ticketsOf = (sessionId) => [...(tickets.get(sessionId)?.values() ?? [])];
   const openTicketsDone = async (sessionId) => {
@@ -1193,55 +1218,98 @@ export function createOrchestrationService(deps) {
     if (deferredSettle) notifyWaiters();
   };
 
-  /**
-   * Pi's verdict on an admitted input: `started`, `queued` or `handled`
-   * (preflight), `rejected`, or `unresolved` (accepted without a verdict). A
-   * late verdict of an unresolved input still counts.
-   */
-  /**
-   * A run started without a slot: its input a stop ended, or a later start
-   * replaced its commit. The worker holds a slot and its directory for it
-   * (`hold`). Only that run is aborted, through the signal the daemon bound
-   * to it, and its settle releases the hold. Without a bound signal it cannot
-   * be told apart from another run: it is not aborted, the hold stays until
-   * the daemon process ends, and it is reported (the documented limit).
-   */
-  const staleStarted = async (ticket, handle) => {
-    const { sessionId } = ticket;
-    const record = ticket.hold ?? trackStale(sessionId, ticket.token, [ticket]);
-    const bound = await Promise.resolve(handle).catch(() => null);
-    // Set before the hold is written, so the run's settle finds it.
-    if (bound) ticket.run = bound;
-    const holding = registry.update((document) => setHold(document, sessionId, {
-      token: record.token, process: self, at: now(), reason: bound ? 'stale_run' : 'unbound_run',
-    }));
-    if (bound) await withSession(sessionId, () => abortRun(sessionId, bound)).catch(() => {});
+  // Whether a run's prompt proved its end (`finished` resolves true).
+  const proof = (finished) => (finished
+    ? Promise.resolve(finished).then((value) => value === true, () => false)
+    : Promise.resolve(false));
+
+  // An occupancy whose end has no proof keeps its slot and directory as an
+  // `unproven_run` hold until reconcile finds this process dead, and is
+  // reported. Neither a settle nor time ends it.
+  const holdUnprovenRun = async (sessionId, token) => {
     try {
-      await holding;
+      await registry.update((document) => holdUnproven(document, sessionId, { token, process: self, at: now() }));
     } catch (error) {
       reportUnresolved(sessionId, error);
     }
-    if (bound) return;
     reportUnresolved(sessionId, new OrchestrationError(
-      'ORCHESTRATION_RUN_UNBOUND',
-      'A run started without a slot and could not be told apart from another run; it keeps a slot and its directory until the daemon process ends.',
+      'ORCHESTRATION_RUN_UNPROVEN',
+      'A run started whose end cannot be proven; it keeps a slot and its directory until this daemon process ends.',
       { sessionId },
     ));
   };
 
-  const resolveInput = async (ticket, outcome, { run: handle } = {}) => {
-    if (!ticket || ticket.state === 'closed') return;
+  /**
+   * A stale input's verdict: its stop ended the admission, so a run it
+   * started has no slot. The worker holds a slot and its directory for it
+   * (`hold`); only its bound run is aborted, and only its own prompt's end
+   * releases the hold. Without that proof the hold stays (`unproven_run`).
+   */
+  const staleStarted = async (ticket, signal, finished) => {
+    const { sessionId } = ticket;
+    const record = ticket.hold ?? trackStale(sessionId, ticket.token, [ticket]);
+    try {
+      await registry.update((document) => setHold(document, sessionId, {
+        token: record.token, process: self, at: now(), reason: 'stale_run',
+      }));
+    } catch (error) {
+      reportUnresolved(sessionId, error);
+    }
+    if (signal) await withSession(sessionId, () => abortRun(sessionId, signal)).catch(() => {});
+    return {
+      completion: proof(finished).then((proven) => (proven
+        ? settleStale(ticket)
+        : holdUnprovenRun(sessionId, record.token))),
+    };
+  };
+
+  // A started verdict whose prompt started no run of its own: the input
+  // keeps its admission until that prompt ended.
+  const endWithPrompt = async (ticket, finished) => {
+    const proven = await proof(finished);
+    if (ticket.state === 'stale') {
+      ticket.state = 'closed';
+      if (proven) await settleStale(ticket);
+      else await holdUnprovenRun(ticket.sessionId, ticket.hold.token);
+      return;
+    }
+    if (proven) {
+      await closeTicket(ticket);
+      return;
+    }
+    try {
+      await registry.update((document) => markUnresolved(document, ticket.sessionId, { admission: ticket.admission, at: now() }));
+    } catch (error) {
+      reportUnresolved(ticket.sessionId, error);
+    }
+    await holdUnprovenRun(ticket.sessionId, ticket.token);
+  };
+
+  /**
+   * Pi's verdict on an admitted input: `started`, `queued` or `handled`
+   * (preflight), `rejected`, or `unresolved` (accepted without a verdict).
+   * A `started` verdict carries the run's bound signal (`run`) and, when the
+   * daemon can prove it, `finished`: resolves true once the prompt that
+   * started exactly this run ended. A late verdict of a deferred prompt has
+   * no such proof. Returns `{ completion }` for a started verdict, settled
+   * once its end is applied.
+   */
+  const resolveInput = async (ticket, outcome, { run: handle, finished } = {}) => {
+    if (!ticket || ticket.state === 'closed') return undefined;
     const { sessionId, admission } = ticket;
     if (ticket.state === 'stale') {
       // A stop ended this input's admission: a run it starts has no slot.
-      if (outcome === 'unresolved') return;
+      if (outcome === 'unresolved') return undefined;
       ticket.state = 'closed';
-      if (outcome === 'started') await staleStarted(ticket, handle);
-      else await settleStale(ticket);
-      return;
+      if (outcome !== 'started') {
+        await settleStale(ticket);
+        return undefined;
+      }
+      const signal = await Promise.resolve(handle).catch(() => null);
+      return staleStarted(ticket, signal, finished);
     }
     if (outcome === 'unresolved') {
-      if (ticket.state !== 'open') return;
+      if (ticket.state !== 'open') return undefined;
       ticket.state = 'unresolved';
       ticket.decide();
       try {
@@ -1249,21 +1317,36 @@ export function createOrchestrationService(deps) {
       } catch (error) {
         reportUnresolved(sessionId, error);
       }
-      return;
+      return undefined;
     }
     if (outcome !== 'started') {
       await closeTicket(ticket);
-      return;
+      return undefined;
     }
-    // Before any await: from here the run holds the admission's slot until
-    // its own settle, whatever happens to the other tickets.
+    // Verdict order, taken before any await.
+    const seq = ++startSeq;
+    latestStart.set(sessionId, seq);
+    // Pi orders runs, not verdicts: only the ticket's own bound signal shows
+    // that it started a run. Until then the ticket stays open with its slot.
+    const signal = await Promise.resolve(handle).catch(() => null);
+    if (ticket.state === 'stale') {
+      // A stop ended an unresolved input while its run was being bound.
+      ticket.state = 'closed';
+      return staleStarted(ticket, signal, finished);
+    }
+    if (!signal) {
+      ticket.state = 'unresolved';
+      ticket.decide();
+      return { completion: endWithPrompt(ticket, finished) };
+    }
+    // From here the run holds the admission's slot until its own end,
+    // whatever happens to the other tickets.
     tickets.get(sessionId)?.delete(ticket.token);
     if ((tickets.get(sessionId)?.size ?? 0) === 0) tickets.delete(sessionId);
     ticket.state = 'closed';
     // The waiting settle belonged to the previous run; this run keeps the slot.
     deferredSettles.delete(sessionId);
-    // The run's identity is its start, in the order Pi started runs.
-    const run = { admission, start: ticket.token, seq: ++startSeq, generation: null };
+    const run = { admission, start: ticket.token, seq, generation: null, signal };
     let settleRun;
     run.committed = new Promise((resolve) => { settleRun = resolve; });
     liveRuns.set(sessionId, run);
@@ -1274,16 +1357,27 @@ export function createOrchestrationService(deps) {
       }));
     } catch (error) {
       // No rollback: the admission keeps the slot, and the run's next
-      // registry step (done report, settle) retries the commit.
+      // registry step (done report, its end) retries the commit.
       reportUnresolved(sessionId, error);
     }
     run.generation = committed?.generation ?? null;
     settleRun(run.generation);
     ticket.decide();
     if (committed?.stale) {
+      // A stop or a later start took the slot meanwhile: this run has none.
       if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
-      await endStaleRun(sessionId, admission, handle);
+      return staleStarted(ticket, signal, finished);
     }
+    return {
+      completion: proof(finished).then(async (proven) => {
+        if (proven) {
+          await finishRun(sessionId, run);
+          return;
+        }
+        if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
+        await holdUnprovenRun(sessionId, run.start);
+      }),
+    };
   };
 
   /**

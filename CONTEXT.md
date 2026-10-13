@@ -36,6 +36,14 @@ Pi's `started` callback carries no run handle, and `AgentSession.abort()` aborts
 
 When a prompt reports `started` but `Agent.prompt()` refuses it because another prompt's run owns the agent, its `_runAgentPrompt` still emits `agent_settled` from its `finally` while the other run is live. A real settle comes after `finishRun()` cleared the run, so `session.agent.signal` is undefined then; at the false one it is the live run's signal. The daemon therefore treats a settle with a signal, also an aborted one, as no completion (`isSettleFinal`). The converse does not hold: between a run's end and its retry `continue()` the signal is undefined too, so no signal does not prove that the prompt is over. Pi 1.1.0 has no run id that would settle this; the contract in `session-daemon/DOCUMENTATION.md` keeps an occupancy whenever the evidence is missing or contradicts.
 
+### A run's end is proven only by the end of the prompt that started it
+
+- Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `_prepareRetry()` at line 3028 to 3062 (sleeps the backoff after the attempt's run ended, `isRetrying` true, no `agent.signal`), its call in `_handlePostAgentRun()` at 1426 followed by `agent.continue()`, `_runAgentPrompt()` at 1380 to 1414 (`prompt()` resolves only after the retries, continuations and `_emitAgentSettled()`), the deferral of a prompt during `agent_settled` at 1518 to 1521 (that `prompt()` resolves before its deferred run, without a verdict); checked with the faux provider in `session-daemon/orchestration/run-binding.e2e.test.js` (retry backoff) and `admission.e2e.test.js` (W2) (#125 round 8 addendum)
+- Date: 2026-10-13
+- Settled by: a Pi release that gives each logical run an id carried by its `started` verdict and its `agent_settled` event
+
+While a run waits to retry, `session.agent.signal` is undefined although its prompt goes on, so a settle that arrives then (for example a rejected prompt's false settle released from a slow `agent_settled` handler) looks like a completion. The daemon therefore frees a run's slot and directory only when the `prompt()` call that reported its `started` verdict resolved and the run's signal is gone (`provenRunEnd`). A prompt Pi runs again from its deferred settle actions has no such call: its late verdict's run keeps the occupancy as `unproven_run` until the holding process is dead, and Slice 4 reports it.
+
 ### Pi's prompt() decides between a new run and a queued input only after its own awaits
 
 - Source: `@earendil-works/pi-coding-agent` 1.1.0 `dist/core/agent-session.js`: `prompt()` at line 1517, the deferral at 1518 to 1521, the `isStreaming` check at 1551, `_emitAgentSettled()` at 684 to 707; checked with the faux provider in `session-daemon/orchestration/admission.e2e.test.js` (#125 round 5)

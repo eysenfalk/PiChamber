@@ -61,7 +61,7 @@ import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from
 import { OrchestrationError } from './orchestration/errors.js';
 import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
 import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
-import { abortBoundRun, bindStartedRun, isSettleFinal } from './orchestration/run-binding.js';
+import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
@@ -3269,12 +3269,18 @@ export function createSessionDaemon({
     // Pi's verdict on the prompt below ends the admission.
     const admission = await admit?.();
     // A started verdict carries the run Pi starts right after it, so a stale
-    // admission aborts that run only (run-binding.js).
-    const resolveAdmission = (outcome) => (admission
-      ? orchestration.resolveInput(admission, outcome, {
-        run: outcome === 'started' ? bindStartedRun(activeRuntime.session) : undefined,
-      }).catch(() => {})
-      : Promise.resolve());
+    // admission aborts that run only, and the end of this prompt as the
+    // proof that the run ended (run-binding.js). A late verdict of a deferred
+    // prompt runs outside this prompt and has no such proof.
+    let promptEnded;
+    let endPrompt;
+    const promptEnd = new Promise((resolve) => { endPrompt = resolve; });
+    const resolveAdmission = (outcome, { late = false } = {}) => {
+      if (!admission) return Promise.resolve();
+      const run = outcome === 'started' ? bindStartedRun(activeRuntime.session) : undefined;
+      const finished = run && !late && !promptEnded ? provenRunEnd(activeRuntime.session, promptEnd, run) : undefined;
+      return orchestration.resolveInput(admission, outcome, { run, finished }).catch(() => {});
+    };
     const generation = (sendGenerationBySession.get(payload.sessionId) ?? 0) + 1;
     sendGenerationBySession.set(payload.sessionId, generation);
     // Slash-prefixed input dispatches extension commands and skill/template
@@ -3305,7 +3311,7 @@ export function createSessionDaemon({
       // A verdict after the prompt resolved without one belongs to a
       // deferred prompt; it still ends the admission.
       if (preflightOutcome !== null) {
-        if (preflightOutcome === 'unresolved') void resolveAdmission(disposition);
+        if (preflightOutcome === 'unresolved') void resolveAdmission(disposition, { late: true });
         return;
       }
       preflightOutcome = true;
@@ -3328,6 +3334,8 @@ export function createSessionDaemon({
             preflightResult: onPreflightResult,
           });
     } catch (error) {
+      promptEnded = true;
+      endPrompt();
       removeUserStart(payload.sessionId, generation);
       await resolveAdmission('rejected');
       throw error;
@@ -3338,6 +3346,10 @@ export function createSessionDaemon({
     // 1.1.0 resolves a prompt made while `agent_settled` is being emitted
     // without a signal and runs it afterwards (CONTEXT.md): the admission is
     // then unresolved, keeps its slot and takes the late signal.
+    Promise.resolve(promptPromise).finally(() => {
+      promptEnded = true;
+      endPrompt();
+    }).catch(() => {});
     Promise.resolve(promptPromise).then(
       () => {
         if (preflightOutcome === null) {

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createPiSessionRuntime } from '../session-daemon.js';
 import { piAiFauxUrl } from './e2e-support.js';
-import { abortBoundRun, bindStartedRun, isSettleFinal } from './run-binding.js';
+import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './run-binding.js';
 
 const gate = () => {
   let resolve;
@@ -47,6 +47,11 @@ describe('run binding through the real SDK', () => {
       const text = textOf((context.messages ?? []).filter((message) => message.role === 'user').at(-1));
       const held = gates[`provider ${text}`];
       if (held) { held.entered(); await held.promise; }
+      const failure = gates[`fail ${text}`];
+      if (failure && !failure.done) {
+        failure.done = true;
+        return fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'overloaded_error: try again' });
+      }
       return fauxAssistantMessage(`RAN ${text}`);
     };
     const extension = (pi) => {
@@ -174,5 +179,30 @@ describe('run binding through the real SDK', () => {
     expect(abortBoundRun(session, signalA)).toBe(false);
     gates['provider B'].resolve();
     await next;
+  });
+
+  // Oracle addendum to R8: between a failed attempt and its retry Pi has no
+  // run signal, though the prompt goes on. No signal is therefore no proof of
+  // an end; only the end of the prompt that started the run is.
+  it('has no run signal while a run waits to retry, and proves its end only with its prompt\'s end', async () => {
+    const { session, prompt } = await setup();
+    session.settingsManager.applyOverrides({ retry: { enabled: true, baseDelayMs: 200 } });
+    const backoff = gate();
+    session.subscribe((event) => { if (event.type === 'auto_retry_start') backoff.entered(); });
+    gates['fail B'] = gate();
+    let bound;
+    const promptB = prompt('B', () => { bound = bindStartedRun(session); });
+    let ended = false;
+    const end = provenRunEnd(session, promptB, Promise.resolve().then(() => bound)).then((proven) => { ended = true; return proven; });
+    await backoff.reached;
+    await new Promise((done) => setTimeout(done, 20));
+    // B waits to retry: no live signal, no completion yet.
+    expect(session.isRetrying).toBe(true);
+    expect(session.agent.signal).toBeUndefined();
+    expect(isSettleFinal(session)).toBe(true);
+    expect(ended).toBe(false);
+    await expect(end).resolves.toBe(true);
+    const replies = session.messages.filter((message) => message.role === 'assistant').map(textOf);
+    expect(replies).toContain('RAN B');
   });
 });

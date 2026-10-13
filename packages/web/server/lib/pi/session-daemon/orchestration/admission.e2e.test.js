@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
 import { connectClient, credential, piAiFauxUrl } from './e2e-support.js';
@@ -175,13 +175,13 @@ describe('worker input admission through the real SDK', () => {
     await expect(client.request('sessions.prompt', { sessionId: workerId, text: 'RUN two' })).resolves.toMatchObject({ kind: 'response' });
     settling.resolve();
     await client.next(() => running.includes('RUN two'));
-    await delivered(2);
-
-    expect(await worker()).toMatchObject({ state: 'active' });
+    // The late verdict's run has no prompt of its own whose end proves its
+    // end: it holds the slot and directory visibly (`unproven_run`).
+    await vi.waitFor(async () => expect(await worker()).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } }));
     gates.response.resolve();
     await delivered(3);
     const settled = await worker();
-    expect(settled).toMatchObject({ state: 'active' });
+    expect(settled).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } });
     expect(settled.admission).toBeUndefined();
   }, 120_000);
 });

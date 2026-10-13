@@ -19,6 +19,21 @@ export const bindStartedRun = (session) => {
 };
 
 /**
+ * Proof that the run `run` (from `bindStartedRun`) ended, from the prompt that
+ * started it. SDK assumption (Pi 1.1.0, CONTEXT.md): `prompt()` resolves only
+ * after its run, every retry and continuation of it, and its `agent_settled`
+ * handlers; a prompt deferred while the previous run settles resolves early,
+ * but gives no `started` verdict then. Resolves true once `promptEnd`
+ * resolved and the run's signal is no longer the session's; false while that
+ * signal is still live (the prompt resolved before its run ended).
+ */
+export const provenRunEnd = async (session, promptEnd, run) => {
+  const signal = await run;
+  await promptEnd;
+  return !signal || session?.agent?.signal !== signal;
+};
+
+/**
  * Whether an `agent_settled` event is a real completion. SDK assumption (Pi
  * 1.1.0, CONTEXT.md): a run's signal is `session.agent.signal` from its start
  * until the run ends, also when it is aborted, and every continuation makes a
