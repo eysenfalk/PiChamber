@@ -38,6 +38,7 @@ import { composerLanguage, setLanguageContext } from './composerLanguage';
 import type { ComposerEditorViewStore } from './viewStore';
 import { composerEditorTheme, composerNativeSelectionExtension } from './theme';
 import { handleComposerHostMouseDown } from './hostMouseDown';
+import { composerScrollerLimit } from './heightLimit';
 
 export interface ComposerSelection {
     start: number;
@@ -99,13 +100,11 @@ export interface ComposerEditorProps {
     /** Visual wrapped-line count, including wrapping (not only hard newlines). */
     onVisualLineCount?: (count: number) => void;
     /**
-     * Selector of the ancestor the composer must never outgrow. The cap is
-     * measured — the ancestor's height minus the chrome around the editor,
-     * both read from the DOM — and the smaller of it and `maxLines` wins.
+     * Selector of the ancestor the editor is measured against. The editor
+     * takes at most a third of that ancestor's visible height (see
+     * `heightLimit.ts`); the smaller of it and `maxLines` wins.
      */
     boundSelector?: string;
-    /** Breathing room kept between the grown composer and the bound's edge. */
-    boundGapPx?: number;
     className?: string;
     contentClassName?: string;
     /**
@@ -172,7 +171,6 @@ export const ComposerEditor = React.forwardRef<ComposerEditorHandle, ComposerEdi
             fillContainer = false,
             maxLines = 8,
             boundSelector,
-            boundGapPx = 0,
             className,
             contentClassName,
             commandComboboxExpanded,
@@ -447,29 +445,26 @@ export const ComposerEditor = React.forwardRef<ComposerEditorHandle, ComposerEdi
             }
 
             const boundEl = boundSelector ? host.closest(boundSelector) : null;
-            // The bound's direct child our editor lives in: its height minus
-            // the scroller's is exactly the chrome around the editor — form
-            // paddings, model row, footer, attachment chips — measured live,
-            // so the cap needs no estimate of what surrounds the editor.
-            let branch: HTMLElement | null = null;
-            if (boundEl) {
-                branch = host;
-                while (branch.parentElement && branch.parentElement !== boundEl) {
-                    branch = branch.parentElement;
-                }
-            }
+            // The whole composer (handle, card, footer, attachments) is what
+            // the third applies to; its form is the nearest common ancestor.
+            const surfaceEl = boundEl ? host.closest('form') : null;
 
             const applyLimit = () => {
                 const lineHeight = parseFloat(
                     getComputedStyle(view.contentDOM).lineHeight || '',
                 );
                 if (!Number.isFinite(lineHeight) || lineHeight <= 0) return;
-                let cap = lineHeight * maxLines;
-                if (boundEl && branch) {
-                    const chrome = branch.offsetHeight - view.scrollDOM.offsetHeight;
-                    const available = boundEl.clientHeight - chrome - boundGapPx;
-                    if (available > 0) cap = Math.min(cap, available);
-                }
+                const cap = composerScrollerLimit({
+                    lineHeight,
+                    maxLines,
+                    bound: boundEl,
+                    visualViewportHeight: window.visualViewport?.height,
+                    surface: surfaceEl,
+                    scroller: view.scrollDOM,
+                });
+                // Not laid out (minimized): keep the old limit and measure
+                // again when the composer comes back.
+                if (cap === null) return;
                 const next = `${cap}px`;
                 // The scroller growing re-fires the observer with an unchanged
                 // result; writing only on change keeps that loop silent.
@@ -483,12 +478,20 @@ export const ComposerEditor = React.forwardRef<ComposerEditorHandle, ComposerEdi
             if (typeof ResizeObserver === 'undefined') return;
             const observer = new ResizeObserver(applyLimit);
             observer.observe(host);
-            if (branch) observer.observe(branch);
             if (boundEl) observer.observe(boundEl);
-            return () => observer.disconnect();
+            // Attachments and the footer change the chrome around the text.
+            if (surfaceEl) observer.observe(surfaceEl);
+            // A mobile browser opens the keyboard by shrinking only the visual
+            // viewport, which no element observer sees.
+            const visualViewport = boundEl ? window.visualViewport : null;
+            visualViewport?.addEventListener('resize', applyLimit);
+            return () => {
+                observer.disconnect();
+                visualViewport?.removeEventListener('resize', applyLimit);
+            };
         // handlersRef is a stable ref that always points to latest props; no need to re-subscribe.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [boundGapPx, boundSelector, fillContainer, maxLines]);
+        }, [boundSelector, fillContainer, maxLines]);
 
         React.useEffect(() => {
             const view = viewRef.current;
