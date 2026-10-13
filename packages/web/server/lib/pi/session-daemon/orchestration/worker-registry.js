@@ -264,6 +264,8 @@ export const admitForInput = (document, sessionId, { workerLimit, token, at, pro
   if (worker.stopping) {
     throw new OrchestrationError('ORCHESTRATION_WORKER_STOPPING', 'This worker is being stopped; retry once session_stop has finished.', { sessionId });
   }
+  // Someone wrote to the worker; an open question stays open (slice 2).
+  worker.lastInputAt = at;
   if (worker.admission) {
     if (ownsProcess(worker.admission.process)) return { worker: true, admission: worker.admission.token };
     throw new OrchestrationError('ORCHESTRATION_WORKER_BUSY', 'Another daemon is admitting an input to this worker; retry shortly.', { sessionId });
@@ -398,6 +400,56 @@ export const holdUnproven = (document, sessionId, { token, process, at }) => {
     ? { ...worker.hold, reason: 'unproven_run' }
     : { token, process, since: at, reason: 'unproven_run' };
   return worker.hold.token;
+};
+
+/**
+ * Stores a worker's report. An open question closes only through a matching
+ * `resolves`; a new `question` or `blocked` while one is open must name
+ * it there and then replaces it. A retry with the stored report's
+ * `clientRequestId` changes nothing. Throws before any change, so a refused
+ * report leaves the document as it was.
+ */
+export const recordReport = (document, sessionId, args, { at, questionId, repository = null }) => {
+  const worker = document.workers[sessionId];
+  if (!worker) {
+    throw new OrchestrationError('ORCHESTRATION_NOT_WORKER', 'This session is no registered worker.', { sessionId });
+  }
+  if (args.clientRequestId && worker.report?.requestId === args.clientRequestId) {
+    return { deduplicated: true, question: worker.question ?? null };
+  }
+  const open = worker.question;
+  if (args.resolves !== undefined && open?.id !== args.resolves) {
+    throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'resolves does not name your open question.', {
+      openQuestion: open?.id ?? null,
+    });
+  }
+  const asks = args.kind === 'question' || args.kind === 'blocked';
+  if (asks && open && args.resolves !== open.id) {
+    throw new OrchestrationError('ORCHESTRATION_QUESTION_OPEN', 'You already have an open question; name it in resolves to replace it.', {
+      openQuestion: open.id,
+    });
+  }
+  if (args.resolves !== undefined) delete worker.question;
+  if (asks) worker.question = { id: questionId, kind: args.kind, audience: args.audience, summary: args.summary, at };
+  worker.report = {
+    kind: args.kind,
+    summary: args.summary,
+    at,
+    ...(args.pullRequest !== undefined ? { pullRequest: args.pullRequest } : {}),
+    ...(args.noPullRequest !== undefined ? { noPullRequest: args.noPullRequest } : {}),
+    ...(args.evidence ? { evidence: args.evidence } : {}),
+    ...(args.clientRequestId ? { requestId: args.clientRequestId } : {}),
+  };
+  if (args.pullRequest !== undefined) worker.pullRequest = { number: args.pullRequest, repository };
+  return { deduplicated: false, question: worker.question ?? null };
+};
+
+/** Closes the worker's open question when it is `questionId`. */
+export const closeQuestion = (document, sessionId, questionId) => {
+  const worker = document.workers[sessionId];
+  if (!worker?.question || worker.question.id !== questionId) return false;
+  delete worker.question;
+  return true;
 };
 
 /**

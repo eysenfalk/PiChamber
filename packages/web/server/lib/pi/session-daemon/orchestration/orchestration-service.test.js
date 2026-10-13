@@ -38,6 +38,7 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
         getSessionName: () => `title ${sessionId}`,
       },
       sendCustomMessage: async (message, options) => { runtime.delivered.push({ message, options }); },
+      getSessionStats: () => runtime.stats,
     },
   };
   if (lineage) runtime.session.sessionManager.appendCustomEntry(LINEAGE_ENTRY, lineage);
@@ -146,6 +147,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
     ],
     hostStatus: () => ({ cpuCount: 8 }),
     resolveBranch: async () => 'main',
+    resolveRepository: async () => 'acme/app',
     getSessionActivity: (sessionId) => activity.get(sessionId),
     sessionFileState: vi.fn(async (sessionId) => fileStates.get(sessionId) ?? 'absent'),
     findSessionByOperation: vi.fn(async ({ opId, exclude = [] }) => {
@@ -2040,5 +2042,175 @@ describe('orchestration input admission (#125 round 5)', () => {
     expect((await first.workers())['worker-1'].state).toBe('done');
     await second.input('worker-1');
     expect((await first.workers())['worker-1'].state).toBe('active');
+  });
+});
+
+describe('worker reports and digest', () => {
+  const done = { kind: 'done', summary: 'finished', evidence: ['bun run test passed'], noPullRequest: 'docs only' };
+  const report = (harness, args, sessionId = 'worker-1') => harness.service.call(sessionId, 'worker_report', args);
+  const digest = (harness, args = {}) => harness.service.call('orch', 'orchestration_digest', args);
+
+  it('refuses an incomplete report per kind and changes nothing', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const before = (await harness.workers())['worker-1'];
+    for (const args of [
+      { kind: 'done', summary: 'x', noPullRequest: 'none' },
+      { kind: 'done', summary: 'x', evidence: ['tests'] },
+      { kind: 'ready', summary: 'x' },
+      { kind: 'question', summary: 'x' },
+      { kind: 'blocked', summary: 'x' },
+      { kind: 'progress', summary: 'x'.repeat(301) },
+    ]) await expectCode(report(harness, args), 'INVALID_ARGUMENT');
+    expect((await harness.workers())['worker-1']).toEqual(before);
+  });
+
+  it('lets only workers report and only orchestrators read the digest', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await expectCode(report(harness, { kind: 'progress', summary: 'x' }, 'orch'), 'ORCHESTRATION_FORBIDDEN');
+    await expectCode(harness.service.call('worker-1', 'orchestration_digest', {}), 'ORCHESTRATION_FORBIDDEN');
+  });
+
+  it('keeps a question open until a matching resolves closes it', async () => {
+    const harness = createHarness();
+    const { service } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const asked = await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner' });
+    const id = asked.openQuestion;
+    expect(id).toEqual(expect.any(String));
+
+    // An unrelated send, a UI prompt and a progress report leave it open.
+    await service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'status?' });
+    await harness.settle('worker-1', 'busy');
+    await harness.input('worker-1');
+    await harness.settle('worker-1', 'still busy');
+    await report(harness, { kind: 'progress', summary: 'tests written' });
+    const open = (await harness.workers())['worker-1'];
+    expect(open.question).toMatchObject({ id, kind: 'question', audience: 'owner', summary: 'Which API?' });
+    expect(open.lastInputAt).toEqual(expect.any(Number));
+
+    // A second question is refused unless it names the open one, which it replaces.
+    await expectCode(report(harness, { kind: 'blocked', summary: 'stuck', audience: 'orchestrator' }), 'ORCHESTRATION_QUESTION_OPEN');
+    await expectCode(report(harness, { kind: 'progress', summary: 'x', resolves: 'q-other' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    const replaced = await report(harness, { kind: 'blocked', summary: 'stuck', audience: 'orchestrator', resolves: id });
+    expect(replaced.openQuestion).not.toBe(id);
+
+    // A send with another id leaves it open; the matching one closes it.
+    await expect(service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'no', resolves: id })).resolves.toMatchObject({ resolved: false });
+    await harness.settle('worker-1', 'ok');
+    await expect(service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'use v2', resolves: replaced.openQuestion }))
+      .resolves.toMatchObject({ accepted: true, resolved: true });
+    await harness.settle('worker-1', 'ok');
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+
+    // The worker can close its own question with a report.
+    const again = await report(harness, { kind: 'question', summary: 'Merge?', audience: 'orchestrator' });
+    await report(harness, { kind: 'progress', summary: 'decided myself', resolves: again.openQuestion });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+  });
+
+  it('does not repeat a report retried with the same clientRequestId', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const args = { kind: 'question', summary: 'Which API?', audience: 'owner', clientRequestId: 'ask-1' };
+    const first = await report(harness, args);
+    await expect(report(harness, args)).resolves.toMatchObject({ deduplicated: true, openQuestion: first.openQuestion });
+  });
+
+  it('keeps a worker that reported done active with its slot until the reporting run settles', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await expect(report(harness, { ...done, noPullRequest: undefined, pullRequest: 42 })).resolves.toMatchObject({ doneAtRunEnd: true });
+    expect((await harness.workers())['worker-1']).toMatchObject({
+      state: 'starting',
+      pullRequest: { number: 42, repository: 'acme/app' },
+      report: { kind: 'done', summary: 'finished', pullRequest: 42, evidence: ['bun run test passed'] },
+    });
+    await expectCode(harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' }), 'ORCHESTRATION_LIMIT');
+    await harness.settle('worker-1', 'finished');
+    expect((await harness.workers())['worker-1'].state).toBe('done');
+    await expect(harness.service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' })).resolves.toMatchObject({ sessionId: 'worker-2' });
+  });
+
+  it('shows snapshot values with their time and dormant after disposal and restart, activating nothing', async () => {
+    let clock = 1_000;
+    const harness = createHarness({ now: () => clock });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const runtime = harness.runtimes.get('worker-1');
+    runtime.stats = { tokens: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, total: 165 }, cost: 0.25 };
+    runtime.session.messages.push({ role: 'assistant', content: [], errorMessage: 'rate limited', stopReason: 'error', timestamp: 900 });
+    clock = 2_000;
+    await harness.settle('worker-1');
+    harness.runtimes.delete('worker-1');
+    const expected = {
+      sessionId: 'worker-1',
+      worktree: '/work/a',
+      lifecycle: 'active',
+      live: 'dormant',
+      liveSince: null,
+      lastProgressAt: 900,
+      lastError: { message: 'rate limited', at: 900 },
+      usage: { settled: { input: 100, output: 50, cacheRead: 10, cacheWrite: 5, cost: 0.25 }, settledAt: 2_000 },
+      question: null,
+      report: null,
+      pullRequest: null,
+      issue: null,
+    };
+    harness.deps.activateSession.mockClear();
+    expect((await digest(harness)).workers).toEqual([expect.objectContaining(expected)]);
+    expect(harness.deps.activateSession).not.toHaveBeenCalled();
+
+    harness.crash();
+    const restarted = createHarness({ file: harness.file, workerPrefix: 'after' });
+    const after = await digest(restarted);
+    expect(after.workers).toEqual([expect.objectContaining(expected)]);
+    expect(after.limit).toEqual({ workerLimit: 4, used: 1 });
+    expect(restarted.deps.activateSession).not.toHaveBeenCalled();
+  });
+
+  it('reports retry, waiting_input, busy and idle from the live channels and null for unknown values', async () => {
+    const activity = new Map();
+    const harness = createHarness({ activity });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const liveOf = async () => {
+      const [worker] = (await digest(harness)).workers;
+      return { live: worker.live, liveSince: worker.liveSince };
+    };
+    activity.set('worker-1', { runStartedAt: 500 });
+    expect(await liveOf()).toEqual({ live: 'busy', liveSince: 500 });
+    harness.states.set('worker-1', 'retry');
+    activity.set('worker-1', { runStartedAt: 500, retry: { attempt: 1, message: 'overloaded' } });
+    expect(await liveOf()).toEqual({ live: 'retry', liveSince: 500 });
+    harness.states.set('worker-1', 'busy');
+    activity.set('worker-1', { runStartedAt: 500, waitingForInput: true });
+    expect(await liveOf()).toEqual({ live: 'waiting_input', liveSince: 500 });
+    const [unsettled] = (await digest(harness)).workers;
+    expect(unsettled).toMatchObject({ lastProgressAt: null, lastError: null, usage: null, lastInputAt: expect.any(Number) });
+    await harness.settle('worker-1', 'done');
+    expect(await liveOf()).toEqual({ live: 'idle', liveSince: null });
+  });
+
+  it('stays under a tenth of the transcripts session_read returns for four workers', async () => {
+    const harness = createHarness();
+    const ids = [];
+    for (const name of ['a', 'b', 'c', 'd']) {
+      const { sessionId } = await harness.service.call('orch', 'session_spawn', { cwd: `/work/${name}`, task: 'one' });
+      ids.push(sessionId);
+      const runtime = harness.runtimes.get(sessionId);
+      for (let index = 0; index < 20; index += 1) {
+        runtime.session.messages.push({ role: index % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: `step ${index} `.repeat(400) }] });
+      }
+      await harness.settle(sessionId);
+      await report(harness, { kind: 'progress', summary: 'halfway there' }, sessionId);
+    }
+    let transcripts = 0;
+    for (const sessionId of ids) {
+      transcripts += JSON.stringify(await harness.service.call('orch', 'session_read', { sessionId })).length;
+    }
+    const size = JSON.stringify(await digest(harness)).length;
+    expect(size).toBeLessThan(transcripts / 10);
   });
 });

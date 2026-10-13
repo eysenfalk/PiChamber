@@ -98,12 +98,16 @@ describe('orchestration end-to-end through the real SDK', () => {
     const log = globalThis.__pichamberOrchestrationLog ?? [];
     const parentTurn = log.find((entry) => entry.lastText.includes('ORCHESTRATE'));
     const workerTurn = log.find((entry) => entry.lastText.includes('WORKER TASK'));
-    const all = ORCHESTRATION_TOOLS.map((tool) => qualifiedToolName(tool.name));
+    const all = ORCHESTRATION_TOOLS.filter((tool) => tool.orchestratorAllowed !== false).map((tool) => qualifiedToolName(tool.name));
     const workerAllowed = ORCHESTRATION_TOOLS.filter((tool) => tool.childAllowed !== false).map((tool) => qualifiedToolName(tool.name));
 
-    // The orchestrator sees all eight tools and the base instructions in its
-    // system prompt; the worker never sees spawn or stop, nor the instructions.
+    // The orchestrator sees every tool but worker_report and the base
+    // instructions in its system prompt; the worker never sees spawn, stop or
+    // the digest, nor the instructions.
     expect(parentTurn.tools).toEqual(expect.arrayContaining(all));
+    expect(parentTurn.tools).not.toContain(qualifiedToolName('worker_report'));
+    expect(workerTurn.tools).toContain(qualifiedToolName('worker_report'));
+    expect(workerTurn.tools).not.toContain(qualifiedToolName('orchestration_digest'));
     expect(parentTurn.hasInstructions).toBe(true);
     expect(parentTurn.lastText).toBe('ORCHESTRATE one worker');
     expect(workerTurn.tools).toEqual(expect.arrayContaining(workerAllowed));

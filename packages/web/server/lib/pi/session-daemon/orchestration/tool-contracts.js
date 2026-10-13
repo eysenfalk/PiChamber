@@ -15,6 +15,7 @@ const clientRequestId = {
   pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$',
   description: 'Idempotency key. Use a new value per intent and the same value when retrying it.',
 };
+const questionId = { type: 'string', minLength: 1, maxLength: 64 };
 const RUN_STATUS = 'Each session reports state, the outcome and error of its last turn, and while it runs an activity object: runningForMs, quietForMs since its transcript last changed, retry with the provider error during an automatic retry, and waitingForInput when a dialog blocks it.';
 const thinking = { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] };
 const model = {
@@ -93,6 +94,7 @@ export const ORCHESTRATION_TOOLS = [
         sessionId,
         text: { type: 'string', minLength: 1, maxLength: 60000 },
         delivery: { type: 'string', enum: ['prompt', 'steer', 'followUp'] },
+        resolves: { ...questionId, description: 'Id of the worker\'s open question this message answers; closes it once the message is accepted.' },
         clientRequestId,
       },
     },
@@ -135,6 +137,41 @@ export const ORCHESTRATION_TOOLS = [
       additionalProperties: false,
       required: ['fromSessionId'],
       properties: { fromSessionId: { ...sessionId, description: 'The orchestrator session whose workers move to you.' }, clientRequestId },
+    },
+  },
+  {
+    name: 'orchestration_digest',
+    label: 'Orchestration digest',
+    description: 'The state of all your workers in one compact call, without opening dormant sessions: lifecycle, live state (busy, retry, waiting_input, idle, dormant), last progress and input, last report, open question, last error, usage at the last settle, pull request, and the slot use. Prefer it over session_read.',
+    childAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { sessionIds: { type: 'array', minItems: 1, maxItems: 64, items: sessionId } },
+    },
+  },
+  {
+    name: 'worker_report',
+    label: 'Report to orchestrator',
+    description: 'Report your status to your orchestrator. progress: a step done. question or blocked (with audience): you need an answer; it stays open until a report or message names it in resolves. ready: a pull request is ready for review. done: the task is finished, with evidence and pullRequest or noPullRequest.',
+    orchestratorAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'summary'],
+      properties: {
+        kind: { type: 'string', enum: ['progress', 'question', 'blocked', 'ready', 'done'] },
+        summary: { type: 'string', minLength: 1, maxLength: 300, description: 'One line.' },
+        audience: { type: 'string', enum: ['orchestrator', 'owner'], description: 'Who must answer; required for question and blocked.' },
+        resolves: { ...questionId, description: 'Id of your open question this report settles.' },
+        pullRequest: { type: 'integer', minimum: 1, description: 'Pull request number; required for ready.' },
+        noPullRequest: { type: 'string', minLength: 1, maxLength: 300, description: 'Why done has no pull request.' },
+        evidence: {
+          type: 'array', minItems: 1, maxItems: 10, items: { type: 'string', minLength: 1, maxLength: 500 },
+          description: 'Proof: tests, commands, results. Required for done.',
+        },
+        clientRequestId,
+      },
     },
   },
 ];
