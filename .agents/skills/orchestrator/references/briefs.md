@@ -42,7 +42,7 @@ For the owner: <numbered questions, each answerable on its own, or "none">
 ## Review round
 
 ```
-Review round <k> of pull request #<n> (<url>), branch <branch>, worktree <path>.
+Review round <1 | 2> of pull request #<n> (<url>), branch <branch>, worktree <path>.
 Read only: do not edit, commit or push.
 
 Original brief: <verbatim>
@@ -50,7 +50,10 @@ Diff: git diff origin/dev...<branch>
 Prior findings and the author's answers: <list, or "first round">
 Open objections: <list, or "none">
 
-Check the acceptance criteria against the code and the proof, correctness, the AGENTS.md rules and the project skills the change requires.
+Round 1: check the acceptance criteria against the code and the proof, correctness, the AGENTS.md rules and the project skills the change requires.
+Round 2: only check whether the findings of round 1 are closed; raise nothing new.
 
-Report each finding with severity (blocking, should, nit), file and line, and the evidence. Say "no blocking findings" explicitly when that is the result.
+No overengineering: a finding is blocking only when it causes a real problem that affects the user. Name anything else as known limit or follow-up issue.
+
+Report each finding with severity (blocking, should, nit), file and line, the evidence, and for blocking the user effect. Say "no blocking findings" explicitly when that is the result.
 ```
