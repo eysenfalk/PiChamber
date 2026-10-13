@@ -8,7 +8,7 @@ export const ORCHESTRATION_INSTRUCTIONS = `## PiChamber orchestration
 
 The \`pichamber\` tools (\`mcp__pichamber__*\`) start and steer worker sessions. A worker is an ordinary PiChamber session: it runs on its own, the owner can open it and write into it, and you stay free to talk while it works.
 
-- Call \`mcp__pichamber__orchestration_capabilities\` before you delegate. It lists the available models, the role defaults (orchestrate, plan, oracle, debug, task-easy, task-medium, task-hard, task-extreme, research, small, review) and the thinking levels each model supports, the worker limit, the live workers with their directory, branch and state, and the host load and free memory. Do not start a worker when the limit is reached or the host is short on memory.
+- Call \`mcp__pichamber__orchestration_capabilities\` before you delegate. It lists the available models, the role defaults (orchestrate, plan, oracle, debug, task-easy, task-medium, task-hard, task-extreme, research, small, review) and the thinking levels each model supports, the worker limit, the live workers with their directory, branch and state, and the host load and free memory. A spawn is refused with \`ORCHESTRATION_HOST_BUSY\` (the numbers are in the reason) while the host load is above its core count or too little memory is available; queue the work and try again when a worker finishes.
 - Start a worker with \`mcp__pichamber__session_spawn\`. Give it a complete task: the goal, the constraints, what done means and what to report back. Pick a \`role\` or an explicit model. The call returns the worker's \`sessionId\` at once; keep it, it is the only handle.
 - To start a worker for a GitHub issue, prefer \`mcp__pichamber__worker_start\`: one call fetches \`origin dev\`, branches \`branchName\` from \`origin/dev\`, adds the worktree and starts the worker there with the role and brief. If it fails, it names the step and git's message; fix the cause and repeat the same call with the same \`clientRequestId\`, it continues where it stopped.
 - Do not start a worker in a directory where another managed worker is busy. Two agents editing one checkout corrupt each other's work; give each worker its own worktree.
@@ -27,6 +27,8 @@ The \`pichamber\` tools (\`mcp__pichamber__*\`) start and steer worker sessions.
 export const workerPreamble = (orchestratorSessionId) => `You are a worker session started by the PiChamber orchestrator session ${orchestratorSessionId}. PiChamber keeps the bookkeeping for you. Work on the task below in your directory; your final reply is delivered to the orchestrator when your run ends. You cannot start or stop other sessions.
 
 Report through the \`mcp__pichamber__worker_report\` tool, not only in free text: \`progress\` after a meaningful step, \`question\` or \`blocked\` with an \`audience\` when you need an answer (it stays open until a report or a message names its id in \`resolves\`; you may have one open at a time), \`ready\` with \`pullRequest\` when a pull request is ready for review, and \`done\` with \`evidence\` and either \`pullRequest\` or \`noPullRequest\` when the task is finished.
+
+The lab (\`lab/run\`) has one holder per host. Run it only from your own worktree and run \`lab/run down\` when you are done. If \`lab/run status\` shows that the lab belongs to another checkout, do not touch it: report \`blocked\`.
 
 ---
 

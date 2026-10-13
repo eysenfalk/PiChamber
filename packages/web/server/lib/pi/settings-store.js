@@ -77,6 +77,7 @@ const normalizeRetryLimit = (value) => {
 export const ORCHESTRATION_ROLES = Object.freeze(['orchestrate', 'plan', 'oracle', 'debug', 'task-easy', 'task-medium', 'task-hard', 'task-extreme', 'research', 'small', 'review']);
 const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
 const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
+const ORCHESTRATION_MAX_GATE_BYTES = 1024 ** 4;
 
 // Role defaults name only the model id: the provider that serves it is resolved
 // against the live catalog when a worker starts, so a default never pins a
@@ -84,6 +85,8 @@ const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
 // Claude 5.5 models always think, so no default uses `off`.
 export const DEFAULT_ORCHESTRATION_SETTINGS = Object.freeze({
   workerLimit: 4,
+  // A spawn is refused while the host is busy: load above the core count or less memory available than this.
+  gate: Object.freeze({ enabled: true, minAvailableBytes: 8 * 1024 ** 3 }),
   roles: Object.freeze({
     orchestrate: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
     plan: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
@@ -124,6 +127,21 @@ const normalizeOrchestration = (value) => {
       || value.workerLimit > ORCHESTRATION_MAX_WORKER_LIMIT) throw invalidSettings();
     result.workerLimit = value.workerLimit;
   }
+  if (value.gate !== undefined && value.gate !== null) {
+    if (typeof value.gate !== 'object' || Array.isArray(value.gate)) throw invalidSettings();
+    const gate = {};
+    if (value.gate.enabled !== undefined && value.gate.enabled !== null) {
+      if (typeof value.gate.enabled !== 'boolean') throw invalidSettings();
+      gate.enabled = value.gate.enabled;
+    }
+    if (value.gate.minAvailableBytes !== undefined && value.gate.minAvailableBytes !== null) {
+      if (!Number.isInteger(value.gate.minAvailableBytes)
+        || value.gate.minAvailableBytes < 0
+        || value.gate.minAvailableBytes > ORCHESTRATION_MAX_GATE_BYTES) throw invalidSettings();
+      gate.minAvailableBytes = value.gate.minAvailableBytes;
+    }
+    if (Object.keys(gate).length > 0) result.gate = gate;
+  }
   if (value.roles !== undefined && value.roles !== null) {
     if (typeof value.roles !== 'object' || Array.isArray(value.roles)) throw invalidSettings();
     const roles = {};
@@ -148,6 +166,14 @@ const mergeOrchestration = (current, incoming) => {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw invalidSettings();
   const next = { ...(current ?? {}) };
   if (Object.hasOwn(incoming, 'workerLimit')) next.workerLimit = incoming.workerLimit;
+  if (Object.hasOwn(incoming, 'gate')) {
+    if (incoming.gate === null) {
+      delete next.gate;
+    } else {
+      if (!incoming.gate || typeof incoming.gate !== 'object' || Array.isArray(incoming.gate)) throw invalidSettings();
+      next.gate = { ...(current?.gate ?? {}), ...incoming.gate };
+    }
+  }
   if (Object.hasOwn(incoming, 'worktreeRoot')) next.worktreeRoot = incoming.worktreeRoot;
   if (Object.hasOwn(incoming, 'roles')) {
     if (incoming.roles === null) {
@@ -169,6 +195,7 @@ export const resolveOrchestrationSettings = (stored) => {
   }
   return {
     workerLimit: overrides.workerLimit ?? DEFAULT_ORCHESTRATION_SETTINGS.workerLimit,
+    gate: { ...DEFAULT_ORCHESTRATION_SETTINGS.gate, ...(overrides.gate ?? {}) },
     roles,
     // Where `worker_start` adds worktrees; unset means next to the caller's worktree.
     ...(overrides.worktreeRoot ? { worktreeRoot: overrides.worktreeRoot } : {}),

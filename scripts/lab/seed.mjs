@@ -227,7 +227,7 @@ export async function seedLab(root, now = Date.now()) {
     for (const file of files) await utimes(file.path, new Date(createdAt), new Date(file.modified));
   }
   await seedTreeFixtures({ root, agentDir, now, projects, sessions });
-  await seedOrchestrator({ agentDir, now, projects, sessions });
+  await seedOrchestrator({ root, agentDir, now, projects, sessions });
   const seed = { projects, sessions };
   await writeFile(marker, JSON.stringify(seed, null, 2) + '\n');
   return seed;
@@ -235,11 +235,14 @@ export async function seedLab(root, now = Date.now()) {
 
 // Issue #107: an orchestrating session on the scripted faux model, which the
 // extension in the lab agent directory registers. It spawns its worker in the same project.
-async function seedOrchestrator({ agentDir, now, projects, sessions }) {
+async function seedOrchestrator({ root, agentDir, now, projects, sessions }) {
   const spec = SEED_MANIFEST.sessions.find((session) => session.role === 'orchestrator');
   const cwd = projects.find((project) => project.name === spec.project).path;
   await mkdir(join(agentDir, 'extensions'), { recursive: true });
   await writeFile(join(agentDir, 'extensions', 'faux-orchestration.js'), fauxOrchestrationExtension({ fauxUrl: resolveFauxUrl(), workerCwd: cwd }));
+  // The pod's 4 GiB would always trip the host gate (lab.yaml: PICHAMBER_DATA_DIR=/lab/pichamber); the host protects itself.
+  await mkdir(join(root, 'pichamber', 'pi'), { recursive: true });
+  await writeFile(join(root, 'pichamber', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { gate: { enabled: false } } }) + '\n');
   const createdAt = now - 600000;
   let manager;
   withSeedClock(createdAt, () => {

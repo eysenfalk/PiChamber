@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path';
 
 import { schemaViolation } from './contract-validator.js';
 import { OrchestrationError } from './errors.js';
+import { hostGateNumbers } from './host-info.js';
 import { workerPreamble } from './instructions.js';
 import { authorize, needsOwnership } from './policy.js';
 import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTime } from './process-identity.js';
@@ -535,6 +536,7 @@ export function createOrchestrationService(deps) {
         clientRequestId: args.clientRequestId,
         intent,
         workerLimit: settings.workerLimit,
+        ...(settings.gate.enabled ? { hostGate: { ...hostGateNumbers(hostStatus()), minAvailableBytes: settings.gate.minAvailableBytes } } : {}),
         opId: `op_${randomUUID()}`,
         at: now(),
         process: self,
@@ -963,7 +965,8 @@ export function createOrchestrationService(deps) {
     const workers = await Promise.all(workersOf(document, callerSessionId)
       .filter(([sessionId]) => !wanted || wanted.has(sessionId))
       .map(([sessionId, worker]) => digestWorker(sessionId, worker)));
-    return { at: now(), limit: { workerLimit, used: slotsInUse(document) }, operations, workers };
+    const used = slotsInUse(document);
+    return { at: now(), limit: { workerLimit, used }, host: { ...hostGateNumbers(hostStatus()), workers: used, limit: workerLimit }, operations, workers };
   };
 
   const handlers = {

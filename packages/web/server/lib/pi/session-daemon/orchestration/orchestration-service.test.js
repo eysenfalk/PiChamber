@@ -60,12 +60,15 @@ let nextPid = 1000;
 // Kernel start time per pid; a reused pid gets a new one.
 const startTimes = new Map();
 let nextInstance = 0;
+const GIB = 1024 ** 3;
 
 /**
  * One daemon process. Two harnesses on the same `file` are two processes
  * sharing the durable registry; a new harness on the same file is a restart.
  */
-const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker', delay = async () => {}, pid: reusedPid, startTime, holdSession, overrides = {} } = {}) => {
+const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = registryFile(), workerPrefix = 'worker', delay = async () => {}, pid: reusedPid, startTime, holdSession, gate = { enabled: true, minAvailableBytes: 8 * GIB }, overrides = {} } = {}) => {
+  // Mutable, so a test can make the host busy between calls.
+  const host = { cpuCount: 8, loadAverage: { '1m': 1 }, memory: { freeBytes: 16 * GIB } };
   const runtimes = new Map();
   const states = new Map();
   // JSONL presence per worker; a settled worker got its assistant message.
@@ -141,13 +144,13 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
     sendInput: vi.fn(async ({ sessionId }) => input(sessionId)),
     abortSession: vi.fn(async (sessionId) => { states.set(sessionId, 'idle'); }),
     abortRun: vi.fn(() => true),
-    readSettings: async () => ({ workerLimit, roles: ROLES }),
+    readSettings: async () => ({ workerLimit, gate, roles: ROLES }),
     listModels: async () => [
       { providerId: 'anthropic', modelId: 'claude-opus-5-5', available: true },
       { providerId: 'anthropic', modelId: 'claude-sonnet-5-5', available: true },
       { providerId: 'openai-codex', modelId: 'gpt-6.1-sol', available: true },
     ],
-    hostStatus: () => ({ cpuCount: 8 }),
+    hostStatus: () => host,
     resolveBranch: async () => 'main',
     resolveRepository: async () => 'acme/app',
     getSessionActivity: (sessionId) => activity.get(sessionId),
@@ -184,7 +187,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
   const workers = async () => (await registry.read()).workers;
   // The process dies; its resident sessions die with it.
   const crash = () => { alivePids.delete(pid); };
-  return { service, deps, runtimes, states, fileStates, orchestrator, settle, input, verdict, endPrompts, registry, workers, file, add, crash };
+  return { host, service, deps, runtimes, states, fileStates, orchestrator, settle, input, verdict, endPrompts, registry, workers, file, add, crash };
 };
 
 const expectCode = async (promise, code) => {
@@ -233,6 +236,8 @@ describe('orchestration service', () => {
     const [{ text, operationId }] = deps.sendInput.mock.calls[0];
     expect(text).toMatch(/^You are a worker session started by the PiChamber orchestrator session orch\./);
     expect(text.endsWith('Fix the bug\nDetails')).toBe(true);
+    expect(text).toContain('lab/run down');
+    expect(text).toContain('report `blocked`');
     expect(operationId).toBe(`${lineage.opId}.task`);
 
     const document = await registry.read();
@@ -2243,6 +2248,64 @@ describe('worker reports and digest', () => {
   });
 });
 
+describe('host gate', () => {
+  const spawn = (harness, cwd = '/work/a') => harness.service.call('orch', 'session_spawn', { cwd, task: 'one' });
+
+  it('refuses a spawn on a loaded host with the numbers in the reason and starts nothing', async () => {
+    const harness = createHarness();
+    harness.host.loadAverage['1m'] = 9.5;
+    const error = await spawn(harness).catch((caught) => caught);
+    expect(error).toMatchObject({
+      code: 'ORCHESTRATION_HOST_BUSY',
+      details: { load1: 9.5, cores: 8, availableBytes: 16 * GIB, minAvailableBytes: 8 * GIB },
+    });
+    expect(error.message).toContain('load 9.50 on 8 cores');
+    expect(harness.deps.createWorkerSession).not.toHaveBeenCalled();
+    expect(Object.keys((await harness.registry.read()).operations)).toEqual([]);
+    harness.host.loadAverage['1m'] = 8;
+    await expect(spawn(harness)).resolves.toMatchObject({ sessionId: 'worker-1' });
+  });
+
+  it('refuses a spawn when less than the minimum memory is available', async () => {
+    const harness = createHarness();
+    harness.host.memory.freeBytes = 8 * GIB - 1;
+    await expectCode(spawn(harness), 'ORCHESTRATION_HOST_BUSY');
+    harness.host.memory.freeBytes = 8 * GIB;
+    await expect(spawn(harness)).resolves.toMatchObject({ sessionId: 'worker-1' });
+  });
+
+  it('never refuses with the gate switched off', async () => {
+    const harness = createHarness({ gate: { enabled: false, minAvailableBytes: 8 * GIB } });
+    harness.host.loadAverage['1m'] = 99;
+    harness.host.memory.freeBytes = 0;
+    await expect(spawn(harness)).resolves.toMatchObject({ sessionId: 'worker-1' });
+  });
+
+  it('reports a full limit before a busy host', async () => {
+    const harness = createHarness({ workerLimit: 1 });
+    await spawn(harness);
+    harness.host.loadAverage['1m'] = 99;
+    await expectCode(spawn(harness, '/work/b'), 'ORCHESTRATION_LIMIT');
+  });
+
+  it('does not gate the retry of a start that is already reserved', async () => {
+    const harness = createHarness();
+    const args = { cwd: '/work/a', task: 'one', clientRequestId: 'req-1' };
+    const first = await harness.service.call('orch', 'session_spawn', args);
+    harness.host.loadAverage['1m'] = 99;
+    await expect(harness.service.call('orch', 'session_spawn', args)).resolves.toMatchObject({ sessionId: first.sessionId, deduplicated: true });
+  });
+
+  it('shows the live host numbers and the slot use in the digest', async () => {
+    const harness = createHarness({ workerLimit: 3 });
+    await spawn(harness);
+    harness.host.loadAverage['1m'] = 2.5;
+    harness.host.memory.freeBytes = 5 * GIB;
+    const { host } = await harness.service.call('orch', 'orchestration_digest', {});
+    expect(host).toEqual({ load1: 2.5, cores: 8, availableBytes: 5 * GIB, workers: 1, limit: 3 });
+  });
+});
+
 describe('worker_start', () => {
   const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { encoding: 'utf8' }).trim();
   const brief = 'WORKER BRIEF: fix issue 7';
@@ -2339,7 +2402,7 @@ describe('worker_start', () => {
 
   it('places the worktree under the configured root and is for orchestrators only', async () => {
     const root = mkdtempSync(join(tmpdir(), 'pichamber-worktree-root-'));
-    const harness = setup({ overrides: { readSettings: async () => ({ workerLimit: 4, roles: ROLES, worktreeRoot: root }) } });
+    const harness = setup({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: true, minAvailableBytes: 8 * GIB }, roles: ROLES, worktreeRoot: root }) } });
     await expect(harness.service.call('orch', 'worker_start', args)).resolves.toMatchObject({ worktree: join(root, '7-fix') });
     await expectCode(harness.service.call('worker-1', 'worker_start', { ...args, clientRequestId: 'start-8', branchName: '8-fix' }), 'ORCHESTRATION_FORBIDDEN');
   });
