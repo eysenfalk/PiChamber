@@ -125,6 +125,18 @@ export const ORCHESTRATION_TOOLS = [
     childAllowed: false,
     parameters: { type: 'object', additionalProperties: false, required: ['sessionId'], properties: { sessionId } },
   },
+  {
+    name: 'orchestration_takeover',
+    label: 'Take over workers',
+    description: 'Take over every worker and open start of another orchestrator session, for example after it was replaced. Refused while that session or one of its starts still runs. Retries of its starts with the same clientRequestId then reach you.',
+    childAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['fromSessionId'],
+      properties: { fromSessionId: { ...sessionId, description: 'The orchestrator session whose workers move to you.' }, clientRequestId },
+    },
+  },
 ];
 
 export const ORCHESTRATION_TOOL_NAMES = ORCHESTRATION_TOOLS.map((tool) => tool.name);

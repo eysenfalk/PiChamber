@@ -16,4 +16,13 @@ The \`pichamber\` tools (\`mcp__pichamber__*\`) start and steer worker sessions.
 - For a review round, start a new worker (for example with the \`review\` role) and put the original brief, prior findings and open objections into its task.
 - Use a distinct \`clientRequestId\` per spawn or send, and keep it stable across retries of the same call, so a retry never starts duplicate work.
 - Workers cannot start or stop other sessions.
+- PiChamber keeps the bookkeeping: which workers are yours, their role and lifecycle, and the starts still in progress. After a compaction or a restart, call \`mcp__pichamber__session_list\` instead of relying on memory. The worker limit counts every worker of the daemon that is starting or active, so idle workers keep their slot until they are stopped.
+- If you replace another orchestrator session, call \`mcp__pichamber__orchestration_takeover\` with its session id; its workers, open starts and retry keys move to you, and their results arrive here.
+`;
+
+/** Prepended to every spawn brief, because the extension injects no instructions into workers. */
+export const workerPreamble = (orchestratorSessionId) => `You are a worker session started by the PiChamber orchestrator session ${orchestratorSessionId}. PiChamber keeps the bookkeeping for you. Work on the task below in your directory; your final reply is delivered to the orchestrator when your run ends. You cannot start or stop other sessions.
+
+---
+
 `;

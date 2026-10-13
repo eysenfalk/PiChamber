@@ -67,7 +67,7 @@ describe('orchestration MCP route', () => {
     return { base, store, runtime, mint, rpc, advance: (ms) => { clock += ms; } };
   };
 
-  it('initializes, lists the eight tools and calls them as the credential session', async () => {
+  it('initializes, lists the tools and calls them as the credential session', async () => {
     const { mint, rpc, runtime } = await start();
     const { token, expiresAt } = await mint('parent-1');
     expect(token).toMatch(/^pcorch_/);

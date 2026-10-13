@@ -58,7 +58,11 @@ import {
 } from './session-jsonl.js';
 import { resolvePiChamberDataDir } from '../../pichamber-data-dir.js';
 import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from './orchestration/host-info.js';
-import { LINEAGE_ENTRY, OrchestrationError, createOrchestrationService } from './orchestration/orchestration-service.js';
+import { OrchestrationError } from './orchestration/errors.js';
+import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
+import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
+import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
+import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -3155,8 +3159,17 @@ export function createSessionDaemon({
       }
       claimEntry = claimed.entry;
     }
+    // Orchestration admission: a fast refusal before activation; the slot
+    // is decided under the session lease right before the prompt and ended
+    // by Pi's verdict on it (see the orchestration service).
+    const toProtocolError = (error) => {
+      throw error instanceof OrchestrationError ? new SessionDaemonProtocolError(error.code, error.message) : error;
+    };
     try {
-      const result = await runSessionInput(payload, delivery);
+      await orchestration.beforeSessionInput(payload.sessionId).catch(toProtocolError);
+      const result = await runSessionInput(payload, delivery, {
+        admit: () => orchestration.admitInput(payload.sessionId).catch(toProtocolError),
+      });
       claimEntry?.settle({ accepted: true, receipt: { accepted: true, messageId: result.messageId } });
       return result;
     } catch (error) {
@@ -3173,7 +3186,7 @@ export function createSessionDaemon({
   // deleted when its assigned JSONL is positively absent (see
   // disposeIdleSessionRuntime).
 
-  const runSessionInput = async (payload, delivery) => {
+  const runSessionInput = async (payload, delivery, { admit } = {}) => {
     if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string'
       || typeof payload.text !== 'string' || payload.text.length === 0 || Buffer.byteLength(payload.text) > 64 * 1024) {
       throw new SessionDaemonProtocolError('INVALID_PROMPT', 'The session prompt is invalid.');
@@ -3252,6 +3265,22 @@ export function createSessionDaemon({
     // pending for the whole agent loop, which can legitimately exceed the
     // 30-second HTTP/private-IPC request budget. Own it in the daemon and
     // report asynchronous failure through the existing session event channel.
+    // A worker input is admitted now that this daemon holds the session;
+    // Pi's verdict on the prompt below ends the admission.
+    const admission = await admit?.();
+    // A started verdict carries the run Pi starts right after it, so a stale
+    // admission aborts that run only, and the end of this prompt as the
+    // proof that the run ended (run-binding.js). A late verdict of a deferred
+    // prompt runs outside this prompt and has no such proof.
+    let promptEnded;
+    let endPrompt;
+    const promptEnd = new Promise((resolve) => { endPrompt = resolve; });
+    const resolveAdmission = (outcome, { late = false } = {}) => {
+      if (!admission) return Promise.resolve();
+      const run = outcome === 'started' ? bindStartedRun(activeRuntime.session) : undefined;
+      const finished = run && !late && !promptEnded ? provenRunEnd(activeRuntime.session, promptEnd, run) : undefined;
+      return orchestration.resolveInput(admission, outcome, { run, finished }).catch(() => {});
+    };
     const generation = (sendGenerationBySession.get(payload.sessionId) ?? 0) + 1;
     sendGenerationBySession.set(payload.sessionId, generation);
     // Slash-prefixed input dispatches extension commands and skill/template
@@ -3275,11 +3304,18 @@ export function createSessionDaemon({
     // it and instead rejects, which must propagate to the caller so dedup does
     // not cache it as accepted.
     let preflightOutcome = null;
+    let admissionVerdict = Promise.resolve();
     let notifyPreflight;
     const preflightGate = new Promise((resolve) => { notifyPreflight = resolve; });
-    const onPreflightResult = () => {
-      if (preflightOutcome !== null) return;
+    const onPreflightResult = (disposition) => {
+      // A verdict after the prompt resolved without one belongs to a
+      // deferred prompt; it still ends the admission.
+      if (preflightOutcome !== null) {
+        if (preflightOutcome === 'unresolved') void resolveAdmission(disposition, { late: true });
+        return;
+      }
       preflightOutcome = true;
+      admissionVerdict = resolveAdmission(disposition);
       notifyPreflight(true);
     };
     try {
@@ -3298,15 +3334,30 @@ export function createSessionDaemon({
             preflightResult: onPreflightResult,
           });
     } catch (error) {
+      promptEnded = true;
+      endPrompt();
       removeUserStart(payload.sessionId, generation);
+      await resolveAdmission('rejected');
       throw error;
     }
     // A settlement without a preflight signal resolves the gate so a missing
     // callback cannot hang acceptance. Resolve implies acceptance; reject
-    // implies preflight failure whose real error is propagated below. The
-    // installed SDK signals on every accepted prompt, so this only covers test doubles.
+    // implies preflight failure whose real error is propagated below. Pi
+    // 1.1.0 resolves a prompt made while `agent_settled` is being emitted
+    // without a signal and runs it afterwards (CONTEXT.md): the admission is
+    // then unresolved, keeps its slot and takes the late signal.
+    Promise.resolve(promptPromise).finally(() => {
+      promptEnded = true;
+      endPrompt();
+    }).catch(() => {});
     Promise.resolve(promptPromise).then(
-      () => { if (preflightOutcome === null) { preflightOutcome = true; notifyPreflight(true); } },
+      () => {
+        if (preflightOutcome === null) {
+          preflightOutcome = 'unresolved';
+          admissionVerdict = resolveAdmission('unresolved');
+          notifyPreflight(true);
+        }
+      },
       () => { if (preflightOutcome === null) { preflightOutcome = false; notifyPreflight(false); } },
     );
     const preflightAccepted = await preflightGate;
@@ -3319,8 +3370,10 @@ export function createSessionDaemon({
         preflightError = error;
       }
       removeUserStart(payload.sessionId, generation);
+      await resolveAdmission('rejected');
       throw preflightError;
     }
+    await admissionVerdict;
     Promise.resolve(promptPromise).then(() => {
       // Queued sends resolve on queueing, before the queued user message
       // starts. Keep that file metadata until the per-delivery
@@ -3728,6 +3781,9 @@ export function createSessionDaemon({
         retryStateBySession.delete(sessionId);
         break;
       case 'agent_settled':
+        // A settle while a run is still live (Pi 1.1.0 can emit one for an
+        // earlier prompt) is no completion: no idle, no result, no release.
+        if (!isSettleFinal(owningRuntime.session)) break;
         retryStateBySession.delete(sessionId);
         activeRunStartedAt.delete(sessionId);
         settledSendGenerationBySession.set(sessionId, sendGenerationBySession.get(sessionId) ?? 0);
@@ -3828,6 +3884,14 @@ export function createSessionDaemon({
     if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, sessionId, activeRuntime.cwd);
   };
 
+  const sessionFileOf = (live) => {
+    try {
+      return live?.session?.sessionManager?.getSessionFile?.() ?? undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const orchestration = createOrchestrationService({
     activateSession,
     // Every session a tool uses holds the idle guard like a direct request,
@@ -3855,13 +3919,46 @@ export function createSessionDaemon({
         { parentSessionPath, lineage },
       );
       const sessionId = created.session.id;
-      return { sessionId, cwd: runtimeRegistry?.findBySessionId(sessionId)?.cwd ?? workerCwd };
+      const live = runtimeRegistry?.findBySessionId(sessionId);
+      return { sessionId, cwd: live?.cwd ?? workerCwd, sessionFile: sessionFileOf(live) };
+    },
+    registry: createOrchestrationRegistryStore({ file: join(resolvePiChamberDataDir(), 'pi', 'orchestration-registry.json') }),
+    // The idle disposal's durability check: stat success is durable, ENOENT
+    // is positively absent, anything else cannot prove either.
+    sessionFileState: async (sessionId, recordedFile) => {
+      const file = sessionFileOf(runtimeRegistry?.findBySessionId(sessionId)) ?? recordedFile;
+      if (typeof file !== 'string' || file.length === 0) return 'unknown';
+      try {
+        await stat(file);
+        return 'present';
+      } catch (error) {
+        return error?.code === 'ENOENT' ? 'absent' : 'unknown';
+      }
+    },
+    // Resident sessions first, then the persisted ones of the start's
+    // directory; a failed read throws, so the start stays undecided.
+    findSessionByOperation: async ({ opId, cwd: operationCwd, exclude = [] }) => {
+      const live = (runtimeRegistry?.listAll() ?? []).find((candidate) => {
+        if (exclude.includes(candidate.session?.sessionId)) return false;
+        const entries = candidate.session?.sessionManager?.getEntries?.() ?? [];
+        return entries.some((entry) => entry?.type === 'custom' && entry.customType === LINEAGE_ENTRY && entry.data?.opId === opId);
+      });
+      if (live) return { sessionId: live.session.sessionId, cwd: live.cwd, sessionFile: sessionFileOf(live) };
+      if (typeof operationCwd !== 'string' || operationCwd.length === 0) return undefined;
+      return findPersistedSessionByOperation({
+        opId,
+        cwd: operationCwd,
+        listSessions: ({ cwd: listCwd }) => listSessions({ cwd: listCwd, agentDir }),
+        lineageType: LINEAGE_ENTRY,
+        exclude,
+      });
     },
     sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
       { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },
       delivery === 'prompt' ? undefined : delivery,
     ),
     abortSession: (sessionId) => abortSession(sessionId),
+    abortRun: (sessionId, run) => abortBoundRun(runtimeRegistry?.findBySessionId(sessionId)?.session, run),
     readSettings: createOrchestrationSettingsReader({ dataDir: resolvePiChamberDataDir() }),
     listModels: async () => (await listProviders()).providers.flatMap((provider) => provider.models.map((model) => ({
       providerId: model.providerId,
@@ -3878,6 +3975,10 @@ export function createSessionDaemon({
     onDeliveryFailed: ({ sessionId, parentSessionId, parentDirectory, error }) => {
       const message = `The result of worker ${sessionId} could not be delivered: ${redactAttachmentPaths(error?.message ?? String(error))}`;
       publish('session.error', { code: 'ORCHESTRATION_RESULT_UNDELIVERED', message }, parentSessionId, parentDirectory);
+    },
+    onAdmissionUnresolved: ({ sessionId, error }) => {
+      const message = `The worker slot of ${sessionId} could not be updated after Pi accepted its input; the slot stays taken until the worker settles or stops: ${redactAttachmentPaths(error?.message ?? String(error))}`;
+      publish('session.error', { code: 'ORCHESTRATION_ADMISSION_UNRESOLVED', message }, sessionId);
     },
   });
   const orchestrationExtension = createOrchestrationExtension(orchestration);
