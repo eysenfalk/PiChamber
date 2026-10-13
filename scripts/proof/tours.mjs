@@ -1,3 +1,5 @@
+import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
+
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
   mobile: { width: 390, height: 844, mobile: true },
@@ -242,6 +244,56 @@ export function sidebarTreeTour(manifest) {
     { caption: 'New session closes the drawer and opens an empty chat.', viewport: 'mobile', theme: 'light',
       actions: [{ type: 'click', text: 'New session' }, { type: 'wait', selector: '[data-chat-input="true"]' }],
       evidence: [{ selector: '[data-chat-input="true"]' }] },
+  ] });
+}
+
+/** Issue #107: an orchestrator on the scripted faux model spawns a worker, stays responsive, the owner writes into the worker and the result returns. */
+export function orchestrationTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const worker = LAB_WORKER_TITLE;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const say = value => [{ type: 'type', selector: composer, value }, { type: 'press', key: 'Enter' }];
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const card = '[data-orchestration-result]';
+  const limit = '[data-settings-item="sessions.orchestration-worker-limit"]';
+  const picker = role => `[aria-label="${role} model"]`;
+  return validateTour({ name: 'orchestration', steps: [
+    { caption: 'Settings, Sessions: the worker limit and the model and thinking level of each worker role.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '?settings=sessions' }, { type: 'wait', selector: picker('Review') }, { type: 'scroll', selector: limit }],
+      evidence: [{ selector: limit }, { text: 'Worker roles' }, { selector: picker('Orchestrate') }] },
+    { caption: 'Further down: the four task levels, research, small tasks and review.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'scroll', selector: picker('Research') }],
+      evidence: ['Task, easy', 'Task, extreme', 'Small tasks', 'Review'].map(role => ({ selector: picker(role) })) },
+    { caption: `The orchestrator asks for a worker. session_spawn starts "${worker}" in ${label}, and the orchestrator turn ends at once.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
+        { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
+        ...say('ORCHESTRATE'), { type: 'wait', text: 'I stay available while it works.' }],
+      evidence: [{ selector: item(orchestrator.title) }, { text: 'I stay available while it works.' }] },
+    { caption: 'While the worker still runs, the owner asks the orchestrator and gets an answer right away.', viewport: 'desktop', theme: 'light',
+      actions: [...say('STATUS?'), { type: 'wait', text: 'I can answer you meanwhile.' }],
+      evidence: [{ text: 'I can answer you meanwhile.' }] },
+    { caption: 'The worker sits under its orchestrator in the sidebar. Its question returns as a compact result card.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: `${item(orchestrator.title)} button[aria-label="Expand forks"]` }, { type: 'wait', selector: item(worker) },
+        { type: 'wait', selector: card }, { type: 'wait', text: 'Write GO in its session.' }],
+      evidence: [{ selector: item(worker) }, { selector: card }, { text: 'Write GO in its session.' }] },
+    { caption: 'The owner opens the worker from the card and writes into it directly.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: `button[aria-label="Open worker ${worker}"]` }, { type: 'wait', text: 'I need your go: reply GO.' },
+        ...say('GO'), { type: 'wait', text: 'WORKER DONE' }],
+      evidence: [{ text: 'I need your go: reply GO.' }, { text: 'WORKER DONE' }] },
+    { caption: 'Back in the orchestrator, the second result card carries the finished work.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: item(orchestrator.title) }, { type: 'wait', text: 'Nothing else is open.' }],
+      evidence: [{ selector: card, index: 1 }, { text: 'Nothing else is open.' }] },
+    { caption: 'The same transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
+      evidence: [{ selector: `html.dark ${card}` }, { text: 'Nothing else is open.' }] },
+    { caption: 'The hosted mobile drawer nests the worker under the orchestrator too.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
+        { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: `[data-mobile-sessions-drawer] ${item(worker)}` }],
+      // The narrow drawer truncates the orchestrator title, so the nesting is proven by the worker's tree level: project 1, worktree 2, orchestrator 3.
+      evidence: [{ selector: `[data-mobile-sessions-drawer] ${item(worker)}[aria-level="4"]` }] },
   ] });
 }
 

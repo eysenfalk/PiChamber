@@ -997,6 +997,50 @@ describe('PiSessionStore catalog', () => {
     }
   });
 
+  test('a session first seen through an event in an already listed directory is re-listed for its parent', async () => {
+    const listed: string[][] = [[]];
+    const stubs = stubDaemons({
+      listSessions: async () => ({
+        sessions: listed.length === 1
+          ? [listItem('parent', '/repo-a')]
+          : [listItem('parent', '/repo-a'), listItem('worker', '/repo-a', { title: 'Worker', parentId: 'parent' })],
+      }),
+    });
+    const store = new PiSessionStore();
+    try {
+      await store.refreshDirectoryCatalog('/repo-a');
+      listed.push([]);
+      const internal = store as unknown as { commitEvents: (events: PiSessionEvent[]) => void };
+      internal.commitEvents([sessionUpdatedEvent('worker', '/repo-a', 'Worker', 1)]);
+      expect(store.getState().catalog.byId.get('worker')?.parentId).toBeNull();
+      await tickMicrotasks();
+      expect(store.getState().catalog.byId.get('worker')?.parentId).toBe('parent');
+    } finally {
+      stubs.restore();
+      store.dispose();
+    }
+  });
+
+  test('a stub in a directory that was never listed waits for its first listing', async () => {
+    let lists = 0;
+    const stubs = stubDaemons({
+      listSessions: async () => {
+        lists += 1;
+        return { sessions: [] };
+      },
+    });
+    const store = new PiSessionStore();
+    try {
+      const internal = store as unknown as { commitEvents: (events: PiSessionEvent[]) => void };
+      internal.commitEvents([sessionUpdatedEvent('remote', '/repo-a', 'Remote', 1)]);
+      await tickMicrotasks();
+      expect(lists).toBe(0);
+    } finally {
+      stubs.restore();
+      store.dispose();
+    }
+  });
+
   test('session.updated from another device fills a stub title without waiting for a list', async () => {
     const store = new PiSessionStore();
     try {

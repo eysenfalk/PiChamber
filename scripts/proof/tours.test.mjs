@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -77,6 +78,20 @@ describe('tours.mjs format', () => {
     expect(tour.steps.at(-1).evidence).toEqual([{ text: 'Renamed fork' }]);
     expect(() => forkRenameTour({ projects: [], sessions: [{ project: 'lab-one', title: 'Renamed fork', role: 'fork' }] })).toThrow('Invalid lab seed manifest');
     expect(() => forkRenameTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('orchestration drives the seeded orchestrator and proves nesting, responsiveness and both result cards', () => {
+    const tour = orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
+    expect(tour.name).toBe('orchestration');
+    expect(tour.steps[0].actions[0]).toEqual({ type: 'navigate', path: '?settings=sessions' });
+    expect(tour.steps[1].evidence).toContainEqual({ selector: '[aria-label="Review model"]' });
+    expect(tour.steps[2].actions).toContainEqual({ type: 'click', selector: '[data-tree-node="w:/one"]' });
+    const typed = tour.steps.flatMap(step => step.actions).filter(action => action.type === 'type').map(action => action.value);
+    expect(typed).toEqual(['ORCHESTRATE', 'STATUS?', 'GO']);
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ selector: `[role="treeitem"][aria-label="${LAB_WORKER_TITLE}"]` });
+    expect(evidence).toContainEqual({ selector: '[data-orchestration-result]', index: 1 });
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toContain('mobile/dark');
+    expect(() => orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
     const tour = addDeviceTour();

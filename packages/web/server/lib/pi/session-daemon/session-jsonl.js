@@ -178,11 +178,85 @@ export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath 
   return null;
 }
 
+const isMissing = (error) => error?.code === 'ENOENT';
+
+/** First non-empty line, parsed. Raw errors pass through; the file is always closed. */
+async function readFirstJsonlEntry(filePath) {
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (line.trim()) return JSON.parse(line);
+    }
+    return undefined;
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+}
+
+/**
+ * Find a session by the header of every JSONL file in every directory store,
+ * for files Pi did not name `<timestamp>_<sessionId>.jsonl`. Each file whose
+ * header names the session goes through `accept`; the first one it accepts is
+ * the match, and one it rejects only sets `incomplete` so a later same-id
+ * file is still found. Only a missing sessions root, store or file counts as
+ * absent; any other failure sets `incomplete`, because the session may sit
+ * behind it. A store that vanished during the scan is skipped and the scan
+ * goes on with the others.
+ *
+ * @template T
+ * @param {{ sessionId: string, agentDir: string, accept?: (match: { path: string, cwd: string }) => Promise<T>, readDirectory?: typeof readdir }} options
+ * @returns {Promise<{ match: T | null, incomplete: boolean }>}
+ */
+export async function scanPiSessionJsonlHeaders({ sessionId, agentDir, accept = async (match) => match, readDirectory = readdir }) {
+  let incomplete = false;
+  const sessionsRoot = join(agentDir, 'sessions');
+  let dirEntries;
+  try {
+    dirEntries = await readDirectory(sessionsRoot, { withFileTypes: true });
+  } catch (error) {
+    return { match: null, incomplete: !isMissing(error) };
+  }
+  for (const dirEntry of dirEntries) {
+    if (!dirEntry.isDirectory()) continue;
+    const dirPath = join(sessionsRoot, dirEntry.name);
+    let files;
+    try {
+      files = await readDirectory(dirPath, { withFileTypes: true });
+    } catch (error) {
+      if (!isMissing(error)) incomplete = true;
+      continue;
+    }
+    for (const file of files) {
+      if (!file.name.endsWith('.jsonl')) continue;
+      const fullPath = join(dirPath, file.name);
+      let header;
+      try {
+        header = await readFirstJsonlEntry(fullPath);
+      } catch (error) {
+        // A header that is not JSON is no session file.
+        if (!(error instanceof SyntaxError) && !isMissing(error)) incomplete = true;
+        continue;
+      }
+      if (header?.type !== 'session' || header.id !== sessionId || !header.cwd) continue;
+      try {
+        return { match: await accept({ path: fullPath, cwd: header.cwd }), incomplete };
+      } catch {
+        // The header names this session; a file that does not validate now
+        // is no proof that the session is gone.
+        incomplete = true;
+      }
+    }
+  }
+  return { match: null, incomplete };
+}
+
 export async function validatePiSessionJsonlFile(filePath) {
   let sawHeader = false;
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
   try {
-    const input = createReadStream(filePath, { encoding: 'utf8' });
-    const lines = createInterface({ input, crlfDelay: Infinity });
     for await (const line of lines) {
       if (!line.trim()) continue;
       let entry;
@@ -200,6 +274,9 @@ export async function validatePiSessionJsonlFile(filePath) {
   } catch (error) {
     if (error instanceof SessionJsonlError) throw error;
     throw unreadable();
+  } finally {
+    lines.close();
+    input.destroy();
   }
   if (!sawHeader) throw malformed();
 }

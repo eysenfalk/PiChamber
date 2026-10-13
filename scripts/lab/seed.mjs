@@ -7,6 +7,7 @@ import { SessionManager } from '../../packages/web/node_modules/@earendil-works/
 import { getPiSessionDirectory } from '../../packages/web/server/lib/pi/session-daemon/session-jsonl.js';
 
 import { SEED_MANIFEST } from './seed-spec.mjs';
+import { fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 export { SessionManager, SEED_MANIFEST };
 
 const usage = { input: 80, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 120,
@@ -140,7 +141,7 @@ export async function seedLab(root, now = Date.now()) {
   }
   let agentEntries = [];
   try { agentEntries = await readdir(agentDir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (agentEntries.some(name => name !== 'sessions')) throw new Error('Seed agent directory must contain only sessions.');
+  if (agentEntries.some(name => !['sessions', 'extensions'].includes(name))) throw new Error('Seed agent directory must contain only sessions and the lab extensions.');
   // A previous interrupted seed has no marker: discard only manifest-owned project names.
   for (const fixture of SEED_MANIFEST.projects) {
     await rm(join(root, 'projects', fixture.name), { recursive: true, force: true });
@@ -151,6 +152,7 @@ export async function seedLab(root, now = Date.now()) {
     if (fixture.folder) await rm(join(root, 'folders', fixture.folder), { recursive: true, force: true });
   }
   await rm(join(agentDir, 'sessions'), { recursive: true, force: true });
+  await rm(join(agentDir, 'extensions'), { recursive: true, force: true });
   const projects = [];
   const sessions = [];
   for (const [index, fixture] of SEED_MANIFEST.projects.entries()) {
@@ -225,9 +227,30 @@ export async function seedLab(root, now = Date.now()) {
     for (const file of files) await utimes(file.path, new Date(createdAt), new Date(file.modified));
   }
   await seedTreeFixtures({ root, agentDir, now, projects, sessions });
+  await seedOrchestrator({ agentDir, now, projects, sessions });
   const seed = { projects, sessions };
   await writeFile(marker, JSON.stringify(seed, null, 2) + '\n');
   return seed;
+}
+
+// Issue #107: an orchestrating session on the scripted faux model, which the
+// extension in the lab agent directory registers. It spawns its worker in the same project.
+async function seedOrchestrator({ agentDir, now, projects, sessions }) {
+  const spec = SEED_MANIFEST.sessions.find((session) => session.role === 'orchestrator');
+  const cwd = projects.find((project) => project.name === spec.project).path;
+  await mkdir(join(agentDir, 'extensions'), { recursive: true });
+  await writeFile(join(agentDir, 'extensions', 'faux-orchestration.js'), fauxOrchestrationExtension({ fauxUrl: resolveFauxUrl(), workerCwd: cwd }));
+  const createdAt = now - 600000;
+  let manager;
+  withSeedClock(createdAt, () => {
+    manager = SessionManager.create(cwd, getPiSessionDirectory({ cwd, agentDir }));
+    manager.appendModelChange('faux', 'faux-1');
+    manager.appendSessionInfo(spec.title);
+    manager.appendMessage({ role: 'user', content: 'You orchestrate the lab. Wait for my word.', timestamp: createdAt });
+    manager.appendMessage(assistant('Scripted lab model: send ORCHESTRATE, STATUS or GO.', createdAt + 1000));
+  });
+  await utimes(manager.getSessionFile(), new Date(createdAt), new Date(createdAt + 1000));
+  sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory: cwd });
 }
 
 // Fixtures for the sidebar tree: a fork of the renamed fork, one session in each

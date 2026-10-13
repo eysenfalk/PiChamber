@@ -256,6 +256,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['retry', 'retries', 'retry limit', 'auto retry', 'max retries', 'agent run'],
   },
   {
+    id: 'sessions.orchestration-worker-limit',
+    page: 'sessions',
+    title: "Worker limit",
+    description: "How many unfinished worker sessions one orchestrating session tree may run.",
+    keywords: ['orchestration', 'workers', 'worker limit', 'subagents', 'parallel', 'concurrency', 'pichamber tools'],
+  },
+  {
+    id: 'sessions.orchestration-roles',
+    page: 'sessions',
+    title: "Worker roles",
+    description: "Model and thinking level for each worker role, from orchestrate and plan to small tasks and review.",
+    keywords: ['orchestration', 'workers', 'roles', 'model', 'orchestrate', 'plan', 'oracle', 'debug', 'task', 'easy', 'medium', 'hard', 'extreme', 'research', 'review', 'small', 'effort', 'subagents'],
+  },
+  {
     id: 'sessions.thinking-defaults',
     page: 'sessions',
     title: "Thinking defaults",

@@ -73,7 +73,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the development and release workflo
 
 ## Acknowledgments
 
-PiChamber retains the required MIT attribution for [OpenChamber](https://github.com/openchamber/openchamber) by Bohdan Triapitsyn. Thanks to Pi Coding Agent, Pierre, xterm.js, and every contributor who has shaped the project.
+PiChamber retains the required MIT attribution for [OpenChamber](https://github.com/openchamber/openchamber) by Bohdan Triapitsyn. The session orchestration tools and their base instructions are adapted from [t3code](https://github.com/pingdotgg/t3code), MIT, Copyright (c) T3 Tools Inc. Thanks to Pi Coding Agent, Pierre, xterm.js, and every contributor who has shaped the project.
 
 ## License
 

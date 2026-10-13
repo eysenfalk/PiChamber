@@ -1,4 +1,5 @@
 import { buildDirectPairingCandidates, normalizeCandidateUrl } from './pairing-candidates.js';
+import { isOrchestrationMcpRequest } from '../client-auth/orchestration-credentials.js';
 
 const parseLoopbackUrl = (rawUrl) => {
   if (typeof rawUrl !== 'string') {
@@ -648,6 +649,12 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     const requestScope = tunnelAuthController.classifyRequestScope(req);
     if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
       return tunnelAuthController.requireTunnelSession(req, res, next);
+    }
+    // Orchestration MCP credentials are verified by the route itself (session
+    // scoped, hashed, expiring) and open `/api/pi/mcp` only. Local clients
+    // only: a tunnel request still needs a tunnel session first.
+    if (isOrchestrationMcpRequest(getRequestPathname(req), req)) {
+      return next();
     }
     return uiAuthController.requireAuth(req, res, next);
   };
