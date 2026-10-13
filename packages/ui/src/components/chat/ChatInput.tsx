@@ -1,5 +1,6 @@
 /* eslint-disable */
 import React from "react";
+import { flushSync } from "react-dom";
 // sessionStore removed — currentSessionId comes from useSessionUIStore
 import { useConfigStore } from "@/stores/useConfigStore";
 import { useUIStore } from "@/stores/useUIStore";
@@ -161,6 +162,7 @@ import { ComposerAutocompletePopups } from "./composer/ui/ComposerAutocompletePo
 import { ComposerFooter } from "./composer/ui/ComposerFooter";
 import { RevertedMessageDock } from "./composer/ui/RevertedMessageDock";
 import { ComposerDragOverlay } from "./composer/ui/ComposerDragOverlay";
+import { ComposerMinimizeToggle } from "./composer/ui/ComposerMinimizeToggle";
 import { ComposerAttachmentPickerInput } from "./composer/ui/ComposerAttachmentPickerInput";
 import { ComposerVoiceButton } from "./composer/ui/ComposerVoiceButton";
 import {
@@ -184,18 +186,13 @@ const MAX_VISIBLE_COMPOSER_LINES = 5;
 /**
  * Mobile grows the composer with content instead of offering a fullscreen
  * gesture — the old swipe-up handle bought barely a line of extra height.
- * The real ceiling is measured: the editor may grow until the composer fills
- * its screen container (marked data-composer-bound in ChatContainer), with
- * the chrome around the editor read from the DOM. The line cap only stops
- * absurdly tall editors on tablets.
+ * The real ceiling is measured: the editor may grow to a third of the visible
+ * height of its screen container (marked data-composer-bound in
+ * ChatContainer, see composer/editor/heightLimit.ts) and scrolls inside
+ * itself beyond that. The line cap only stops absurdly tall editors on
+ * tablets.
  */
 const MAX_MOBILE_COMPOSER_LINES = 16;
-/**
- * Breathing room between the fully grown composer and the top of its screen
- * container: without it the composer's border lands exactly on the header's
- * bottom edge on the chat screen. A visual gap by design, not an estimate.
- */
-const MOBILE_COMPOSER_BOUND_GAP_PX = 4;
 const COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH = 560;
 
 type SubmitOptions = {
@@ -282,6 +279,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
       ? commandComboboxState?.listboxId
       : undefined;
   const commandComboboxExpanded = Boolean(commandComboboxListboxId);
+  // Mobile only: the message field is folded away so the transcript has the
+  // whole screen. Not persisted: a reload starts with the field open.
+  const [composerMinimized, setComposerMinimized] = React.useState(false);
   const [mobileControlsPanel, setMobileControlsPanel] =
     React.useState<MobileControlsPanel>(null);
   const [mobileDraftPicker, setMobileDraftPicker] = React.useState<
@@ -618,6 +618,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
   const isDesktopExpanded = false;
   // Mobile fullscreen composer (entered via the drag handle's swipe-up).
   const isMobileExpanded = isExpandedInput && isMobile;
+  // Not on the new-session draft: that screen has nothing to give back.
+  const canMinimizeComposer = isMobile && !isMobileExpanded && !newSessionDraftOpen;
+  const composerIsMinimized = canMinimizeComposer && composerMinimized;
   const isComposerExpanded = isDesktopExpanded || isMobileExpanded;
   const [composerVisualLines, setComposerVisualLines] = React.useState(1);
   const isDesktopStackedComposer = Boolean(!isMobile && !isMiniChatSurface);
@@ -1057,6 +1060,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
   const handleQueuedMessageEdit = React.useCallback((content: string) => {
     setMessage(content);
+    setComposerMinimized(false);
     setTimeout(() => {
       composerRef.current?.focus();
     }, 0);
@@ -2519,9 +2523,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             )}
           >
             <>
+              {canMinimizeComposer ? (
+                <ComposerMinimizeToggle
+                  minimized={composerMinimized}
+                  hasDraft={message.trim().length > 0}
+                  onMinimize={() => {
+                    composerRef.current?.blur();
+                    setComposerMinimized(true);
+                  }}
+                  onRestore={() => {
+                    // Synchronous so the focus below still counts as the tap's
+                    // gesture on iOS and raises the keyboard.
+                    flushSync(() => setComposerMinimized(false));
+                    composerRef.current?.focus();
+                  }}
+                />
+              ) : null}
               <div
                 className={cn(
                   "flex flex-col relative overflow-visible",
+                  composerIsMinimized && "hidden",
                   isComposerExpanded && "flex-1 min-h-0",
                   isDesktopStackedComposer &&
                     !isComposerExpanded &&
@@ -2733,7 +2754,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                           boundSelector={
                             isMobile ? "[data-composer-bound]" : undefined
                           }
-                          boundGapPx={MOBILE_COMPOSER_BOUND_GAP_PX}
                           commandComboboxExpanded={commandComboboxExpanded}
                           commandComboboxListboxId={commandComboboxListboxId}
                           commandComboboxActiveOptionId={
