@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -39,9 +40,20 @@ describe('tours.mjs format', () => {
       { type: 'scroll', selector: '#x', y: Infinity }, { type: 'set-theme', theme: 'system' },
       { type: 'navigate', path: 'https://example.com' }, { type: 'navigate', path: '//example.com' },
       { type: 'click', text: 'x', button: 'middle' }, { type: 'press', key: 'a' }, { type: 'press' },
-      { type: 'drag', from: { text: 'x' } }, { type: 'drag', from: { text: 'x' }, to: { selector: '#y', text: 'y' } }]) {
+      { type: 'drag', from: { text: 'x' } }, { type: 'drag', from: { text: 'x' }, to: { selector: '#y', text: 'y' } },
+      { type: 'hover' }, { type: 'hover', selector: '#x', text: 'x' }, { type: 'long-press' }]) {
       tour.steps[0].actions = [action]; expect(() => validateTour(tour)).toThrow('Invalid tour');
     }
+  });
+  test('hover works on any viewport; long-press only where touch is emulated', () => {
+    const tour = copy();
+    tour.steps[0].viewport = 'desktop';
+    tour.steps[0].actions = [{ type: 'hover', selector: '#row' }];
+    expect(validateTour(tour)).toBe(tour);
+    tour.steps[0].actions = [{ type: 'long-press', selector: '#row' }];
+    expect(() => validateTour(tour)).toThrow('Invalid tour');
+    tour.steps[0].viewport = 'mobile';
+    expect(validateTour(tour)).toBe(tour);
   });
   test('lab title and project evidence are taken from the seed manifest, never row position', () => {
     const tour = labTour({ projects: [{ name: 'lab-one', path: '/one' }, { name: 'lab_two', path: '/two' }], sessions: [{ project: 'lab-one', title: 'Long named session', role: 'long' }, { project: 'lab_two', title: 'Short session', role: 'short' }] });
@@ -66,6 +78,20 @@ describe('tours.mjs format', () => {
     expect(tour.steps.at(-1).evidence).toEqual([{ text: 'Renamed fork' }]);
     expect(() => forkRenameTour({ projects: [], sessions: [{ project: 'lab-one', title: 'Renamed fork', role: 'fork' }] })).toThrow('Invalid lab seed manifest');
     expect(() => forkRenameTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('orchestration drives the seeded orchestrator and proves nesting, responsiveness and both result cards', () => {
+    const tour = orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
+    expect(tour.name).toBe('orchestration');
+    expect(tour.steps[0].actions[0]).toEqual({ type: 'navigate', path: '?settings=sessions' });
+    expect(tour.steps[1].evidence).toContainEqual({ selector: '[aria-label="Review model"]' });
+    expect(tour.steps[2].actions).toContainEqual({ type: 'click', selector: '[data-tree-node="w:/one"]' });
+    const typed = tour.steps.flatMap(step => step.actions).filter(action => action.type === 'type').map(action => action.value);
+    expect(typed).toEqual(['ORCHESTRATE', 'STATUS?', 'GO']);
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ selector: `[role="treeitem"][aria-label="${LAB_WORKER_TITLE}"]` });
+    expect(evidence).toContainEqual({ selector: '[data-orchestration-result]', index: 1 });
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toContain('mobile/dark');
+    expect(() => orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
     const tour = addDeviceTour();

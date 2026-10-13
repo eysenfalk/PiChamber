@@ -523,7 +523,38 @@ export interface PiSettingsSnapshot {
     smallModel?: PiModelRef;
     walkthroughModel?: PiModelRef;
     defaultRetryLimit?: number;
+    /** Stored overrides only; `orchestration` on the snapshot is the effective value. */
+    orchestration?: {
+      workerLimit?: number;
+      gate?: Partial<PiOrchestrationGate>;
+      roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel>>;
+    };
   };
+  /** Orchestration roles and worker limit with defaults applied. */
+  orchestration: PiOrchestrationSettings;
+}
+
+export type PiOrchestrationRole = 'orchestrate' | 'plan' | 'oracle' | 'debug'
+  | 'task-easy' | 'task-medium' | 'task-hard' | 'task-extreme'
+ | 'research' | 'small' | 'review';
+
+/** A role names a model id; the provider is resolved from the live catalog when it is omitted. */
+export interface PiOrchestrationRoleModel {
+  providerId?: string;
+  modelId: string;
+  thinking?: PiThinkingLevel;
+}
+
+/** A spawn is refused while the host load exceeds the core count or less memory than `minAvailableBytes` is available. */
+export interface PiOrchestrationGate {
+  enabled: boolean;
+  minAvailableBytes: number;
+}
+
+export interface PiOrchestrationSettings {
+  workerLimit: number;
+  gate: PiOrchestrationGate;
+  roles: Record<PiOrchestrationRole, PiOrchestrationRoleModel>;
 }
 
 export interface PiSettingsUpdateInput {
@@ -546,7 +577,15 @@ export interface PiChamberDefaultsUpdateInput {
   smallModel?: PiModelRef | null;
   walkthroughModel?: PiModelRef | null;
   defaultRetryLimit?: number | null;
+  /** `null` clears every override; a role or the limit set to `null` returns to its default. */
+  orchestration?: {
+    workerLimit?: number | null;
+    gate?: Partial<PiOrchestrationGate> | null;
+    roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel | null>> | null;
+  } | null;
 }
+
+export type PiChamberDefaultsUpdateResponse = Pick<PiSettingsSnapshot, 'pichamber' | 'orchestration'>;
 
 // ---------------------------------------------------------------------------
 // Resources

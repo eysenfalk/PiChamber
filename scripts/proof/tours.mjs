@@ -1,3 +1,5 @@
+import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
+
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
   mobile: { width: 390, height: 844, mobile: true },
@@ -27,12 +29,15 @@ export function validateTour(tour) {
       const schemas = {
         navigate: ['type', 'path'], click: ['type', 'selector', 'text', 'button'], type: ['type', 'selector', 'value'],
         press: ['type', 'key'], drag: ['type', 'from', 'to'],
+        hover: ['type', 'selector', 'text'], 'long-press': ['type', 'selector', 'text'],
         scroll: ['type', 'selector', 'x', 'y'], wait: ['type', 'ms', 'selector', 'text'],
         'set-theme': ['type', 'theme'], 'set-viewport': ['type', 'viewport'],
       };
       if (!Object.hasOwn(schemas, action.type) || !keys(action, schemas[action.type])) fail();
       if (action.type === 'navigate' && (typeof action.path !== 'string' || (/^[a-z]+:/i.test(action.path) || action.path.startsWith('//')))) fail();
       if (action.type === 'click' && (!target(action) || ![undefined, 'right'].includes(action.button))) fail();
+      if ((action.type === 'hover' || action.type === 'long-press') && !target(action)) fail();
+      if (action.type === 'long-press' && !VIEWPORTS[step.viewport]?.mobile) fail();
       if (action.type === 'press' && (typeof action.key !== 'string' || !Object.hasOwn(KEYS, action.key))) fail();
       if (action.type === 'drag' && ![action.from, action.to].every(end => end && typeof end === 'object' && keys(end, ['selector', 'text']) && target(end))) fail();
       if (action.type === 'type' && (!nonempty(action.selector) || typeof action.value !== 'string')) fail();
@@ -150,6 +155,17 @@ export function sidebarTreeTour(manifest) {
     pill(gitRow('rebase'), 'Rebase in progress'), pill(main, 'No upstream branch'),
   ];
   const projectRollup = pill(projectNode(project), '2 worktrees have uncommitted changes');
+  // Auto fetch (slice 6): the seed pushes a commit to fetch-me's remote that the checkout has not fetched yet.
+  const fetchMe = gitRow('remote-ahead');
+  const fetched = pill(fetchMe, '1 commit to pull*');
+  const autoFetch = '[data-settings-item="git.auto-fetch"]';
+  // Quick create (slice 7): the `+` shows on hover over the row's count slot, as a sibling of the row button.
+  const plus = rowSelector => `${rowSelector} ~ button[aria-label^="New session in"]`;
+  const composerFocused = { selector: '[data-chat-input="true"] .cm-content:focus' };
+  // `target` is the directory chip the new draft shows; the composer may already have focus from an earlier step.
+  const quickCreate = (rowSelector, target) => [{ type: 'hover', selector: rowSelector }, { type: 'wait', ms: 200 }, { type: 'click', selector: plus(rowSelector) },
+    ...(target ? [{ type: 'wait', text: target }] : []), { type: 'wait', selector: composerFocused.selector }];
+  const flat = projectNode(others[0]);
   return validateTour({ name: 'sidebar-tree', steps: [
     { caption: 'One tree instead of two areas: Chats on top, then projects. Nothing is expanded yet.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[role="tree"]' }, { type: 'wait', text: label }],
@@ -157,7 +173,21 @@ export function sidebarTreeTour(manifest) {
     { caption: `Clicking ${label} selects and expands it and shows its worktrees. Clicking main shows its sessions.`, viewport: 'desktop', theme: 'light',
       actions: expand, evidence: tree },
     { caption: 'Each worktree shows its git state: ●2 uncommitted files, ↑2 ↓1 against main, ✓ all committed, a warning while a rebase is stopped, a cloud where main has no upstream.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'wait', selector: pills[0].selector }, { type: 'wait', selector: pills[5].selector }], evidence: pills },
+      actions: [{ type: 'wait', selector: pills[0].selector }, { type: 'wait', selector: pills[5].selector }],
+      evidence: [...pills, { selector: `${fetchMe}:not(:has([aria-label^="1 commit to pull"]))` }] },
+    { caption: 'Settings > Git has Auto fetch, off by default. Turning it on fetches every 15 minutes, without ever asking for credentials.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '?settings=git' }, { type: 'wait', selector: `${autoFetch}[aria-pressed="false"]` },
+        { type: 'click', selector: autoFetch }, { type: 'wait', selector: `${autoFetch}[aria-pressed="true"]` }],
+      evidence: [{ selector: `${autoFetch}[aria-pressed="true"]` }, { text: 'Auto fetch interval' }, { text: '15 min' }] },
+    { caption: 'Back in the tree, fetch-me shows ↓1: the commit pushed to its remote arrived without a manual fetch.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: main }, { type: 'wait', selector: fetched.selector }],
+      evidence: [fetched, { text: long.title }] },
+    { caption: 'Hovering a row swaps its count for a +. The + on Chats starts a chat without a project folder and puts the cursor in the composer.', viewport: 'desktop', theme: 'light',
+      actions: quickCreate(row('chats')), evidence: [{ selector: plus(row('chats')) }, composerFocused] },
+    { caption: `The + on main starts a session in ${project.name} main.`, viewport: 'desktop', theme: 'light',
+      actions: quickCreate(main, project.name), evidence: [{ selector: plus(main) }, { text: project.name }, composerFocused] },
+    { caption: `${titleCase(others[0].name)} has one checkout, so its project row takes the + itself. The click also selects the row.`, viewport: 'desktop', theme: 'light',
+      actions: quickCreate(flat, others[0].name), evidence: [{ selector: plus(flat) }, { selector: `${flat}[aria-current="true"]` }, { text: others[0].name }, composerFocused] },
     { caption: 'Forks sit under their parent session, with a fork count.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
         { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],
@@ -208,6 +238,62 @@ export function sidebarTreeTour(manifest) {
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: 'Chats' }, { text: label }] },
     { caption: 'Mobile in light theme.', viewport: 'mobile', theme: 'light', actions: [],
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: label }] },
+    { caption: 'Touch has no hover, so the + is not there. A long press on Chats opens its menu with New session.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'long-press', selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { type: 'wait', text: 'New session' }],
+      evidence: [{ selector: '[role="menuitem"]' }, { text: 'New session' }] },
+    { caption: 'New session closes the drawer and opens an empty chat.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'click', text: 'New session' }, { type: 'wait', selector: '[data-chat-input="true"]' }],
+      evidence: [{ selector: '[data-chat-input="true"]' }] },
+  ] });
+}
+
+/** Issue #107: an orchestrator on the scripted faux model spawns a worker, stays responsive, the owner writes into the worker and the result returns. */
+export function orchestrationTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const worker = LAB_WORKER_TITLE;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const say = value => [{ type: 'type', selector: composer, value }, { type: 'press', key: 'Enter' }];
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const card = '[data-orchestration-result]';
+  const limit = '[data-settings-item="sessions.orchestration-worker-limit"]';
+  const picker = role => `[aria-label="${role} model"]`;
+  return validateTour({ name: 'orchestration', steps: [
+    { caption: 'Settings, Sessions: the worker limit and the model and thinking level of each worker role.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '?settings=sessions' }, { type: 'wait', selector: picker('Review') }, { type: 'scroll', selector: limit }],
+      evidence: [{ selector: limit }, { text: 'Worker roles' }, { selector: picker('Orchestrate') }] },
+    { caption: 'Further down: the four task levels, research, small tasks and review.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'scroll', selector: picker('Research') }],
+      evidence: ['Task, easy', 'Task, extreme', 'Small tasks', 'Review'].map(role => ({ selector: picker(role) })) },
+    { caption: `The orchestrator asks for a worker. session_spawn starts "${worker}" in ${label}, and the orchestrator turn ends at once.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
+        { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
+        ...say('ORCHESTRATE'), { type: 'wait', text: 'I stay available while it works.' }],
+      evidence: [{ selector: item(orchestrator.title) }, { text: 'I stay available while it works.' }] },
+    { caption: 'While the worker still runs, the owner asks the orchestrator and gets an answer right away.', viewport: 'desktop', theme: 'light',
+      actions: [...say('STATUS?'), { type: 'wait', text: 'I can answer you meanwhile.' }],
+      evidence: [{ text: 'I can answer you meanwhile.' }] },
+    { caption: 'The worker sits under its orchestrator in the sidebar. Its question returns as a compact result card.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: `${item(orchestrator.title)} button[aria-label="Expand forks"]` }, { type: 'wait', selector: item(worker) },
+        { type: 'wait', selector: card }, { type: 'wait', text: 'Write GO in its session.' }],
+      evidence: [{ selector: item(worker) }, { selector: card }, { text: 'Write GO in its session.' }] },
+    { caption: 'The owner opens the worker from the card and writes into it directly.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: `button[aria-label="Open worker ${worker}"]` }, { type: 'wait', text: 'I need your go: reply GO.' },
+        ...say('GO'), { type: 'wait', text: 'WORKER DONE' }],
+      evidence: [{ text: 'I need your go: reply GO.' }, { text: 'WORKER DONE' }] },
+    { caption: 'Back in the orchestrator, the second result card carries the finished work.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: item(orchestrator.title) }, { type: 'wait', text: 'Nothing else is open.' }],
+      evidence: [{ selector: card, index: 1 }, { text: 'Nothing else is open.' }] },
+    { caption: 'The same transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
+      evidence: [{ selector: `html.dark ${card}` }, { text: 'Nothing else is open.' }] },
+    { caption: 'The hosted mobile drawer nests the worker under the orchestrator too.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
+        { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: `[data-mobile-sessions-drawer] ${item(worker)}` }],
+      // The narrow drawer truncates the orchestrator title, so the nesting is proven by the worker's tree level: project 1, worktree 2, orchestrator 3.
+      evidence: [{ selector: `[data-mobile-sessions-drawer] ${item(worker)}[aria-level="4"]` }] },
   ] });
 }
 

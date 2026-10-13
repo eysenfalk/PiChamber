@@ -36,7 +36,8 @@ import { treeProjectLabel, useWorkspaceTreeModel } from './sidebar/hooks/useWork
 import { CHATS_VISIBILITY_ID, useProjectVisibilityStore } from '@/stores/useProjectVisibilityStore';
 import { useWorkspaceTreeExpansion } from './sidebar/hooks/useWorkspaceTreeExpansion';
 import { folderScopesByProject, sessionsByProject, type NodeKey, type TreeNode } from './sidebar/workspaceTree';
-import { GLOBAL_PROJECT_ID } from '@/components/chat/composer/state/draftTargetProjects';
+import { focusChatInput } from '@/components/chat/composer/editor/dom';
+import { createSessionInWorkspace } from './sidebar/quickCreate';
 import { SessionNodeItem } from './sidebar/SessionNodeItem';
 import type { TreeFolderActions } from './sidebar/treeNodeMenu';
 import type { SessionNodeRenderExtras } from './sidebar/sessionNodeItemUtils';
@@ -711,20 +712,21 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
 
   // A new session lands in the node's directory; Chats, or no node, starts a chat without a workspace.
   const startNewSessionIn = React.useCallback((node: TreeNode | undefined) => {
-    useUIStore.getState().closeMainSurfaces();
-    setActiveMainTab('chat');
-    if (mobileVariant) {
-      setSessionSwitcherOpen(false);
-    }
-    if (node?.projectId && node.directory) {
-      openNewSessionDraft({ selectedProjectId: node.projectId, directoryOverride: node.directory });
-    } else if (node?.kind === 'chats') {
-      openNewSessionDraft({ selectedProjectId: GLOBAL_PROJECT_ID });
-    } else {
-      openNewSessionDraft();
-    }
-    onNavigateAway?.();
-  }, [mobileVariant, onNavigateAway, openNewSessionDraft, setActiveMainTab, setSessionSwitcherOpen]);
+    createSessionInWorkspace(node, {
+      closeMainSurfaces: () => useUIStore.getState().closeMainSurfaces(),
+      showChat: () => {
+        setActiveMainTab('chat');
+        if (mobileVariant) {
+          setSessionSwitcherOpen(false);
+        }
+      },
+      selectTarget: (target) => handleSelectTreeNode(target.key),
+      openNewSessionDraft,
+      onNavigateAway,
+      // Dedicated mobile leaves the composer alone: focusing it would raise the keyboard.
+      focusComposer: mobileVariant ? undefined : () => { requestAnimationFrame(focusChatInput); },
+    });
+  }, [handleSelectTreeNode, mobileVariant, onNavigateAway, openNewSessionDraft, setActiveMainTab, setSessionSwitcherOpen]);
 
   const handleOpenNewSessionDraftFromHeader = React.useCallback(() => {
     startNewSessionIn(selectedNodeKey ? workspaceTreeModel.nodesByKey.get(selectedNodeKey as NodeKey) : undefined);

@@ -258,6 +258,20 @@ POST /api/github/invalidate                   { directory?, repo?, kind?, number
 - Never return an empty list on failure; stale serves are explicit. A
   failed section (`sectionErrors`) never reads as an empty section.
 
+## Pull request watch (#119)
+
+`pull-watch.js` (`readPullWatch`, exposed by `createGitHubRoutes`) is the
+reader behind the orchestrator's pull request watch: one REST read of the
+pull request plus `checks.getChecks` (summary only, open pull requests only)
+returns state, head SHA, issue plus review comment count and the rolled up
+checks. It uses the same allow-list and pinned credential as the routes and
+reads `github.com` only (a worker's `pullRequest` carries no host). A stale
+checks read or one with `sectionErrors` returns `incomplete: true`, which the
+watch treats as no data. Checks count only the latest commit status per
+`context` (the statuses endpoint lists the whole history), and the reader
+returns `null` while `client.isRateLimited(host)` so the 60 s poll never reads
+inside a retry window.
+
 ## Notes for contributors
 
 - Add domain logic in `pulls.js` / `issues.js` / `checks.js`, keep

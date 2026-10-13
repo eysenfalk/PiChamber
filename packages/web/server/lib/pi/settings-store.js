@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import { resolvePiChamberDataDir } from '../pichamber-data-dir.js';
 import { withCrossProcessLock } from '../server/cross-process-lock.js';
@@ -74,6 +74,174 @@ const normalizeRetryLimit = (value) => {
   return value;
 };
 
+export const ORCHESTRATION_ROLES = Object.freeze(['orchestrate', 'plan', 'oracle', 'debug', 'task-easy', 'task-medium', 'task-hard', 'task-extreme', 'research', 'small', 'review']);
+const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
+const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
+// Bounds of the wake and watchdog settings (O16).
+const ORCHESTRATION_BOUNDS = Object.freeze({
+  coalesceMs: [0, 60_000],
+  stallAfterMs: [60_000, 7_200_000],
+});
+const ORCHESTRATION_MAX_GATE_BYTES = 1024 ** 4;
+
+// Role defaults name only the model id: the provider that serves it is resolved
+// against the live catalog when a worker starts, so a default never pins a
+// provider the owner has not configured. The values are the owner's (2026-10-12);
+// Claude 5.5 models always think, so no default uses `off`.
+export const DEFAULT_ORCHESTRATION_SETTINGS = Object.freeze({
+  workerLimit: 4,
+  wakes: Object.freeze({ coalesceMs: 3_000 }),
+  watchdog: Object.freeze({ stallAfterMs: 600_000, enabled: true }),
+  // Watching the pull requests of workers (#119).
+  github: Object.freeze({ enabled: true }),
+  // A spawn is refused while the host is busy: load above the core count or less memory available than this.
+  gate: Object.freeze({ enabled: true, minAvailableBytes: 8 * 1024 ** 3 }),
+  roles: Object.freeze({
+    orchestrate: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    plan: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    oracle: Object.freeze({ modelId: 'gpt-6.1-sol', thinking: 'high' }),
+    debug: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'xhigh' }),
+    'task-easy': Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'medium' }),
+    'task-medium': Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'high' }),
+    'task-hard': Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
+    'task-extreme': Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'xhigh' }),
+    research: Object.freeze({ modelId: 'claude-sonnet-5-5', thinking: 'medium' }),
+    small: Object.freeze({ modelId: 'claude-haiku-5-5', thinking: 'medium' }),
+    review: Object.freeze({ modelId: 'gpt-6.1-sol', thinking: 'high' }),
+  }),
+});
+
+const normalizeRole = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+  if (typeof value.modelId !== 'string' || value.modelId.trim().length === 0 || value.modelId.length > 512) throw invalidSettings();
+  if (value.providerId !== undefined && value.providerId !== null
+    && (typeof value.providerId !== 'string' || value.providerId.trim().length === 0 || value.providerId.length > 256)) {
+    throw invalidSettings();
+  }
+  if (value.thinking !== undefined && value.thinking !== null && !isPiThinkingLevel(value.thinking)) throw invalidSettings();
+  return {
+    ...(typeof value.providerId === 'string' ? { providerId: value.providerId.trim() } : {}),
+    modelId: value.modelId.trim(),
+    ...(typeof value.thinking === 'string' ? { thinking: value.thinking } : {}),
+  };
+};
+
+// A settings group such as `wakes`: each field is a bounded duration or a flag.
+const normalizeGroup = (value, fields) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+  const result = {};
+  for (const [field, type] of Object.entries(fields)) {
+    const entry = value[field];
+    if (entry === undefined || entry === null) continue;
+    if (type === 'boolean' ? typeof entry !== 'boolean' : !Number.isInteger(entry)
+      || entry < ORCHESTRATION_BOUNDS[field][0] || entry > ORCHESTRATION_BOUNDS[field][1]) throw invalidSettings();
+    result[field] = entry;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+};
+
+const normalizeOrchestration = (value) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+  const result = {};
+  if (value.workerLimit !== undefined && value.workerLimit !== null) {
+    if (!Number.isInteger(value.workerLimit)
+      || value.workerLimit < ORCHESTRATION_MIN_WORKER_LIMIT
+      || value.workerLimit > ORCHESTRATION_MAX_WORKER_LIMIT) throw invalidSettings();
+    result.workerLimit = value.workerLimit;
+  }
+  const wakes = normalizeGroup(value.wakes, { coalesceMs: 'ms' });
+  if (wakes) result.wakes = wakes;
+  const watchdog = normalizeGroup(value.watchdog, { stallAfterMs: 'ms', enabled: 'boolean' });
+  if (watchdog) result.watchdog = watchdog;
+  const github = normalizeGroup(value.github, { enabled: 'boolean' });
+  if (github) result.github = github;
+  if (value.gate !== undefined && value.gate !== null) {
+    if (typeof value.gate !== 'object' || Array.isArray(value.gate)) throw invalidSettings();
+    const gate = {};
+    if (value.gate.enabled !== undefined && value.gate.enabled !== null) {
+      if (typeof value.gate.enabled !== 'boolean') throw invalidSettings();
+      gate.enabled = value.gate.enabled;
+    }
+    if (value.gate.minAvailableBytes !== undefined && value.gate.minAvailableBytes !== null) {
+      if (!Number.isInteger(value.gate.minAvailableBytes)
+        || value.gate.minAvailableBytes < 0
+        || value.gate.minAvailableBytes > ORCHESTRATION_MAX_GATE_BYTES) throw invalidSettings();
+      gate.minAvailableBytes = value.gate.minAvailableBytes;
+    }
+    if (Object.keys(gate).length > 0) result.gate = gate;
+  }
+  if (value.roles !== undefined && value.roles !== null) {
+    if (typeof value.roles !== 'object' || Array.isArray(value.roles)) throw invalidSettings();
+    const roles = {};
+    for (const [role, entry] of Object.entries(value.roles)) {
+      if (!ORCHESTRATION_ROLES.includes(role)) throw invalidSettings();
+      if (entry === null) continue;
+      roles[role] = normalizeRole(entry);
+    }
+    if (Object.keys(roles).length > 0) result.roles = roles;
+  }
+  if (value.worktreeRoot !== undefined && value.worktreeRoot !== null) {
+    if (typeof value.worktreeRoot !== 'string' || !isAbsolute(value.worktreeRoot) || value.worktreeRoot.length > 4096) throw invalidSettings();
+    result.worktreeRoot = value.worktreeRoot;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+};
+
+// Patch semantics: `null` clears every override, a role set to `null` returns
+// that role to its default, and omitted fields keep their stored value.
+const mergeOrchestration = (current, incoming) => {
+  if (incoming === null) return undefined;
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw invalidSettings();
+  const next = { ...(current ?? {}) };
+  if (Object.hasOwn(incoming, 'workerLimit')) next.workerLimit = incoming.workerLimit;
+  for (const group of ['wakes', 'watchdog', 'github']) {
+    if (!Object.hasOwn(incoming, group)) continue;
+    const value = incoming[group];
+    if (value === null) delete next[group];
+    else if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+    else next[group] = { ...(current?.[group] ?? {}), ...value };
+  }
+  if (Object.hasOwn(incoming, 'gate')) {
+    if (incoming.gate === null) {
+      delete next.gate;
+    } else {
+      if (!incoming.gate || typeof incoming.gate !== 'object' || Array.isArray(incoming.gate)) throw invalidSettings();
+      next.gate = { ...(current?.gate ?? {}), ...incoming.gate };
+    }
+  }
+  if (Object.hasOwn(incoming, 'worktreeRoot')) next.worktreeRoot = incoming.worktreeRoot;
+  if (Object.hasOwn(incoming, 'roles')) {
+    if (incoming.roles === null) {
+      delete next.roles;
+    } else {
+      if (!incoming.roles || typeof incoming.roles !== 'object' || Array.isArray(incoming.roles)) throw invalidSettings();
+      next.roles = { ...(current?.roles ?? {}), ...incoming.roles };
+    }
+  }
+  return next;
+};
+
+/** Stored overrides merged over the defaults; the shape every consumer reads. */
+export const resolveOrchestrationSettings = (stored) => {
+  const overrides = stored?.orchestration ?? {};
+  const roles = {};
+  for (const role of ORCHESTRATION_ROLES) {
+    roles[role] = { ...DEFAULT_ORCHESTRATION_SETTINGS.roles[role], ...(overrides.roles?.[role] ?? {}) };
+  }
+  return {
+    workerLimit: overrides.workerLimit ?? DEFAULT_ORCHESTRATION_SETTINGS.workerLimit,
+    wakes: { ...DEFAULT_ORCHESTRATION_SETTINGS.wakes, ...overrides.wakes },
+    watchdog: { ...DEFAULT_ORCHESTRATION_SETTINGS.watchdog, ...overrides.watchdog },
+    github: { ...DEFAULT_ORCHESTRATION_SETTINGS.github, ...overrides.github },
+    gate: { ...DEFAULT_ORCHESTRATION_SETTINGS.gate, ...(overrides.gate ?? {}) },
+    roles,
+    // Where `worker_start` adds worktrees; unset means next to the caller's worktree.
+    ...(overrides.worktreeRoot ? { worktreeRoot: overrides.worktreeRoot } : {}),
+  };
+};
+
 const normalize = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
   const model = normalizeModel(value.defaultModel);
@@ -89,6 +257,7 @@ const normalize = (value) => {
     fallbackThinking = undefined;
   }
   const retryLimit = normalizeRetryLimit(value.defaultRetryLimit);
+  const orchestration = normalizeOrchestration(value.orchestration);
   return {
     version: 1,
     ...(model ? { defaultModel: model } : {}),
@@ -97,6 +266,7 @@ const normalize = (value) => {
     ...(Object.keys(thinkingByModel).length > 0 ? { defaultThinkingByModel: thinkingByModel } : {}),
     ...(fallbackThinking ? { defaultThinking: fallbackThinking } : {}),
     ...(retryLimit !== undefined ? { defaultRetryLimit: retryLimit } : {}),
+    ...(orchestration ? { orchestration } : {}),
   };
 };
 
@@ -133,6 +303,7 @@ export const createPiSettingsStore = ({ file = join(resolvePiChamberDataDir(), '
         ...(Object.hasOwn(patch, 'smallModel') ? { smallModel: patch.smallModel } : {}),
         ...(Object.hasOwn(patch, 'walkthroughModel') ? { walkthroughModel: patch.walkthroughModel } : {}),
         ...(Object.hasOwn(patch, 'defaultRetryLimit') ? { defaultRetryLimit: patch.defaultRetryLimit } : {}),
+        ...(Object.hasOwn(patch, 'orchestration') ? { orchestration: mergeOrchestration(current.orchestration, patch.orchestration) } : {}),
         defaultThinkingByModel: Object.hasOwn(patch, 'defaultThinkingByModel')
           ? mergeThinkingByModel(current.defaultThinkingByModel ?? {}, patch.defaultThinkingByModel)
           : (current.defaultThinkingByModel ?? {}),

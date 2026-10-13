@@ -18,6 +18,19 @@ const normalizeConclusion = (status, conclusion) => {
   return 'pending';
 };
 
+// `/commits/{sha}/statuses` lists every status ever set on the commit, so an
+// old pending or failure entry stays beside the later success of its context.
+// Only the latest entry per context is the current state.
+const latestPerContext = (statuses) => {
+  const latest = new Map();
+  for (const status of statuses) {
+    const key = status?.context || '';
+    const known = latest.get(key);
+    if (!known || String(status.created_at || '') > String(known.created_at || '')) latest.set(key, status);
+  }
+  return [...latest.values()];
+};
+
 export const rollupCheckStates = (runs) => {
   let success = 0;
   let failure = 0;
@@ -116,7 +129,7 @@ export const createChecksService = ({ client, now = Date.now } = {}) => {
       const runsResponse = runsSettled.ok ? runsSettled.response : { body: { check_runs: [] } };
       const statusesResponse = statusesSettled.ok ? statusesSettled.response : { body: [] };
       const runs = (runsResponse.body?.check_runs || []).map(mapCheckRun);
-      const statuses = (Array.isArray(statusesResponse.body) ? statusesResponse.body : []).map((status) => ({
+      const statuses = latestPerContext(Array.isArray(statusesResponse.body) ? statusesResponse.body : []).map((status) => ({
         id: status.id ?? null,
         context: status.context || '',
         state: status.state || null,

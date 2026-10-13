@@ -18,6 +18,8 @@ export const SEED_MANIFEST = {
     { project: 'lab-alpha', worktree: 'quick-find', title: 'Lab: project filter', role: 'worktree' },
     { title: 'Lab: quick chat', role: 'chat' },
     { folder: 'scratch', title: 'Lab: scratch notes', role: 'foreign' },
+    // Issue #107: an orchestrator on the scripted faux model (scripts/lab/faux-orchestration.mjs).
+    { project: 'lab-alpha', title: 'Lab: orchestrator', role: 'orchestrator' },
   ],
   // Linked worktrees of a project, checked out next to it as <project>-worktrees/<name>.
   // `git` is the state the git pills show (slice 5 of #95). Every worktree with a state
@@ -29,5 +31,8 @@ export const SEED_MANIFEST = {
     { project: 'lab-alpha', name: 'quick-find', git: 'ahead-behind' },
     // A rebase onto main stopped on a conflict.
     { project: 'lab-alpha', name: 'rebase-stop', git: 'rebase' },
+    // Tracks a branch on a local bare remote (slice 6 of #95). The remote has one commit
+    // the worktree has not fetched, so no `↓` shows until a fetch happens.
+    { project: 'lab-alpha', name: 'fetch-me', git: 'remote-ahead' },
   ],
 };

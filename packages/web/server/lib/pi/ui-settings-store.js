@@ -42,6 +42,7 @@ const PORTABLE_FIELDS = new Set([
   'cornerRadius', 'inputBarOffset', 'shortcutOverrides', 'commandTriggers',
   'favoriteModels', 'hiddenModels', 'collapsedModelProviders', 'recentModels',
   'recentAgents', 'recentEfforts', 'diffLayoutPreference', 'gitChangesViewMode',
+  'gitAutoFetchEnabled', 'gitAutoFetchIntervalMinutes',
   'filesViewShowGitignored', 'messageLimit',
   'responseStyleEnabled', 'responseStylePreset', 'responseStyleCustomInstructions',
   'draftStarters', 'draftStartersVisible', 'draftStartersScheduleTaskAdded',

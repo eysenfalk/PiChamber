@@ -35,6 +35,7 @@ import {
   type PiSettingsUpdateInput,
   type PiSettingsUpdateResponse,
   type PiChamberDefaultsUpdateInput,
+  type PiChamberDefaultsUpdateResponse,
   type PiProviderSetModelsInput,
   type PiProviderAddModelInput,
   type PiProviderConfigResponse,
@@ -872,9 +873,9 @@ export class PiService {
     });
   }
 
-  async setPiChamberDefaults(input: PiChamberDefaultsUpdateInput, scope?: PiClientScope): Promise<Pick<PiSettingsSnapshot, 'pichamber'>> {
+  async setPiChamberDefaults(input: PiChamberDefaultsUpdateInput, scope?: PiClientScope): Promise<PiChamberDefaultsUpdateResponse> {
     assertRuntimeUnchanged(scope);
-    return jsonRequest<PiChamberDefaultsUpdateInput, Pick<PiSettingsSnapshot, 'pichamber'>>('/api/pi/settings/defaults', {
+    return jsonRequest<PiChamberDefaultsUpdateInput, PiChamberDefaultsUpdateResponse>('/api/pi/settings/defaults', {
       method: 'PUT', body: input, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
     });
   }

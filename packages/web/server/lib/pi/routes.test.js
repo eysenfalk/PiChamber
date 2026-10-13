@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 
 import { projectEventFrame, registerPiRuntimeRoutes } from './routes.js';
+import { resolveOrchestrationSettings } from './settings-store.js';
 
 const listen = (app) => new Promise((resolve, reject) => {
   const server = app.listen(0, '127.0.0.1', () => resolve(server));
@@ -581,11 +582,15 @@ describe('Pi runtime route', () => {
     await expect((await fetch(base)).json()).resolves.toEqual({
       pi: { global: { defaultProvider: 'pi', defaultModel: 'model', defaultThinking: 'medium' }, project: { trusted: false } },
       pichamber: { version: 1, defaultModel: { providerId: 'pichamber', modelId: 'default' } },
+      orchestration: resolveOrchestrationSettings({}),
     });
     await expect((await fetch(`${base}/pi`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: 'global', defaultThinking: 'high' }) })).json()).resolves.toEqual({
       pi: { global: { defaultThinking: 'high' }, project: { trusted: false } },
     });
-    await expect((await fetch(`${base}/defaults`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultThinking: 'low' }) })).json()).resolves.toEqual({ pichamber: { version: 1, defaultThinking: 'low' } });
+    await expect((await fetch(`${base}/defaults`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ defaultThinking: 'low' }) })).json()).resolves.toEqual({
+      pichamber: { version: 1, defaultThinking: 'low' },
+      orchestration: resolveOrchestrationSettings({}),
+    });
   });
 
   it('projects native resources without exposing daemon filesystem paths', async () => {

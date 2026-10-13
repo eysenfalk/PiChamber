@@ -132,6 +132,8 @@ export type DesktopSettings = {
   recentEfforts?: Record<string, string[]>;
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side';
   gitChangesViewMode?: 'flat' | 'tree';
+  gitAutoFetchEnabled?: boolean;
+  gitAutoFetchIntervalMinutes?: 5 | 15 | 30 | 60;
   filesViewShowGitignored?: boolean;
 
   messageLimit?: number;

@@ -4,12 +4,15 @@ import type { GitWorktree } from '@/lib/api/types';
 import { useDeviceInfo } from '@/lib/device';
 import { applyTreeDrop } from './applyTreeDrop';
 import { ContainerRow, TreeGuides } from './TreeContainerRow';
+import { canShowQuickCreateButton } from './quickCreate';
 import { nodeLabel } from './treeNodeLabel';
 import { TreeDndItem, TreeDndProvider, type TreeDragPayload } from './treeDnd';
 import type { TreeDropData } from './treeDrop';
 import { buildTreeNodeMenu, type TreeFolderActions } from './treeNodeMenu';
 import { useTreeKeyboard } from './hooks/useTreeKeyboard';
+import { useAutoFetchScheduler } from './hooks/useAutoFetchScheduler';
 import { useWorktreeStatusScheduler } from './hooks/useWorktreeStatusScheduler';
+import type { AutoFetchRepository } from './autoFetchScheduler';
 import { ProjectDirtyPill, WorktreeGitPills } from './WorktreeGitPills';
 import { summarizeProjectDirty } from './worktreePills';
 import type { SessionNode } from './types';
@@ -179,6 +182,26 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   }, [rows]);
   const { statuses, refresh: refreshStatus } = useWorktreeStatusScheduler(statusPaths);
 
+  // Auto fetch runs once per repository of a visible project (its root), and refreshes that project's visible checkouts afterwards.
+  const { autoFetchRepositories, repositoryRootByPath } = React.useMemo(() => {
+    const repositories: AutoFetchRepository[] = [];
+    const rootByPath = new Map<string, string>();
+    for (const row of rows) {
+      const node = row.node;
+      if (node.kind !== 'project' || !node.directory) continue;
+      const worktreePaths: string[] = [];
+      const own = statusPathOf(node);
+      if (own) worktreePaths.push(own);
+      for (const worktree of projectWorktrees(node)) {
+        if (worktree.directory) worktreePaths.push(worktree.directory);
+      }
+      for (const path of worktreePaths) rootByPath.set(path, node.directory);
+      repositories.push({ root: node.directory, worktreePaths });
+    }
+    return { autoFetchRepositories: repositories, repositoryRootByPath: rootByPath };
+  }, [rows]);
+  const autoFetchStates = useAutoFetchScheduler(autoFetchRepositories, refreshStatus);
+
   // A session turn that ends may have changed its checkout, so refresh the worktrees that stopped running.
   const runningPaths = React.useMemo(() => {
     const running = new Set<string>();
@@ -213,7 +236,15 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   const gitFor = (row: TreeRow): React.ReactNode => {
     const own = statusPathOf(row.node);
     if (own) {
-      return <WorktreeGitPills directory={own} branch={row.node.worktree?.branch ?? null} record={statuses.get(own)} />;
+      const root = repositoryRootByPath.get(own);
+      return (
+        <WorktreeGitPills
+          directory={own}
+          branch={row.node.worktree?.branch ?? null}
+          record={statuses.get(own)}
+          autoFetch={root ? autoFetchStates.get(root) : undefined}
+        />
+      );
     }
     const worktrees = projectWorktrees(row.node);
     if (worktrees.length === 0 || row.expanded) return null;
@@ -266,6 +297,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   const menuFor = (node: TreeNode): React.ReactNode => buildTreeNodeMenu(node, {
     folders,
     onCreateFolder: createFolderIn,
+    onNewSession: onNewSessionIn,
     onOpenProjectEditDialog,
     onRemoveProject,
     onCloseWorktree,
@@ -284,6 +316,8 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
 
   // The design system strips focus rings globally; data-focus-ring="accent" is its opt-in.
   const treeItemClass = 'rounded-md';
+  // The treeitem is the hover and focus group of the row's quick create button.
+  const containerItemClass = 'group/row rounded-md';
 
   return (
     <TreeDndProvider
@@ -356,7 +390,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                 aria-level={row.depth + 1}
                 aria-expanded={row.node.children.length > 0 ? row.expanded : undefined}
                 aria-label={row.node.kind === 'folder' ? row.node.label : undefined}
-                className={treeItemClass}
+                className={containerItemClass}
               >
                 <ContainerRow
                   row={row}
@@ -368,6 +402,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                   mobileVariant={mobileVariant}
                   query={query}
                   git={gitFor(row)}
+                  onQuickCreate={canShowQuickCreateButton(row.node, { mobileVariant, hasTouchOnlyPointer }) ? onNewSessionIn : undefined}
                 />
               </div>
             </TreeDndItem>

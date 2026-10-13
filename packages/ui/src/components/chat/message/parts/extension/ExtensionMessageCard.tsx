@@ -3,6 +3,7 @@ import * as React from 'react';
 import { getPiSessionStore } from '@/apps/pi-session-store';
 import { buildCommandPromptText } from '@/lib/pi/command-triggers';
 import { parseExtensionChatItem } from '@/lib/pi/extension-ui';
+import { parseOrchestrationResult } from '@/lib/pi/orchestration-ui';
 import { parseSupervisorReply, parseSupervisorRequest } from '@/lib/pi/supervisor-ui';
 import type { ExtensionUiAction } from '@/lib/pi/extension-ui';
 import { cn } from '@/lib/utils';
@@ -12,6 +13,7 @@ import { iconSpriteData } from '@/components/icon/sprite';
 import type { IconName } from '@/components/icon/icons';
 import { MarkdownRenderer } from '../../../MarkdownRenderer';
 import { ExtensionDisclosureRow } from './ExtensionDisclosureRow';
+import { OrchestrationResultRow } from './OrchestrationResultRow';
 import { SupervisorReplyRow, SupervisorRequestRow } from './SupervisorMessageRow';
 
 interface ExtensionMessageCardProps {
@@ -200,7 +202,21 @@ export const ExtensionMessageCard: React.FC<ExtensionMessageCardProps> = ({
         () => parseSupervisorReply({ customType, data }),
         [customType, data],
     );
+    const orchestrationResult = React.useMemo(
+        () => parseOrchestrationResult({ customType, text, details }),
+        [customType, text, details],
+    );
 
+    if (orchestrationResult) {
+        return (
+            <OrchestrationResultRow
+                messageId={messageId}
+                result={orchestrationResult}
+                defaultExpanded={defaultExpanded}
+                className={className}
+            />
+        );
+    }
     if (supervisorRequest) {
         return (
             <SupervisorRequestRow

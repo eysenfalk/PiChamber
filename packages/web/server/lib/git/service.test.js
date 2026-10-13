@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import simpleGit from 'simple-git';
 
@@ -9,6 +10,7 @@ import {
   checkoutBranch,
   checkoutCommit,
   cherryPick,
+  fetch as gitFetch,
   createWorktree,
   getWorktreeBootstrapStatus,
   getWorktrees,
@@ -1405,5 +1407,89 @@ describe.runIf(canRunGit())('getRangeDiff', () => {
     const diff = await getRangeDiff(repository, { base: 'react', head: 'next' });
 
     expect(diff).toContain('feature.txt');
+  });
+});
+
+describe.runIf(canRunGit())('fetch', () => {
+  const originalEnv = { ...process.env };
+  const servers = [];
+
+  afterEach(async () => {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in originalEnv)) delete process.env[key];
+    }
+    Object.assign(process.env, originalEnv);
+    for (const server of servers.splice(0)) {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  /** A repository whose origin is an HTTP server running `onRequest`. */
+  const createRepositoryWithHttpOrigin = async (onRequest) => {
+    const requests = [];
+    const server = http.createServer((req, res) => {
+      requests.push(req.url);
+      onRequest(req, res);
+    });
+    servers.push(server);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const repository = createTempDir();
+    runGit(repository, ['init', '-b', 'main']);
+    runGit(repository, ['remote', 'add', 'origin', `http://127.0.0.1:${server.address().port}/repo.git`]);
+    return { repository, requests };
+  };
+
+  /** Hermetic git config, plus an askpass program that records being run. */
+  const isolateGitPrompts = () => {
+    const sandbox = createTempDir();
+    const marker = path.join(sandbox, 'askpass-ran');
+    const askpass = path.join(sandbox, 'askpass.sh');
+    fs.writeFileSync(askpass, `#!/bin/sh\ntouch '${marker}'\necho secret\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(sandbox, 'gitconfig'), '');
+    process.env.GIT_CONFIG_GLOBAL = path.join(sandbox, 'gitconfig');
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    process.env.GIT_ASKPASS = askpass;
+    process.env.SSH_ASKPASS = askpass;
+    delete process.env.GIT_TERMINAL_PROMPT;
+    return marker;
+  };
+
+  it('fails fast instead of prompting when the remote requires credentials', async () => {
+    const askpassMarker = isolateGitPrompts();
+    const { repository, requests } = await createRepositoryWithHttpOrigin((_req, res) => {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="repo"' });
+      res.end();
+    });
+
+    const startedAt = Date.now();
+    await expect(gitFetch(repository, {})).rejects.toThrow(/authentication failed|terminal prompts disabled|could not read/i);
+
+    expect(requests.length).toBeGreaterThan(0);
+    expect(fs.existsSync(askpassMarker)).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+
+  it('never reads a remote or branch name as a git option', async () => {
+    isolateGitPrompts();
+    const { repository } = await createRepositoryWithHttpOrigin((_req, res) => res.end());
+    const marker = path.join(createTempDir(), 'upload-pack-ran');
+
+    await expect(gitFetch(repository, { remote: `--upload-pack=touch ${marker}` })).rejects.toThrow();
+
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('kills a fetch that outlives its timeout', async () => {
+    isolateGitPrompts();
+    const { repository, requests } = await createRepositoryWithHttpOrigin(() => {
+      // Never answer: the fetch can only end by being killed.
+    });
+
+    const startedAt = Date.now();
+    await expect(gitFetch(repository, {}, { timeoutMs: 500 })).rejects.toThrow(/timed out/);
+
+    expect(requests.length).toBeGreaterThan(0);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
   });
 });

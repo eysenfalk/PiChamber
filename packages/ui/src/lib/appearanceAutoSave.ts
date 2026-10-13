@@ -32,6 +32,8 @@ type AppearanceSlice = {
   mobileKeyboardMode: MobileKeyboardMode;
   diffLayoutPreference: 'dynamic' | 'inline' | 'side-by-side';
   gitChangesViewMode: 'flat' | 'tree';
+  gitAutoFetchEnabled: boolean;
+  gitAutoFetchIntervalMinutes: 5 | 15 | 30 | 60;
 };
 
 let activeStop: (() => void) | null = null;
@@ -68,6 +70,8 @@ export const startAppearanceAutoSave = (): (() => void) => {
     mobileKeyboardMode: useUIStore.getState().mobileKeyboardMode,
     diffLayoutPreference: useUIStore.getState().diffLayoutPreference,
     gitChangesViewMode: useUIStore.getState().gitChangesViewMode,
+    gitAutoFetchEnabled: useUIStore.getState().gitAutoFetchEnabled,
+    gitAutoFetchIntervalMinutes: useUIStore.getState().gitAutoFetchIntervalMinutes,
   };
 
   const unsubscribe = useUIStore.subscribe((state) => {
@@ -98,6 +102,8 @@ export const startAppearanceAutoSave = (): (() => void) => {
       mobileKeyboardMode: state.mobileKeyboardMode,
       diffLayoutPreference: state.diffLayoutPreference,
       gitChangesViewMode: state.gitChangesViewMode,
+      gitAutoFetchEnabled: state.gitAutoFetchEnabled,
+      gitAutoFetchIntervalMinutes: state.gitAutoFetchIntervalMinutes,
     };
 
     const diff: Partial<DesktopSettings> = {};
@@ -178,6 +184,12 @@ export const startAppearanceAutoSave = (): (() => void) => {
     }
     if (current.gitChangesViewMode !== previous.gitChangesViewMode) {
       diff.gitChangesViewMode = current.gitChangesViewMode;
+    }
+    if (current.gitAutoFetchEnabled !== previous.gitAutoFetchEnabled) {
+      diff.gitAutoFetchEnabled = current.gitAutoFetchEnabled;
+    }
+    if (current.gitAutoFetchIntervalMinutes !== previous.gitAutoFetchIntervalMinutes) {
+      diff.gitAutoFetchIntervalMinutes = current.gitAutoFetchIntervalMinutes;
     }
 
     previous = current;

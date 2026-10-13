@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 // PiChamber's parent may point PI_PACKAGE_DIR into an Electron asar.
 const packageDir = process.env.PI_PACKAGE_DIR;
 delete process.env.PI_PACKAGE_DIR;
-const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES } = await import('./seed.mjs');
+const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES, remotePath } = await import('./seed.mjs');
 if (packageDir !== undefined) process.env.PI_PACKAGE_DIR = packageDir;
 
 test('SDK-written fixtures round trip, list per project, link a subsession and keep recency order', async () => {
@@ -49,6 +49,15 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(Buffer.byteLength(forkText) - renameAt).toBeGreaterThan(FORK_WORK_AFTER_RENAME_BYTES);
     expect(Buffer.byteLength(forkText)).toBeGreaterThan(512 * 1024);
     expect((await stat(long.path)).mtimeMs).toBeGreaterThan((await stat(seed.sessions.find((s) => s.project === 'lab-beta').path)).mtimeMs);
+    // Orchestration (#107): the orchestrator runs on the faux model the seeded extension registers.
+    const orchestrator = seed.sessions.find((s) => s.role === 'orchestrator');
+    const orchestratorModel = SessionManager.open(orchestrator.path).getEntries().find((e) => e.type === 'model_change');
+    expect([orchestratorModel.provider, orchestratorModel.modelId]).toEqual(['faux', 'faux-1']);
+    const extension = await readFile(join(root, 'pi-agent/extensions/faux-orchestration.js'), 'utf8');
+    expect(extension).toContain('pi.registerProvider(faux.provider)');
+    expect(extension).toContain(JSON.stringify(orchestrator.directory));
+    // The pod's memory is below the host gate's minimum, so the seed switches the gate off for the lab server.
+    expect(JSON.parse(await readFile(join(root, 'pichamber/pi/settings.json'), 'utf8'))).toEqual({ version: 1, orchestration: { gate: { enabled: false } } });
     // Sidebar tree fixtures: committed projects, linked worktrees, a fork chain, a home chat and a foreign folder.
     const alpha = seed.projects.find((p) => p.name === 'lab-alpha');
     const worktrees = spawnSync('git', ['-C', alpha.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout;
@@ -60,6 +69,19 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
       const branchLine = spawnSync('git', ['-C', path, 'status', '--short', '--branch'], { encoding: 'utf8' }).stdout.split('\n')[0];
       if (worktree.git === 'dirty') expect(branchLine).toBe(`## ${worktree.name}...main [behind 1]`);
       if (worktree.git === 'ahead-behind') expect(branchLine).toBe(`## ${worktree.name}...main [ahead 2, behind 1]`);
+      if (worktree.git === 'remote-ahead') {
+        // Tracks the bare remote and shows neither ahead nor behind: the remote's extra commit is not fetched yet.
+        expect(branchLine).toBe(`## ${worktree.name}...origin/${worktree.name}`);
+        const remote = remotePath(root, worktree.project);
+        const remoteHead = spawnSync('git', ['-C', remote, 'rev-parse', `refs/heads/${worktree.name}`], { encoding: 'utf8' }).stdout.trim();
+        const trackingHead = spawnSync('git', ['-C', path, 'rev-parse', `refs/remotes/origin/${worktree.name}`], { encoding: 'utf8' }).stdout.trim();
+        expect(remoteHead).not.toBe(trackingHead);
+        expect(spawnSync('git', ['-C', remote, 'rev-list', '--count', `${trackingHead}..${remoteHead}`], { encoding: 'utf8' }).stdout.trim()).toBe('1');
+        // The fetch Auto fetch runs makes the remote commit visible as one behind.
+        expect(spawnSync('git', ['-C', alpha.path, 'fetch', '--quiet', 'origin'], { encoding: 'utf8' }).status).toBe(0);
+        expect(spawnSync('git', ['-C', path, 'status', '--short', '--branch'], { encoding: 'utf8' }).stdout.split('\n')[0])
+          .toBe(`## ${worktree.name}...origin/${worktree.name} [behind 1]`);
+      }
       const session = seed.sessions.find((s) => s.worktree === worktree.name);
       if (!session) continue;
       expect(session.directory).toBe(path);
