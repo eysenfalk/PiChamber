@@ -168,6 +168,7 @@ export const recordSession = (document, opId, caller, session, at) => {
     ...(intent.thinking ? { thinking: intent.thinking } : {}),
     ...(intent.issue ? { issue: intent.issue } : {}),
     ...(intent.branch ? { branch: intent.branch } : {}),
+    ...(intent.servesPr ? { servesPr: intent.servesPr } : {}),
     ...(session.sessionFile ? { sessionFile: session.sessionFile } : {}),
     ...(operation.process ? { process: operation.process } : {}),
     state: 'starting',

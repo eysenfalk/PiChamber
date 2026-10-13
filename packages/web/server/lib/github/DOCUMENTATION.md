@@ -26,6 +26,8 @@ mobile, and Capacitor share one code path. Tokens never reach a client.
     metadata loader.
   - `templates.js`: issue-template listing (`.github/ISSUE_TEMPLATE/*.md`
     via the contents API, YAML forms skipped) with a 5 min TTL cache.
+  - `merge-lookup.js`: uncached merge reads for the orchestrator's worker
+    cleanup (see below).
   - `pulls.js` / `issues.js` / `checks.js`: domain reads and mutations with
     TTL caches and stale fallback. Detail/comment reads request
     `Accept: application/vnd.github.full+json` (`FULL_ACCEPT` in `pulls.js`)
@@ -283,3 +285,15 @@ inside a retry window.
 - `loadGitService` in `routes.js` dynamically imports
   `lib/git/service.js`: do not statically import the git module from here
   (it is under concurrent refactor and must degrade gracefully).
+
+## Merge lookup for worker cleanup (#118)
+
+`merge-lookup.js` (`createMergeLookup`) gives the session daemon the proof
+behind `worker_cleanup`: `pullForBranch` runs `findPullForBranch` (an open
+pull request first, else the latest closed one) and `pullByNumber` one REST
+read, both reduced to `{ number, state, mergedAt, headSha, url }`. It builds
+its own credential store and pulls service, so nothing is shared with the
+route caches, and it reads `github.com` only. The module runs in the daemon
+process: it needs `gh` on the login shell PATH, not the HTTP server. Errors
+(including rate limits) propagate, and the caller refuses the cleanup; a
+missing pull request is `null`, never a merge.

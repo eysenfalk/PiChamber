@@ -16,6 +16,16 @@ const clientRequestId = {
   description: 'Idempotency key. Use a new value per intent and the same value when retrying it.',
 };
 const questionId = { type: 'string', minLength: 1, maxLength: 64 };
+const pullRequestRef = (description) => ({
+  type: 'object',
+  additionalProperties: false,
+  required: ['repo', 'number'],
+  description,
+  properties: {
+    repo: { type: 'string', pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', maxLength: 200, description: 'owner/repo' },
+    number: { type: 'integer', minimum: 1 },
+  },
+});
 const RUN_STATUS = 'Each session reports state, the outcome and error of its last turn, and while it runs an activity object: runningForMs, quietForMs since its transcript last changed, retry with the provider error during an automatic retry, and waitingForInput when a dialog blocks it.';
 const thinking = { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] };
 const model = {
@@ -55,6 +65,7 @@ export const ORCHESTRATION_TOOLS = [
         },
         model,
         thinking,
+        servesPr: pullRequestRef('For a helper without its own branch (review, research, oracle): the pull request it serves. worker_cleanup deletes the helper once that pull request is merged.'),
         mode: { type: 'string', enum: ['async', 'wait'] },
         timeoutMs: { type: 'integer', minimum: 0, maximum: 3600000 },
         clientRequestId,
@@ -176,6 +187,13 @@ export const ORCHESTRATION_TOOLS = [
         clientRequestId,
       },
     },
+  },
+  {
+    name: 'worker_cleanup',
+    label: 'Clean up worker',
+    description: 'After the owner merged a worker\'s pull request (pr_merged): remove its worktree (never forced), its local branch, its remote branch and its session, and forget the worker. Runs only when a merged pull request exists for exactly the worker\'s branch, its head is the local tip, the worktree is clean and no run is live; otherwise it removes nothing and returns the reason. Never main or dev. A helper spawned with servesPr loses only its session, once that pull request is merged. A failed step names itself; call again to continue.',
+    childAllowed: false,
+    parameters: { type: 'object', additionalProperties: false, required: ['sessionId'], properties: { sessionId } },
   },
   {
     name: 'orchestration_takeover',

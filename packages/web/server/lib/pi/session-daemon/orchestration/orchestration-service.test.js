@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -2301,5 +2301,142 @@ describe('worker_start', () => {
     const harness = setup({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: true, minAvailableBytes: 8 * GIB }, roles: ROLES, worktreeRoot: root }) } });
     await expect(harness.service.call('orch', 'worker_start', args)).resolves.toMatchObject({ worktree: join(root, '7-fix') });
     await expectCode(harness.service.call('worker-1', 'worker_start', { ...args, clientRequestId: 'start-8', branchName: '8-fix' }), 'ORCHESTRATION_FORBIDDEN');
+  });
+});
+
+describe('worker_cleanup', () => {
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { encoding: 'utf8' }).trim();
+  const MERGED_AT = '2026-10-13T12:00:00Z';
+
+  // A github.com repository on `dev` (origin rewritten to a bare remote) and
+  // a worker worktree on 9-fix with one pushed commit; the owner squash
+  // merged it into dev, so `git branch -d` would refuse.
+  const setup = async ({ pr = 'merged', overrides = {} } = {}) => {
+    const root = mkdtempSync(join(tmpdir(), 'pichamber-worker-cleanup-'));
+    const remote = join(root, 'remote.git');
+    const repo = join(root, 'repos', 'main');
+    const worktree = join(root, 'repos', '9-fix');
+    mkdirSync(repo, { recursive: true });
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'dev', remote]);
+    git(repo, 'init', '-q', '-b', 'dev');
+    writeFileSync(join(repo, 'README.md'), 'hello\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'initial');
+    git(repo, 'remote', 'add', 'origin', 'git@github.com:acme/app.git');
+    git(repo, 'config', `url.${remote}.insteadOf`, 'git@github.com:acme/app.git');
+    git(repo, 'push', '-q', 'origin', 'dev');
+    git(repo, 'worktree', 'add', '-q', '-b', '9-fix', worktree);
+    writeFileSync(join(worktree, 'fix.txt'), 'fix\n');
+    git(worktree, 'add', '.');
+    git(worktree, 'commit', '-q', '-m', 'fix');
+    git(worktree, 'push', '-q', 'origin', '9-fix');
+    const headSha = git(worktree, 'rev-parse', 'HEAD');
+    git(repo, 'merge', '-q', '--squash', '9-fix');
+    git(repo, 'commit', '-q', '-m', 'fix (#5)');
+    git(repo, 'push', '-q', 'origin', 'dev');
+    const read = { number: 5, state: pr, mergedAt: pr === 'merged' ? MERGED_AT : null, headSha, url: '' };
+    const pullLookup = { pullForBranch: vi.fn(async () => read), pullByNumber: vi.fn(async () => read) };
+    const deleteSession = vi.fn(async () => {});
+    const harness = createHarness({ overrides: { pullLookup, deleteSession, ...overrides } });
+    harness.orchestrator.cwd = repo;
+    const { sessionId } = await harness.service.call('orch', 'session_spawn', { cwd: worktree, task: 'fix 9' });
+    await harness.settle(sessionId, 'done');
+    const branchExists = () => git(repo, 'branch', '--list', '9-fix') !== '';
+    const remoteExists = () => git(repo, 'ls-remote', '--heads', 'origin', 'refs/heads/9-fix') !== '';
+    const cleanup = () => harness.service.call('orch', 'worker_cleanup', { sessionId });
+    return { ...harness, root, remote, repo, worktree, headSha, read, pullLookup, deleteSession, sessionId, branchExists, remoteExists, cleanup };
+  };
+
+  it('removes worktree, local and remote branch, then the session, and forgets the worker after a squash merge', async () => {
+    const h = await setup();
+    const result = await h.cleanup();
+
+    expect(result).toEqual({ sessionId: h.sessionId, removed: [`worktree ${h.worktree}`, 'branch 9-fix', 'origin 9-fix', `session ${h.sessionId}`] });
+    expect(h.pullLookup.pullForBranch).toHaveBeenCalledWith({ repository: 'acme/app', branch: '9-fix' });
+    expect(existsSync(h.worktree)).toBe(false);
+    expect(h.branchExists()).toBe(false);
+    expect(h.remoteExists()).toBe(false);
+    expect(h.deleteSession).toHaveBeenCalledWith(h.sessionId);
+    expect(await h.workers()).toEqual({});
+  });
+
+  it.each([
+    ['an open pull request', { pr: 'open' }, () => {}, /still open/],
+    ['a closed unmerged pull request', { pr: 'closed' }, () => {}, /ask the owner/],
+    ['a commit after the merged head', {}, (h) => { writeFileSync(join(h.worktree, 'more.txt'), 'x\n'); git(h.worktree, 'add', '.'); git(h.worktree, 'commit', '-q', '-m', 'more'); }, /not at the merged head/],
+    ['a dirty worktree', {}, (h) => writeFileSync(join(h.worktree, 'scratch.txt'), 'x\n'), /uncommitted/],
+    ['a live run', {}, (h) => h.states.set(h.sessionId, 'busy'), /running or waiting/],
+    ['a failed lookup', {}, (h) => h.pullLookup.pullForBranch.mockRejectedValueOnce(new Error('gh auth missing')), /lookup failed: gh auth missing/],
+  ])('refuses %s and removes nothing', async (_name, options, arrange, reason) => {
+    const h = await setup(options);
+    arrange(h);
+    const result = await h.cleanup();
+
+    expect(result).toMatchObject({ removed: [], reason: expect.stringMatching(reason) });
+    expect(existsSync(h.worktree)).toBe(true);
+    expect(h.branchExists()).toBe(true);
+    expect(h.remoteExists()).toBe(true);
+    expect(h.deleteSession).not.toHaveBeenCalled();
+    expect(Object.keys(await h.workers())).toEqual([h.sessionId]);
+  });
+
+  it('names the failed step and continues on the next call', async () => {
+    const h = await setup();
+    git(h.repo, 'config', '--unset', `url.${h.remote}.insteadOf`);
+    git(h.repo, 'config', `url.${join(h.root, 'missing.git')}.insteadOf`, 'git@github.com:acme/app.git');
+
+    await expect(h.cleanup()).rejects.toMatchObject({ code: 'WORKER_CLEANUP_FAILED', details: { step: 'remote', removed: [`worktree ${h.worktree}`, 'branch 9-fix'] } });
+    expect(Object.keys(await h.workers())).toEqual([h.sessionId]);
+
+    git(h.repo, 'config', '--unset', `url.${join(h.root, 'missing.git')}.insteadOf`);
+    git(h.repo, 'config', `url.${h.remote}.insteadOf`, 'git@github.com:acme/app.git');
+    await expect(h.cleanup()).resolves.toEqual({ sessionId: h.sessionId, removed: ['origin 9-fix', `session ${h.sessionId}`] });
+    expect(h.remoteExists()).toBe(false);
+    expect(await h.workers()).toEqual({});
+  });
+
+  it('leaves a remote branch that moved after the merge (lease)', async () => {
+    const h = await setup();
+    const other = join(h.root, 'other');
+    execFileSync('git', ['clone', '-q', '-b', '9-fix', h.remote, other]);
+    writeFileSync(join(other, 'late.txt'), 'late\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-q', '-m', 'late');
+    git(other, 'push', '-q', 'origin', '9-fix');
+
+    await expect(h.cleanup()).rejects.toMatchObject({ code: 'WORKER_CLEANUP_FAILED', details: { step: 'remote' } });
+    expect(h.remoteExists()).toBe(true);
+  });
+
+  it('refuses the main checkout of a repository', async () => {
+    const h = await setup();
+    await h.registry.update((document) => { document.workers[h.sessionId].cwd = h.repo; });
+    const result = await h.cleanup();
+    expect(result).toMatchObject({ removed: [], reason: expect.stringMatching(/main checkout/) });
+    expect(h.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it('deletes only the session of a helper bound by servesPr once its pull request is merged', async () => {
+    const read = { number: 5, state: 'open', mergedAt: null, headSha: 'a'.repeat(40), url: '' };
+    const pullLookup = { pullForBranch: vi.fn(), pullByNumber: vi.fn(async () => read) };
+    const deleteSession = vi.fn(async () => {});
+    const harness = createHarness({ overrides: { pullLookup, deleteSession } });
+    const { sessionId } = await harness.service.call('orch', 'session_spawn', { cwd: '/work/review', task: 'review PR 5', servesPr: { repo: 'acme/app', number: 5 } });
+    await harness.settle(sessionId, 'done');
+    expect((await harness.workers())[sessionId].servesPr).toEqual({ repo: 'acme/app', number: 5 });
+
+    await expect(harness.service.call('orch', 'worker_cleanup', { sessionId })).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/still open/) });
+    Object.assign(read, { state: 'merged', mergedAt: MERGED_AT });
+    await expect(harness.service.call('orch', 'worker_cleanup', { sessionId })).resolves.toEqual({ sessionId, removed: [`session ${sessionId}`] });
+    expect(pullLookup.pullByNumber).toHaveBeenCalledWith({ repository: 'acme/app', number: 5 });
+    expect(await harness.workers()).toEqual({});
+  });
+
+  it('is the owning orchestrator\'s tool only', async () => {
+    const h = await setup();
+    await expectCode(h.service.call(h.sessionId, 'worker_cleanup', { sessionId: h.sessionId }), 'ORCHESTRATION_FORBIDDEN');
+    h.runtimes.set('other-orch', createRuntime({ sessionId: 'other-orch' }));
+    await expectCode(h.service.call('other-orch', 'worker_cleanup', { sessionId: h.sessionId }), 'ORCHESTRATION_FORBIDDEN');
+    expect(existsSync(h.worktree)).toBe(true);
   });
 });
