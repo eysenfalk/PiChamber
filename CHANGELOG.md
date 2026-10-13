@@ -4,7 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- **Pi 1.1.0 (#93).** The server and session daemon run on Pi SDK 1.1.0 instead of 1.0.2. The daemon advertises its extension runner, so extensions that wrap tool execution, such as pi-fabric 0.114, no longer fail every non-read tool with "unavailable until extension tool hooks initialize".
+## [1.0.8] - 2026-10-13
+
+Pi 1.1.0, the workspace tree in the sidebar and worker orchestration since 1.0.7. Release 1.0.7 build 8 was an Android-only prerelease.
+
+- **Pi 1.1.0 (#93, #94).** The server and session daemon run on Pi SDK 1.1.0 instead of 1.0.2. The daemon advertises its extension runner, so extensions that wrap tool execution, such as pi-fabric 0.114, no longer fail every non-read tool with "unavailable until extension tool hooks initialize".
+- **Extension state stays out of the chat (#101, #102).** Entries an extension appends with `pi.appendEntry`, such as `sandy-context.notebook` and `sandy-context.summary`, no longer get a chat row. They stay in the session history, like in the Pi TUI.
+- **One workspace tree in the sidebar (#95).** Projects, worktrees, folders and sessions live in one tree that replaces both sidebar areas, with drag and drop, folders and keyboard navigation; selecting a project or worktree opens no session (#100, #105, #109). An eye menu picks which projects the tree shows, and the search box searches projects, branches and sessions, including hidden projects (#111). Every visible worktree row shows its change state, ahead and behind, conflicts and pull request (#114), kept current by an optional **Auto fetch** that never waits on a credential prompt (#121). One click on a workspace row starts a session there (#123).
+- **Worker orchestration (#107, #115).** An agent in a PiChamber session can start full PiChamber sessions as workers through the `pichamber` MCP tools, steer them and get their results back without blocking. Workers are ordinary sessions nested under their parent (#113). A fixed orchestrator session owns its workers in a durable registry with reserved slots and takeover (#125), gets structured worker reports and one compact digest (#127), is woken when a worker finishes, fails, asks or stalls (#129), can rewind a worker to an earlier entry (#131), starts branch, worktree and worker in one call (#130), checks host capacity before a start (#119), watches pull requests (#132) and removes a worker's worktree, branches and session only after a proven merge (#133). The `orchestrator` project skill describes the practice (#112).
 
 ## [1.0.7] - 2026-10-05
 
