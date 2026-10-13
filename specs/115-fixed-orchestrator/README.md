@@ -1,37 +1,59 @@
 # 115. Fixed orchestrator
 
-Temporary spec for #115 with its parts #116, #117, #118 and #119 ([ADR 0009](../../docs/adr/0009-spec-folder-for-multi-pr-features.md)). The last pull request of the feature deletes this folder after moving what must last into `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md`, the `orchestrator` skill, `lab/README.md` and a decision record.
+Temporary spec for #115 with its parts #116, #117, #118 and #119 ([ADR 0009](../../docs/adr/0009-spec-folder-for-multi-pr-features.md)). The last pull request of the feature (slice 8) deletes this folder after moving what must last into `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md`, the `orchestrator` skill, `lab/README.md` and a decision record.
 
 ## Next agent prompt
 
-Status 2026-10-12: plan only, nothing implemented. Revised after two reviews on #120 (round 1: B1 to B6, S1 to S10; round 2: R2-B1 to R2-B4, R2-S1 to R2-S7); the plan waits for the orchestrator's approval in that pull request. Slice 1 needs #110 (PR #112) merged, because it is the first slice that edits the `orchestrator` skill, and it needs #107 (PR #113).
+Status 2026-10-12: slice 1 built (PR #125), slice 2 built (PR #127, stacked on #125). Slices 3 to 10 of the reviewed plan were cut to six slices under the owner rule "no overengineering": build only what solves a real problem the owner has, at most two review rounds per pull request, the second only on findings of the first. Slice files 1 and 2 still use the old numbers: old 3 and 4 are now 3, old 5 is 4, old 6 is 5, old 8 is 6, old 7 stays 7, old 9 and 10 are 8.
 
-You are picking up the fixed orchestrator. Read this README, then the slice file of the next open slice, then `AGENTS.md`, `docs/workflow.md`, `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md` and every project skill the slice names. Work in one branch and one draft pull request per slice. Start a slice only after the slices it depends on (see Ladder) are merged into `dev`, and base it on `origin/dev`. The one exception is slice 1 and #113: if #113 is not in `dev` when slice 1 starts, slice 1 branches from `origin/107-orchestration-mcp`, its draft pull request targets `dev` and names #113 as the base it waits for, and it is rebased onto `dev` after #113 merges and before it leaves draft. Do not implement before the plan of your slice's pull request is approved.
+You are picking up the fixed orchestrator. Read this README, then the slice file of your slice, then `AGENTS.md`, `docs/workflow.md`, `packages/web/server/lib/pi/session-daemon/DOCUMENTATION.md` and every project skill the slice names. One branch and one draft pull request per slice, based on `origin/dev` once the slices it depends on are merged (slices 1 and 2 stack on #113 until it merges, as their pull requests say). Build the slice's contract and its tests; the "Bewusst nicht gebaut" list of each slice is binding, so a reviewer finding that asks for one of those items is answered with that list, not with code. Do not implement before the plan of your slice's pull request is approved.
 
-Next pickup: [slice 1, Registry, reservation and takeover](slices/1-registry.md).
+Next pickup: [slice 3, Wakes and watchdog](slices/3-wakes-watchdog.md), [slice 5, Host gate](slices/5-host-gate.md) and [slice 6, Worker start](slices/6-worker-start.md), in parallel, once slice 2 is merged.
 
-Blockers: none for slice 1 beyond #112. Roles are the eleven confirmed by the owner: `orchestrate`, `plan`, `oracle`, `debug`, `task-easy`, `task-medium`, `task-hard`, `task-extreme`, `research`, `small`, `review`. Compared revisions: #113 at `ff510a92` (`ORCHESTRATION_ROLES` in `settings-store.js:77`, enum in `orchestration/tool-contracts.js:52`) and #112 at `0c9683d9` (`.agents/skills/orchestrator/SKILL.md:71-87`) both use exactly these names. Slice 1 checks again that the merged state still does; if not, stop and report.
+Roles are the eleven confirmed by the owner: `orchestrate`, `plan`, `oracle`, `debug`, `task-easy`, `task-medium`, `task-hard`, `task-extreme`, `research`, `small`, `review`.
 
 Global TODO:
 
-- [ ] [1 Registry, reservation and takeover](slices/1-registry.md) (part of #118), `task-hard`
-- [ ] [2 Worker reports and digest](slices/2-reports-digest.md) (part of #117), `task-hard`
-- [ ] [3 Event bus](slices/3-event-bus.md) (part of #116), `task-hard`
-- [ ] [4 Watchdog and lab proof base](slices/4-watchdog.md) (closes #117, part of #116), `task-hard`
-- [ ] [5 Rewind and safe remedy](slices/5-rewind-remedy.md) (closes #116 only for a proven safe case), `task-hard` with `debug`
-- [ ] [6 Resource gate and lab lease](slices/6-resource-gate-lab-lease.md) (part of #119), `task-hard`
-- [ ] [7 GitHub events](slices/7-github-events.md) (closes #119), `task-hard`
-- [ ] [8 Worker start](slices/8-worker-start.md) (part of #118), `task-extreme`
-- [ ] [9 Cleanup and delete](slices/9-cleanup.md) (closes #118), `task-extreme`
-- [ ] [10 End to end and close out](slices/10-close-out.md) (closes #115, deletes this folder), `task-medium`
+- [ ] [1 Registry, reservation and takeover](slices/1-registry.md) (part of #118), `task-hard`, built in #125
+- [ ] [2 Worker reports and digest](slices/2-reports-digest.md) (part of #117), `task-hard`, built in #127
+- [ ] [3 Wakes and watchdog](slices/3-wakes-watchdog.md) (closes #117, part of #116), `task-hard`
+- [ ] [4 Rewind](slices/4-rewind.md) (closes #116), `task-medium`
+- [ ] [5 Host gate and lab holder](slices/5-host-gate.md) (part of #119), `task-medium`
+- [ ] [6 Worker start](slices/6-worker-start.md) (part of #118), `task-hard`
+- [ ] [7 Pull request watch](slices/7-pr-watch.md) (closes #119), `task-medium`
+- [ ] [8 Cleanup and close out](slices/8-cleanup-close-out.md) (closes #118 and #115, deletes this folder), `task-hard`
 
 When you finish a slice: check its box, update the status line and the next pickup, and correct anything in this spec the work proved wrong, in the same pull request.
 
 ## Goal
 
-The orchestrator session works on events and digests instead of polling and raw transcripts. It is woken when a worker finishes, asks, fails or stalls, or when its pull request changes; it sees every worker in one compact call; its bookkeeping lives in PiChamber, not in its context; starting a worker for an issue and cleaning up after the merge are one call each. The orchestrator itself does no implementation work.
+One fixed orchestrator keeps the workers going and spends few tokens doing it. It is woken when a worker finishes, asks, fails or stalls, or when its pull request changes; it sees every worker in one compact digest; its bookkeeping lives in PiChamber, not in its context; starting a worker for an issue and cleaning up after the merge are one call each. The orchestrator itself does no implementation work.
 
-Non goals: worker depth beyond 1, token or cost budgets, the decision inbox (#87), an orchestrator view (#20), new session states in the UI (#106), a settings UI for the new switches, a new dependency.
+Non goals: worker depth beyond 1, token or cost budgets, automatic remedies, automatic cleanup, the decision inbox (#87), an orchestrator view (#20), new session states in the UI (#106), a settings UI for the new switches, lab recordings for daemon behaviour, a new dependency.
+
+## Cut of 2026-10-12
+
+| Old slice | New | Reason |
+|---|---|---|
+| 3 Event bus | merged into 3 | An in-memory queue routed to the registry owner at send time wakes the orchestrator; batch ids, acknowledgement, owner generations and the takeover lock guarded crash races that cost one duplicate or one missed wake, and the digest covers both. |
+| 4 Watchdog and lab proof base | merged into 3 | Detection is a small part of the wake path; the lab scripted provider, seed remote and tours were infrastructure for recordings that the faux provider e2e replaces. |
+| 5 Rewind and safe remedy | 4 Rewind | The wake brings the failure to the orchestrator within seconds, so a manual `session_rewind` solves the stuck worker without a reproduction study and a safety classifier. |
+| 6 Resource gate and lab lease | 5 Host gate and lab holder | `flock` plus the pod's checkout label already give the lab one holder; only a holder whose worktree is gone was a real block, and the command classifier added nothing the load numbers do not show. |
+| 7 GitHub events | 7 Pull request watch | CI result, merge and close from the existing reader plus comment counts are what the orchestrator acts on; the paginated comment reader and persisted cursor were for exactly once comment events nobody needs. |
+| 8 Worker start | 6 Worker start | One synchronous call that reuses what exists keeps the one-call start; the step journal, `start_failed` events and `worker_abandon` handled cases the orchestrator sees directly in the tool result. |
+| 9 Cleanup and delete | merged into 8 | One `worker_cleanup` tool the orchestrator calls after `pr_merged`, behind the merge guard, keeps the owner rule; automatic cleanup, the journal and a separate `session_delete` were extra paths to the same result. |
+| 10 End to end and close out | merged into 8 | No new behaviour: each slice proves its part, and moving the documentation fits into the last slice. |
+
+Size of slices 3 to 10: before 2 750 to 4 150 lines in eight pull requests, after 1 450 to 2 200 lines in six.
+
+## Proposed issue changes
+
+For the orchestrator to decide; this plan does not edit issues.
+
+- #116: "Known failures with a safe remedy are handled automatically" becomes: a failure wakes the orchestrator with the error line, and `session_rewind` lets it move the worker back. Done when: the lab criteria become a daemon e2e test with the faux provider; the remedy is the manual rewind in that test.
+- #117: "the lab shows a worker reporting" becomes the faux provider e2e plus one screenshot of the events message.
+- #118: "removed unless the owner switched that off" becomes "removed by one orchestrator call after the proven merge"; "in the lab" becomes tests with a temp repository and a bare remote.
+- #119: the lab lock is the existing pod holder, released by `down` or when the holder's worktree is gone, with no timeout; "which workers are building, testing or using the lab" becomes host load and memory in the digest plus `lab/run status`; "review comments" become comment count changes; the lab refusal is shown in a host terminal transcript, because the lab container has no podman.
 
 ## Decisions
 
@@ -39,137 +61,101 @@ Taken by this plan. The owner can overturn any of them; each names the slice tha
 
 | # | Decision | Slice |
 |---|---|---|
-| O1 | One durable **orchestration registry** in the daemon, a JSON file next to the other PiChamber stores (`<dataDir>/pi/orchestration-registry.json`, per-file lock, atomic replace, one serialised `update`). It owns ownership of workers, their bookkeeping state, start operations with their reservations, reports, open questions and pending events. The parent's #107 JSONL child entries are imported once and then no longer read. The worker's own lineage entry stays: it marks a session as a worker and keeps sidebar nesting. | 1 |
-| O2 | Live state (busy, idle, retry, waiting for input, running commands) is never stored. It comes from the daemon's live channels. Facts that must survive disposal (last progress, last error, usage total) are snapshots written at settle and shown with their time; a value the daemon does not know is `null`, never zero. | 1, 2 |
-| O3 | A slot is a **reservation** taken in the same registry `update` that checks the limit, for `session_spawn` and `worker_start` alike, before any side effect. A start is a durable operation with a generated `opId` that may exist before its session (B1); `(orchestratorId, clientRequestId)` only looks it up and gets a second key on takeover (R2-S3). A worker stays `starting` until its session is on disk, so a crash before Pi writes the JSONL is resumed, not lost (R2-B1). | 1, 8 |
-| O4 | One **authorisation policy** in the service decides every tool call from the caller's role (worker or orchestrator, by lineage) and registry ownership of the target, after schema validation and before any side effect. Inline and MCP adapters reach the same check; tool visibility is not a permission (S10). | 1 |
-| O5 | Workers report through `worker_report` with the #112 status words. `done` needs a pull request or a stated reason for none, and evidence. A question has an id and closes only through a report or `session_send` with a matching `resolves`; a second question while one is open is refused unless it resolves the first (S1, R2-S1). | 2 |
-| O6 | All wakes go through one **event bus** per orchestrator, delivered as one `pichamber.orchestration.events` message per burst. A delivery claims a batch with an id and acknowledges exactly that batch's events; an unclear send is resolved by looking for the batch id in the orchestrator's session before sending again. Claim, send and acknowledgement run under one in-process delivery lock per owner; takeover is refused while the old owner's lock is held, moves pending events, resolves a crashed in-flight batch against the old session before moving it, and bumps an owner generation, so an old sender can neither acknowledge nor deliver (B4, R2-B4). The per-settle `pichamber.orchestration.result` message of #107 goes away. | 3 |
-| O7 | The **watchdog** is daemon code fed by the daemon's own events plus one 15 second tick, for registered workers only. Thresholds are settings. | 4 |
-| O8 | **Auto rewind only for a proven safe case**: the failing assistant message has exactly one tool call, that tool is read-only, and nothing follows it. The worker is rewound to just before that message and told what went wrong; the original task is not sent again. Every other match is reported, and `session_rewind` is there for the orchestrator. #116's remedy criterion counts as met only for that case (B6). | 5 |
-| O9 | The worker limit counts reserved operations plus `starting` and `active` workers of the whole daemon. A `done` report frees nothing until its run settles, and a new run of a `done` or `stopped` worker reserves at the daemon's one input path, for UI prompts and `session_send` alike (R2-B2). Spawning also refuses when the 1 minute load is above the core count or less than 8 GiB is available (`MemAvailable`), with the numbers in the reason; the check runs at reservation time. | 1, 6 |
-| O10 | The **lab lease is enforced in `lab/run` itself**: a lease file under `$XDG_RUNTIME_DIR`, written under the existing `flock`, held by the checkout path that ran `up`. `up`, `down` and `record` from any other checkout are refused while it is valid, whether a worker, a second daemon or a person runs them; `lab/run lease break` is the owner's explicit override. After expiry, another checkout removes the old pod under the same lock before it starts; the lease is written only after `up` succeeded (R2-S4). The daemon only reads the file for the digest. No daemon lease and no lease tools (B5). | 6 |
-| O11 | GitHub state of the workers' pull requests is read in the daemon through `packages/web/server/lib/github` and its normalised results, polled at most every 60 seconds, only for registered pull requests. Events come from a persisted cursor per pull request; new comments come from a paginated reader added to `lib/github` and a time cursor with a small overlap set (R2-S2); decisions that lead to an event or a cleanup need a fresh read without section errors (S4, S5). | 7 |
-| O12 | One **deletion guard** (`orchestration/cleanup-guard.js`) decides every removal, by cleanup or `session_delete`. Owner rule (R3-B1): worktree, branch and worker session are removed only after a proven merge, and the only proof is a fresh read showing a pull request with `mergedAt` set for exactly this head branch, no open one beside it, its merged head equal to the local tip, a clean worktree and no live run. A closed unmerged pull request, no pull request and a missing remote branch are no proof: nothing is removed, the case is reported. `worker_abandon` and `pr_closed` therefore remove nothing. A helper session without a branch is removed by `session_delete` only if it was bound at spawn to a pull request (`servesPr`) that the same guard then proves merged; an unbound helper stays `stopped` for the owner (orchestrator decision 2026-10-12). A remote branch already deleted after a proven merge counts as done; a failed lookup blocks (B2, R2-B3, R2-S7). | 8, 9 |
-| O13 | Squash is the normal merge. Cleanup order is worktree remove (never `--force`), `git branch -D` after the guard, remote delete with an expected SHA lease, and the session last, each step journalled and safe to repeat (B3). | 9 |
-| O14 | Rewind and delete are tools of this epic, not of #107 (orchestrator decision 2026-10-12). Fork is not offered: it gives the worker a new session id, while navigate keeps the id and Pi's tree keeps the abandoned branch. | 5, 9 |
-| O15 | Worker guidance (how to report, the lab rule) goes into the brief the service builds at spawn, because #107's extension injects base instructions only into orchestrators (S10). Orchestrator guidance goes into `instructions.js` and the skill, updated by each slice for the tools it adds. | 1 to 9 |
-| O16 | New switches live in `packages/web/server/lib/pi/settings-store.js` under `orchestration`, each with normalisation, default, bounds, patch merge and a round trip test in the slice that adds it. The owner changes them through the settings route #107 already exposes; no new UI (S9). | 3 to 9 |
-| Ladder | Ten pull requests on `dev`, ordered by the DAG below; only slice 1 may stack on #113, as described in the prompt. The spec pull request itself is docs only and based on `dev`. | all |
+| O1 | One durable **orchestration registry** in the daemon (`<dataDir>/pi/orchestration-registry.json`). It owns worker ownership, bookkeeping, start operations with their reservations, reports and open questions. #107's JSONL child entries are imported once. | 1 |
+| O2 | Live state is never stored; it comes from the daemon's live channels. Facts that must survive disposal are snapshots written at settle and shown with their time; unknown is `null`. | 1, 2 |
+| O3 | A slot is a reservation taken in the registry update that checks the limit, before any side effect. `worker_start` reaches it through `session_spawn`. | 1, 6 |
+| O4 | One authorisation policy decides every tool call from the caller's role and registry ownership. | 1 |
+| O5 | Workers report through `worker_report`; a question closes only through a matching `resolves`. | 2 |
+| O6 | Wakes are kept **in memory** per worker and sent to the registry owner at send time, one `pichamber.orchestration.events` message per burst. A daemon restart drops queued wakes; the orchestrator reads the digest after a restart. #107's result message goes away. | 3 |
+| O7 | The watchdog is daemon code fed by the daemon's own events plus one 15 s tick, for registered workers only. | 3 |
+| O8 | **No automatic remedy.** `session_rewind` is the orchestrator's tool; the skill names the known 400 and how to rewind for it. | 4 |
+| O9 | The worker limit counts reserved operations plus `starting` and `active` workers of the whole daemon. Spawning also refuses when the 1 minute load is above the core count or less than 8 GiB is available. | 1, 5 |
+| O10 | The lab has one holder: the checkout label `lab/run` already puts on the pod, under its `flock`. A pod whose checkout directory is gone counts as abandoned. No lease file, no expiry, no daemon lease. | 5 |
+| O11 | Pull request state is read in the daemon through `lib/github`, every 60 s, only for registered pull requests, with last seen values in memory; stale reads emit nothing. | 7 |
+| O12 | Owner rule (R3-B1): worktree, branch and worker session are removed only after a proven merge, proved by a fresh `findPullForBranch` result with `mergedAt` set for exactly this head branch, no open pull request, its head equal to the local tip, a clean worktree and no live run. Everything else removes nothing. A helper session is removed only if bound at spawn with `servesPr` to a pull request proven merged. | 8 |
+| O13 | Squash is the normal merge. Cleanup order: worktree remove (never `--force`), `git branch -D`, remote delete with an expected SHA lease, session last; each step safe to repeat. Cleanup runs only when the orchestrator calls `worker_cleanup`. | 8 |
+| O14 | Rewind and delete are tools of this epic, not of #107. No fork tool. | 4, 8 |
+| O15 | Worker guidance goes into the brief the service builds at spawn; orchestrator guidance into `instructions.js` and the skill, updated by each slice for the tools it adds. | 1 to 8 |
+| O16 | New switches live in `settings-store.js` under `orchestration`, each with default, bounds and a round trip test; no new UI. | 3 to 7 |
 
-Rejected:
-
-- **Stacking every slice on `107-orchestration-mcp`.** Every change there would force a rebase of all slices, and ADR 0008 has slices land on `dev`. Only slice 1 may stack, and only while #113 is open.
-- **Keeping bookkeeping in the orchestrator's JSONL** (#107's choice): takeover would have to rewrite another session's log, and limits across trees would scan every orchestrator.
-- **A daemon side lab lease with `lab_acquire` tools**: two daemons would hold two leases for one host lab, and a person or a session outside the registry would bypass it. The boundary is `lab/run` (B5).
-- **A `tool_call` guard on `lab/run`**: not needed once `lab/run` enforces the lease itself.
-- **Exactly once event delivery**: would need Pi to accept a message idempotently. A batch id plus a look into the orchestrator's session before resending is enough; a repeat is visible as the same batch id.
-- **Rewind for every match of the 400**: may repeat file edits, commits or external calls of the dropped message (B6).
-- **Polling `gh` from the orchestrator or a script**, **a separate watchdog process**, **one follow-up per event**.
+Rejected: stacking every slice on `107-orchestration-mcp`; bookkeeping in the orchestrator's JSONL; polling `gh` from the orchestrator; a separate watchdog process; one follow-up per event. Cut on 2026-10-12 (see above): persisted event batches with acknowledgement, automatic rewind, the lab lease file, the paginated comment reader, the start journal and `worker_abandon`, automatic cleanup, the end to end recording.
 
 ## Ladder
 
 ```text
-1 registry ─► 2 reports+digest ─► 3 event bus ─► 4 watchdog ─┬─► 5 rewind+remedy ──────────────────────────┐
-                                                             └─► 6 gate+lab lease ─┬─► 8 worker start ─┐  ├─► 10 close out
-                                                                                   └─► 7 GitHub events ─┴► 9 cleanup ┘
+1 registry ─► 2 reports+digest ─┬─► 3 wakes+watchdog ─┬─► 4 rewind ────────┐
+                                │                     └─► 7 PR watch ──────┤
+                                ├─► 5 host gate ─────────► (7)             ├─► 8 cleanup+close out
+                                └─► 6 worker start ────────────────────────┘
 ```
 
-| Slice | Depends on | Parallel with | Role | Size guess |
+| Slice | Depends on | Parallel with | Role | Size |
 |---|---|---|---|---|
-| 1 | #112 merged; #113 merged or stacked; role names match | none | `task-hard` | 500 to 650; over 600, takeover becomes its own pull request first |
-| 2 | 1 | none | `task-hard` | 350 to 500 |
-| 3 | 2 | none | `task-hard` | 350 to 500 |
-| 4 | 3 | none | `task-hard` | 400 to 600 |
-| 5 | 4 | 6, 7, 8 | `task-hard` with `debug` | 250 to 450 |
-| 6 | 4 | 5 | `task-hard` | 350 to 500 |
-| 7 | 6 | 5, 8 | `task-hard` | 450 to 600 |
-| 8 | 6 | 5, 7 | `task-extreme` | 400 to 600 |
-| 9 | 7, 8 | 5 | `task-extreme` | 400 to 600 |
-| 10 | 5, 9 | none | `task-medium` | 150 to 300 plus deletions |
+| 1 | #113 | none | `task-hard` | built |
+| 2 | 1 | none | `task-hard` | built |
+| 3 | 2 | 5, 6 | `task-hard` | 400 to 550 |
+| 4 | 3 | 5, 6, 7 | `task-medium` | 150 to 250 |
+| 5 | 2 | 3, 4, 6 | `task-medium` | 150 to 250 |
+| 6 | 2 | 3, 4, 5, 7 | `task-hard` | 250 to 400 |
+| 7 | 3, 5 | 4, 6 | `task-medium` | 200 to 300 |
+| 8 | 4, 6, 7 | none | `task-hard` | 300 to 450 plus moved docs |
 
-All slices from 1 to 9 change a daemon contract, which #112 rates `task-hard` at least; start and cleanup delete or create git state and are `task-extreme`. Parallel slices own separate modules (`remedies.js`, `lab/run` and `activity.js`, `github-watch.js`, `worker-start.js`). Their shared touch points are `tool-contracts.js`, `settings-store.js`, `instructions.js` and the skill; whoever merges second rebases on `dev`. With the four-worker limit, at most three implementation workers run here at once, plus a reviewer.
-
-The registry comes first because every later slice stores into it. Reports come before wakes so a wake can point at the digest. The bus comes before the watchdog so detection has one way out. The gate comes before start because start reserves through it, and before GitHub events because slice 7 closes #119 with slice 6's proofs (R2-S5). GitHub comes before cleanup because cleanup runs on `pr_merged` and asks GitHub for a pull request the registry does not know. Each slice is usable on `dev` when merged.
+Wakes come first after the digest because rewind and the pull request watch deliver through them. Slice 7 waits for slice 5 only because it closes #119, whose other half is slice 5. Slice 8 is last because it closes the epic and deletes this folder. At most three implementation workers run at once (3, 5, 6), plus a reviewer. Shared touch points are `tool-contracts.js`, `settings-store.js`, `instructions.js` and the skill; whoever merges second rebases on `dev`.
 
 ## Issue closing
 
-An issue is closed by the pull request that delivers its last acceptance criterion with its proof (S7).
-
 | Issue | Closed by | Proof there |
 |---|---|---|
-| #117 reports and digest | slice 4 | lab recording: a worker's report wakes the orchestrator, which reads only the digest |
-| #116 wake and watchdog | slice 5 | lab recording of the safe remedy; if the reproduction finds no safe case, slice 5 does not close #116 and the orchestrator asks the owner about the criterion |
-| #119 resources, lab, GitHub | slice 7, which merges only after slice 6 | lease tests and host transcript of slice 6 plus the `ci_passed` recording. The lab cannot run `lab/run` (no podman, read-only checkout), so the refusal is not a lab recording; assumption until the owner accepts it, raised by the orchestrator before slice 7 closes #119 |
-| #118 registry and lifecycle | slice 9 | start and cleanup tests with a squash merge, cleanup recording |
-| #115 epic | slice 10 | end to end recording |
+| #117 reports and digest | slice 3 | faux provider e2e: a report wakes the orchestrator, which reads the digest; screenshot of the events message |
+| #116 wake and watchdog | slice 4 | e2e: the 400 wakes the orchestrator, `session_rewind` gets the worker going |
+| #119 resources, lab, GitHub | slice 7 | gate tests and host transcript of slice 5, pull request watch tests |
+| #118 registry and lifecycle | slice 8 | start and cleanup tests with a squash merge |
+| #115 epic | slice 8 | all parts closed, this folder deleted |
 
 ## Shared contracts
 
-The slice files hold the full shapes; this is the index.
-
 | Contract | Owner module | Slice |
 |---|---|---|
-| Registry schema, state transitions, reservation, takeover | `orchestration/registry-store.js` | 1 |
-| Authorisation policy | `orchestration/policy.js`, called by `orchestration-service.js` | 1 |
+| Registry schema, reservation, takeover | `orchestration/registry-store.js`, `worker-registry.js` | 1 |
+| Authorisation policy | `orchestration/policy.js` | 1 |
 | `worker_report`, `orchestration_digest` | `orchestration/tool-contracts.js` | 2 |
-| Event shape, batch, acknowledgement | `orchestration/events.js`, `orchestration/event-bus.js` | 3 |
-| Watchdog rules | `orchestration/watchdog.js` | 4 |
-| Lab proof fixtures (scripted provider, bare remote with `dev`, GitHub source, lab settings) | `scripts/lab/`, `lab/seed-manifest.json`, `scripts/proof/` | 4, extended by 7 to 10 |
-| `session_rewind`, remedy table | `orchestration/remedies.js` | 5 |
-| Lab lease file | `lab/run` | 6 |
-| Pull request reader and cursor | `orchestration/github-watch.js` over `lib/github` | 7 |
-| Start operation | `orchestration/worker-start.js` | 8 |
-| Deletion guard and cleanup journal | `orchestration/cleanup-guard.js`, `orchestration/cleanup.js` | 9 |
+| Wake event shape, queue, watchdog rules | `orchestration/wakes.js` | 3 |
+| `session_rewind` | `orchestration/tool-contracts.js`, `navigateSession` | 4 |
+| Host gate, lab holder | `host-info.js`, `lab/run` | 5 |
+| `worker_start` | `orchestration/worker-start.js` | 6 |
+| Pull request diff | `orchestration/pr-watch.js` over `lib/github` | 7 |
+| Merge guard, `worker_cleanup` | `orchestration/cleanup-guard.js` | 8 |
 
 ## Single-owner rules
 
-Every implementing pass keeps these. A slice that needs to break one updates this list first.
-
-- **Worker bookkeeping** (owner, state, start operation, reservation, report, question, pending events, cursors): `orchestration/registry-store.js` only. No code reads the #107 child entries after the import.
-- **Live state:** the daemon's runtimes, run start, retry state and pending extension dialogs (`extension-bridge.js`). Never the registry, never history. #107's `getSessionState` reports only id and streaming; the digest reads the rest from these owners.
+- **Worker bookkeeping:** `orchestration/registry-store.js` only. No code reads the #107 child entries after the import.
+- **Live state:** the daemon's runtimes, run start, retry state and pending extension dialogs. Never the registry, never history.
 - **Tool contracts:** `orchestration/tool-contracts.js`. **Permission:** `orchestration/policy.js`.
-- **Waking an orchestrator:** `orchestration/event-bus.js` only.
-- **Detecting session trouble:** `orchestration/watchdog.js`. **Detecting pull request changes:** `orchestration/github-watch.js`. Both only emit to the bus.
+- **Waking an orchestrator:** `orchestration/wakes.js` only; the pull request watch emits into it.
 - **GitHub access:** `packages/web/server/lib/github`; orchestration code never runs `gh`.
-- **Lab ownership:** `lab/run` and its lease file.
+- **Lab holder:** `lab/run`.
 - **Removal decisions:** `orchestration/cleanup-guard.js`.
-- **Command classification** (build, test, install, lab): one pure function in `orchestration/activity.js`.
-- **Settings:** `packages/web/server/lib/pi/settings-store.js`, read through `createOrchestrationSettingsReader`.
-
-End state: the orchestration module reads as if designed with a registry from the start; nothing keeps the #107 child entries or the result message alive after slice 3.
+- **Settings:** `packages/web/server/lib/pi/settings-store.js`.
 
 ## Known traps
 
 | Trap | Slice |
 |---|---|
-| `childRecordsOf` reads the parent JSONL for limits, stop and delivery; all three move to the registry together, or they disagree. | 1 |
-| `onSessionSettled` resolves the parent through lineage; after a takeover lineage still names the old orchestrator. | 1 |
-| `inflightSpawns` is in memory; a crash between session create and the registry write must not leave a second worker on retry. | 1, 8 |
-| Pi writes a session's JSONL only with its first assistant message; a session created before a crash may not exist after restart. | 1, 8 |
-| A `worker_report done` is a tool call inside a running turn; the turn can go on afterwards. | 1, 2 |
-| `getPull` reads one page of reviews and capped threads and thread comments; it cannot feed the comment cursor. | 7 |
-| `before_agent_start` in #107's extension returns early for workers; worker guidance in `instructions.js` never reaches them. | 1, 2 |
-| The owner answers in the UI through `sessions.prompt`, which cannot name a question id; the question stays open until the worker reports. | 2 |
-| Usage of a dormant worker is only in its JSONL; the digest must not activate runtimes to sum tokens. | 2 |
-| `await sendCustomMessage` can overlap a new emit; clearing the whole pending list would drop the new event. | 3 |
-| A disposed orchestrator is reopened through the lease; `SESSION_IN_USE` keeps the batch pending. | 3 |
-| A Pi retry (`willRetry`) is not a failure. A stall is one event per episode. | 4 |
-| #107 has a faux provider only in tests; the lab has no scripted provider yet. | 4 |
-| The lab server is limited to about 4 GiB, so the 8 GiB gate default would refuse every spawn there. | 4, 6 |
-| The 400 `tool_result: all content must be type text if is_error is true` repeats on every request until the entry leaves the branch. | 5 |
-| `sessions.navigate` is an inline IPC case; it becomes a function before the service calls it. | 5 |
-| `lab/run` locks `$XDG_RUNTIME_DIR` with `flock` but records no holder; `record` checks the pod's checkout label only after the pod exists. | 6 |
-| `lib/github` serves stale last-good data on rate limits and marks failed sections in `sectionErrors`; neither is a fresh success. | 7 |
-| Squash merges leave the branch unmerged in git's eyes; `git branch -d` refuses. | 9 |
-| A dev daemon and the installed daemon have separate registries and limits; the lab lease is shared because it is on the host. | 1, 6 |
+| `onSessionSettled` resolves the parent through lineage; after a takeover lineage still names the old orchestrator. Resolve the owner from the registry at send time. | 3 |
+| `await sendCustomMessage` can overlap a new emit; removing the whole queue after the send would drop it. | 3 |
+| A Pi retry (`willRetry`) is not a failure. A stall is one event per episode. | 3 |
+| `sessions.navigate` is an inline IPC case; it becomes a function before the service calls it. | 4 |
+| The 400 `tool_result: all content must be type text if is_error is true` repeats on every request until the entry leaves the branch. | 4 |
+| The lab server is limited to about 4 GiB, so the 8 GiB gate default refuses spawns inside the lab. | 5 |
+| `lab/run status` prints the caller's path, not the holder's. | 5 |
+| `lib/github` serves stale last-good data on rate limits and marks failed sections; neither is a fresh read. | 7, 8 |
+| `findPullForBranch` returns an open pull request first, else only the latest closed one. | 8 |
+| Squash merges leave the branch unmerged in git's eyes; `git branch -d` refuses. | 8 |
 
 ## Unknowns
 
 | Unknown | Settled by | If it goes wrong |
 |---|---|---|
-| #113 changes the service shape before merge | start of slice 1 | adapt slice 1's seam; the registry stays daemon owned |
-| A safe case for the 400 exists | first step of slice 5, `debug` skill | no auto remedy; `session_rewind` and detection ship, #116 stays open for the owner's call |
-| `lib/github` runs outside an HTTP request in the daemon process | start of slice 7 | the web server polls and passes changes over a daemon IPC op; the mapping stays pure |
-| Where `worker_start` puts worktrees | slice 8 plan review | a setting `orchestration.worktreeRoot` |
-| A slice grows beyond about 600 review lines | before review | split it here first, then continue |
+| `lib/github` runs outside an HTTP request in the daemon process | start of slice 7 | the web server polls and passes reads over a daemon IPC op |
+| The lab seed can hold an orchestrator session for the screenshot | slice 3 | a screenshot of the message card rendered from a test fixture |
+| A slice grows beyond its size estimate by half | before review | cut it back to its contract, not split it |
