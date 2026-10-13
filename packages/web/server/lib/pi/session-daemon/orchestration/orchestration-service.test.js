@@ -2432,6 +2432,22 @@ describe('worker_cleanup', () => {
     expect(await harness.workers()).toEqual({});
   });
 
+  it('skips a remote branch the owner already deleted', async () => {
+    const h = await setup();
+    git(h.repo, 'push', '-q', 'origin', '--delete', '9-fix');
+    await expect(h.cleanup()).resolves.toEqual({ sessionId: h.sessionId, removed: [`worktree ${h.worktree}`, 'branch 9-fix', `session ${h.sessionId}`] });
+  });
+
+  it('refuses a helper without servesPr and without a worktree', async () => {
+    const deleteSession = vi.fn(async () => {});
+    const harness = createHarness({ overrides: { pullLookup: { pullForBranch: vi.fn(), pullByNumber: vi.fn() }, deleteSession } });
+    const scratch = mkdtempSync(join(tmpdir(), 'pichamber-helper-'));
+    const { sessionId } = await harness.service.call('orch', 'session_spawn', { cwd: scratch, task: 'research' });
+    await harness.settle(sessionId, 'done');
+    await expect(harness.service.call('orch', 'worker_cleanup', { sessionId })).resolves.toMatchObject({ removed: [], reason: expect.stringMatching(/no git worktree[\s\S]*servesPr/) });
+    expect(deleteSession).not.toHaveBeenCalled();
+  });
+
   it('is the owning orchestrator\'s tool only', async () => {
     const h = await setup();
     await expectCode(h.service.call(h.sessionId, 'worker_cleanup', { sessionId: h.sessionId }), 'ORCHESTRATION_FORBIDDEN');
