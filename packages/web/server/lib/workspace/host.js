@@ -57,7 +57,7 @@ const resolveProjectDirectory = async (req) => {
 export const registerWorkspaceIntegrations = ({ app, server, express, uiAuthController, dataDir, liveRevocation = null }) => {
   const security = createRequestSecurityRuntime({ readSettingsFromDiskMigrated: async () => ({}) });
   registerGitRoutes(app);
-  registerGitHubRoutes(app);
+  const github = registerGitHubRoutes(app);
   registerFsRoutes(app, {
     os,
     path,
@@ -108,6 +108,7 @@ export const registerWorkspaceIntegrations = ({ app, server, express, uiAuthCont
     rejectWebSocketUpgrade: security.rejectWebSocketUpgrade,
   });
   return {
+    readPullWatch: github.readPullWatch,
     shutdown: async () => {
       await Promise.allSettled([terminalRuntime.shutdown(), sttRuntime.shutdown()]);
     },
