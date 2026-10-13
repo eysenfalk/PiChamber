@@ -39,6 +39,10 @@ const respond = async (context) => {
       clientRequestId: 'spawn-1',
     })], { stopReason: 'toolUse' });
   }
+  // The known history poison: every run fails while the transcript holds it.
+  if (messages.some((message) => textOf(message).includes('POISON'))) {
+    return fauxAssistantMessage('broken', { stopReason: 'error', errorMessage: '400 invalid request: tool_result: all content must be type text if is_error is true' });
+  }
   if (lastText.includes('FAIL NOW')) return fauxAssistantMessage('broken', { stopReason: 'error', errorMessage: 'invalid request: FAUX BROKEN' });
   if (lastText.includes('RUN AGAIN')) return fauxAssistantMessage('WORKER RAN AGAIN');
   if (lastText.includes('HOLD')) {
@@ -54,6 +58,11 @@ export default function (pi) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 50 }, () => respond));
   pi.registerProvider(faux.provider);
+  // A direct input that waits in the hook: accepted, but no run has started.
+  pi.on('input', async (event) => {
+    if (event.text.includes('GATE INPUT')) await globalThis.__pichamberGateInput?.promise;
+    return { action: 'continue' };
+  });
 }
 `;
 
@@ -68,6 +77,8 @@ describe('orchestration end-to-end through the real SDK', () => {
     else process.env.PICHAMBER_DATA_DIR = previousDataDir;
     globalThis.__pichamberHold?.resolve();
     delete globalThis.__pichamberHold;
+    globalThis.__pichamberGateInput?.resolve();
+    delete globalThis.__pichamberGateInput;
     delete globalThis.__pichamberOrchestrationLog;
   });
 
@@ -181,6 +192,72 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(oldStop.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
     const listed = await client.request('orchestration.call', { sessionId: successorId, tool: 'session_list', args: {} });
     expect(listed.result.value.sessions).toEqual([expect.objectContaining({ sessionId: workerId, lifecycle: 'active' })]);
+
+    await client.close();
+  }, 120_000);
+
+  it('rewinds a worker whose history fails every run and runs it again from there', async () => {
+    const { root, client, createSession } = await startDaemon({ coalesceMs: 100 });
+    const parentId = await createSession();
+    const call = async (sessionId, tool, args) => (await client.request('orchestration.call', { sessionId, tool, args })).result;
+    const wakes = () => client.events.filter((message) => message.event === 'extension.message'
+      && message.payload?.sessionId === parentId
+      && message.payload?.customType === 'pichamber.orchestration.events')
+      .flatMap((message) => message.payload.details.events);
+    const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === sessionId && message.payload?.text === text).length;
+    const reached = (check) => vi.waitFor(() => expect(check(), String(check)).toBe(true), { timeout: 30_000, interval: 50 });
+
+    await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
+    await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
+    const workerId = wakes()[0].sessionId;
+
+    await client.request('sessions.prompt', { sessionId: workerId, text: 'POISON' });
+    await reached(() => wakes().some((event) => event.kind === 'run_failed'));
+    expect(wakes().find((event) => event.kind === 'run_failed').reason).toContain('all content must be type text');
+
+    // Rewind to the entry before the poisoned message, which the read shows by id.
+    const read = (await call(parentId, 'session_read', { sessionId: workerId })).value;
+    const poisoned = read.messages.findIndex((message) => message.role === 'user' && message.text === 'POISON');
+    expect(poisoned).toBeGreaterThan(0);
+    const before = read.messages[poisoned - 1];
+    expect(before.text).toContain('WORKER DONE');
+    // A direct prompt held in Pi's input hook has no run yet but will start one: no rewind under it.
+    let release;
+    globalThis.__pichamberGateInput = { promise: new Promise((resolve) => { release = resolve; }), resolve: () => release() };
+    // The UI's own connection: this daemon answers one connection's requests in order.
+    const ui = connectClient(join(root, 'daemon.sock'));
+    await ui.authenticate();
+    const gated = ui.request('sessions.prompt', { sessionId: workerId, text: 'GATE INPUT' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const gatedRewind = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN' });
+    expect(gatedRewind.error).toMatchObject({ code: 'ORCHESTRATION_SESSION_BUSY' });
+    release();
+    await gated;
+    await ui.close();
+    await reached(() => replies(workerId, 'UNSCRIPTED') + wakes().filter((event) => event.kind === 'run_failed').length >= 2);
+    const gatedRead = (await call(parentId, 'session_read', { sessionId: workerId })).value;
+    expect(gatedRead.messages.map((message) => message.text)).toContain('GATE INPUT');
+
+    const foreign = await call(workerId, 'session_rewind', { sessionId: workerId, entryId: before.entryId });
+    expect(foreign.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
+    const missing = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: 'no-such-entry' });
+    expect(missing.error).toMatchObject({ code: 'SESSION_TREE_NOT_FOUND' });
+
+    const rewound = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN', clientRequestId: 'rewind-1' });
+    expect(rewound.error).toBeUndefined();
+    expect(rewound.value).toMatchObject({ sessionId: workerId, newLeafId: before.entryId, prompted: true });
+    await reached(() => replies(workerId, 'WORKER RAN AGAIN') === 1);
+    const after = (await call(parentId, 'session_read', { sessionId: workerId })).value;
+    expect(after.outcome).toBe('completed');
+    expect(after.messages.map((message) => message.text)).not.toContain('POISON');
+
+    // The same call again (a lost answer) replays; it neither moves the leaf nor prompts twice.
+    const replayed = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN', clientRequestId: 'rewind-1' });
+    expect(replayed.value).toMatchObject({ newLeafId: before.entryId, prompted: true, deduplicated: true });
+    const kept = (await call(parentId, 'session_read', { sessionId: workerId })).value;
+    expect(kept.messages.map((message) => message.text)).toEqual(after.messages.map((message) => message.text));
+    expect(replies(workerId, 'WORKER RAN AGAIN')).toBe(1);
 
     await client.close();
   }, 120_000);

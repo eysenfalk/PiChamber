@@ -27,6 +27,7 @@ const ROLES = {
 
 const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
   const entries = [];
+  let leafId = null;
   const runtime = {
     cwd,
     delivered: [],
@@ -37,6 +38,8 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
       messages: [],
       sessionManager: {
         getEntries: () => entries,
+        getLeafId: () => leafId,
+        setLeaf: (id) => { leafId = id; },
         appendCustomEntry: (customType, data) => { entries.push({ type: 'custom', customType, data }); },
         getSessionName: () => `title ${sessionId}`,
       },
@@ -129,6 +132,13 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
   };
   const deps = {
     registry,
+    navigateSession: vi.fn(async (sessionId, entryId) => {
+      const manager = runtimes.get(sessionId).session.sessionManager;
+      if (!manager.getEntries().some((entry) => entry.id === entryId)) throw new Error(`Entry ${entryId} not found`);
+      const previousLeafId = manager.getLeafId();
+      manager.setLeaf(entryId);
+      return { targetEntryId: entryId, previousLeafId, newLeafId: entryId };
+    }),
     activateSession: vi.fn(async (sessionId) => {
       const runtime = runtimes.get(sessionId);
       if (!runtime) throw Object.assign(new Error('missing'), { code: 'SESSION_NOT_FOUND' });
@@ -516,6 +526,86 @@ describe('orchestration service', () => {
     await expect(service.call('orch', 'session_list', { scope: 'all' })).resolves.toMatchObject({
       sessions: expect.arrayContaining([expect.objectContaining({ sessionId: 'worker-2', outcome: 'error', error: '400 invalid thinking' })]),
     });
+  });
+
+  describe('session_rewind', () => {
+    const withEntries = async (harness) => {
+      await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      const manager = harness.runtimes.get('worker-1').session.sessionManager;
+      const message = (id, role, text) => manager.getEntries().push({ type: 'message', id, message: { role, content: [{ type: 'text', text }] } });
+      message('e1', 'user', 'first');
+      message('e2', 'assistant', 'answer');
+      message('e3', 'user', 'second');
+      manager.setLeaf('e3');
+      await harness.settle('worker-1');
+      return manager;
+    };
+
+    it('lists the entry ids of the active branch in session_read', async () => {
+      const harness = createHarness();
+      await withEntries(harness);
+      const read = await harness.service.call('orch', 'session_read', { sessionId: 'worker-1' });
+      expect(read.messages).toEqual(expect.arrayContaining([
+        { entryId: 'e1', role: 'user', text: 'first' },
+        { entryId: 'e2', role: 'assistant', text: 'answer' },
+      ]));
+    });
+
+    it('moves an idle worker back and keeps its session; a prompt runs it again', async () => {
+      const harness = createHarness();
+      const manager = await withEntries(harness);
+      await expect(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e2' }))
+        .resolves.toEqual({ sessionId: 'worker-1', previousLeafId: 'e3', newLeafId: 'e2', prompted: false });
+      expect(manager.getLeafId()).toBe('e2');
+      expect(harness.deps.sendInput).toHaveBeenCalledTimes(1);
+
+      await expect(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1', prompt: 'RUN AGAIN' }))
+        .resolves.toMatchObject({ sessionId: 'worker-1', newLeafId: 'e1', prompted: true });
+      expect(harness.deps.sendInput).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'worker-1', text: 'RUN AGAIN' }));
+      expect(harness.states.get('worker-1')).toBe('busy');
+    });
+
+    it('refuses a worker that runs or waits for input, a foreign worker, a worker as caller and an unknown entry', async () => {
+      const activity = new Map();
+      const harness = createHarness({ activity });
+      const manager = await withEntries(harness);
+
+      await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'nope' }), 'SESSION_TREE_NOT_FOUND');
+      await expectCode(harness.service.call('worker-1', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1' }), 'ORCHESTRATION_FORBIDDEN');
+      await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'other', entryId: 'e1' }), 'ORCHESTRATION_FORBIDDEN');
+
+      activity.set('worker-1', { waitingForInput: true });
+      await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1' }), 'ORCHESTRATION_SESSION_BUSY');
+      // A direct input that Pi has accepted but not yet turned into a run.
+      activity.set('worker-1', { inputActive: true });
+      await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1' }), 'ORCHESTRATION_SESSION_BUSY');
+      activity.delete('worker-1');
+      for (const state of ['busy', 'retry']) {
+        harness.states.set('worker-1', state);
+        await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1' }), 'ORCHESTRATION_SESSION_BUSY');
+      }
+      expect(manager.getLeafId()).toBe('e3');
+      expect(harness.deps.navigateSession).not.toHaveBeenCalledWith('worker-1', 'e1');
+    });
+  });
+
+  it('replays a repeated rewind by clientRequestId instead of moving the leaf again', async () => {
+    const harness = createHarness();
+    const manager = await (async () => {
+      await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      const m = harness.runtimes.get('worker-1').session.sessionManager;
+      for (const [id, role] of [['e1', 'user'], ['e2', 'assistant'], ['e3', 'user']]) m.getEntries().push({ type: 'message', id, message: { role, content: [{ type: 'text', text: id }] } });
+      m.setLeaf('e3');
+      await harness.settle('worker-1');
+      return m;
+    })();
+    const args = { sessionId: 'worker-1', entryId: 'e1', prompt: 'RUN AGAIN', clientRequestId: 'rw-1' };
+    await harness.service.call('orch', 'session_rewind', args);
+    await harness.settle('worker-1');
+    manager.setLeaf('e3');
+    await expect(harness.service.call('orch', 'session_rewind', args)).resolves.toMatchObject({ prompted: true, deduplicated: true });
+    expect(manager.getLeafId()).toBe('e3');
+    await expectCode(harness.service.call('orch', 'session_rewind', { ...args, entryId: 'e2' }), 'OPERATION_PAYLOAD_MISMATCH');
   });
 
   it('spawns in wait mode without ever cancelling the worker', async () => {
@@ -2040,7 +2130,7 @@ describe('worker reports and digest', () => {
       ids.push(sessionId);
       const runtime = harness.runtimes.get(sessionId);
       for (let index = 0; index < 20; index += 1) {
-        runtime.session.messages.push({ role: index % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: `step ${index} `.repeat(400) }] });
+        runtime.session.sessionManager.getEntries().push({ type: 'message', id: `e${index}`, message: { role: index % 2 ? 'assistant' : 'user', content: [{ type: 'text', text: `step ${index} `.repeat(400) }] } });
       }
       await harness.settle(sessionId);
       await report(harness, { kind: 'progress', summary: 'halfway there' }, sessionId);

@@ -46,7 +46,8 @@ Intervene with the mildest step that fixes it, and tell the owner about anything
 1. Answer the question, or bring it to the owner with your recommendation (see Owner input).
 2. A correction as a new prompt when the worker is idle, as `followUp` when it should finish the current step first.
 3. `steer` when the current step would otherwise be wasted; `session_interrupt` followed by a prompt when it must stop now.
-4. When the worker went down a wrong path, it is better resumed from an earlier point than corrected. There is no tool to jump back in the session tree yet: name the point to the owner, who can do it in PiChamber.
+4. When the worker went down a wrong path, it is better resumed from an earlier point than corrected: `session_rewind` moves an idle worker of yours back to an entry id from `session_read` and can prompt it in the same call. It undoes no file change or command of the entries it drops, so ask the worker to check its worktree first when they ran any. A running worker is refused (`ORCHESTRATION_SESSION_BUSY`): `session_interrupt` it first.
+   - Known case: every run fails with `400 ... tool_result: all content must be type text if is_error is true` after an image came back in an error tool result. Correcting the worker cannot help, the history itself is rejected. Rewind to the entry just before the assistant message whose tool result carries the image, and prompt the worker to continue without that file.
 5. `session_stop` and a new spawn with a corrected brief, one level or role up when the work proved harder than briefed (see Models).
 
 ## Owner input
