@@ -38,9 +38,14 @@ export const provenRunEnd = async (session, promptEnd, run) => {
  * 1.1.0, CONTEXT.md): a run's signal is `session.agent.signal` from its start
  * until the run ends, also when it is aborted, and every continuation makes a
  * new one; Pi emits `agent_settled` after the run ended. A signal that still
- * exists means a run is live, so that settle completes nothing.
+ * exists means a run is live, so that settle completes nothing. Between a
+ * failed attempt and its retry there is no signal, but `session.isRetrying`
+ * holds (R9-B1): a settle of another prompt then completes nothing either.
+ * Elsewhere a missing signal is no proof of an end (the release waits for the
+ * run's own prompt, `provenRunEnd`); this check only keeps the native idle
+ * and result boundary from firing for a run that is known to go on.
  */
-export const isSettleFinal = (session) => session?.agent?.signal === undefined;
+export const isSettleFinal = (session) => session?.agent?.signal === undefined && !session?.isRetrying;
 
 /**
  * Aborts the run that `signal` belongs to while it is the session's run;
