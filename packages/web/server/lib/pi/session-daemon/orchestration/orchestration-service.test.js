@@ -329,6 +329,8 @@ describe('orchestration service', () => {
     const plain = createRuntime({ sessionId: 'plain' });
     runtimes.set('plain', plain);
     await expect(service.sessionKind(plain.session.sessionManager)).resolves.toBe('unmarked');
+    // MCP discovery (Adapter B) asks the same decision.
+    await expect(service.verifyCaller('plain')).resolves.toEqual({ sessionId: 'plain', kind: 'unmarked' });
     await expectCode(service.call('plain', 'orchestration_capabilities'), 'ORCHESTRATION_FORBIDDEN');
     await expectCode(service.call('plain', 'session_spawn', { cwd: '/work/a', task: 'one' }), 'ORCHESTRATION_FORBIDDEN');
     expect(deps.createWorkerSession).not.toHaveBeenCalled();
@@ -336,6 +338,7 @@ describe('orchestration service', () => {
     // The mark acts on the next call, and removing it takes the tools away again.
     orchestrators.push('plain');
     await expect(service.call('plain', 'orchestration_capabilities')).resolves.toMatchObject({ canSpawn: true });
+    await expect(service.verifyCaller('plain')).resolves.toMatchObject({ kind: 'orchestrator' });
     await service.call('plain', 'session_spawn', { cwd: '/work/a', task: 'one' });
     orchestrators.pop();
     await expectCode(service.call('plain', 'session_list'), 'ORCHESTRATION_FORBIDDEN');
@@ -343,6 +346,7 @@ describe('orchestration service', () => {
     // A marked worker stays a worker.
     orchestrators.push('worker-1');
     await expect(service.sessionKind(runtimes.get('worker-1').session.sessionManager)).resolves.toBe('worker');
+    await expect(service.verifyCaller('worker-1')).resolves.toEqual({ sessionId: 'worker-1', kind: 'worker' });
     await expectCode(service.call('worker-1', 'session_spawn', { cwd: '/work/b', task: 'x' }), 'ORCHESTRATION_FORBIDDEN');
   });
 

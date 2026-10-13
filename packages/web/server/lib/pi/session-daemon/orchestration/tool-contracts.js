@@ -247,3 +247,16 @@ export const ORCHESTRATION_TOOLS = [
 export const ORCHESTRATION_TOOL_NAMES = ORCHESTRATION_TOOLS.map((tool) => tool.name);
 
 export const qualifiedToolName = (name) => `${ORCHESTRATION_NAMESPACE}__${name}`;
+
+/**
+ * The tools a session of this kind is offered, by both adapters: a worker its
+ * worker set, a marked orchestrator everything but `worker_report`, an
+ * unmarked session none, so it pays no tokens for them. The service still
+ * rejects forbidden calls on its own.
+ * @param {'worker' | 'orchestrator' | 'unmarked' | undefined} kind
+ */
+export const toolsForKind = (kind) => {
+  if (kind === 'worker') return ORCHESTRATION_TOOLS.filter((tool) => tool.childAllowed !== false);
+  if (kind === 'orchestrator') return ORCHESTRATION_TOOLS.filter((tool) => tool.orchestratorAllowed !== false);
+  return [];
+};

@@ -1,5 +1,5 @@
 import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
-import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
+import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName, toolsForKind } from './tool-contracts.js';
 
 // Adapter A: an inline Pi extension the daemon adds to every session runtime.
 // The runtime already knows which session calls a tool, so no credential is
@@ -9,17 +9,7 @@ import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName } from 
 
 const ORCHESTRATION_EXTENSION_NAME = 'pichamber-orchestration';
 
-const namesWhere = (predicate) => ORCHESTRATION_TOOLS.filter(predicate).map((tool) => qualifiedToolName(tool.name));
-
-const ALL_TOOLS = new Set(namesWhere(() => true));
-
-// The orchestration tools each kind of session sees. An unmarked session sees
-// none, so it pays no tokens for them.
-const TOOLS_BY_KIND = {
-  worker: namesWhere((tool) => tool.childAllowed !== false),
-  orchestrator: namesWhere((tool) => tool.orchestratorAllowed !== false),
-  unmarked: [],
-};
+const ALL_TOOLS = new Set(ORCHESTRATION_TOOLS.map((tool) => qualifiedToolName(tool.name)));
 
 const formatResult = (value) => ({
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -73,7 +63,7 @@ export const createOrchestrationExtension = (service) => ({
     const applyKind = async (ctx) => {
       const kind = await service.sessionKind(ctx.sessionManager).catch(() => 'unmarked');
       const active = pi.getActiveTools();
-      const allowed = [...active.filter((name) => !ALL_TOOLS.has(name)), ...TOOLS_BY_KIND[kind]];
+      const allowed = [...active.filter((name) => !ALL_TOOLS.has(name)), ...toolsForKind(kind).map((tool) => qualifiedToolName(tool.name))];
       const current = new Set(active);
       if (allowed.length !== current.size || allowed.some((name) => !current.has(name))) pi.setActiveTools(allowed);
       return kind;

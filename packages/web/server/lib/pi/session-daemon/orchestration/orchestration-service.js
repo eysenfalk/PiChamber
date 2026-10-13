@@ -1204,10 +1204,13 @@ export function createOrchestrationService(deps) {
     return orchestrators.includes(sessionId) ? 'orchestrator' : 'unmarked';
   };
 
-  /** Confirms that a session exists before a credential is issued for it. */
+  /**
+   * Confirms that a session exists and tells its kind, read fresh: before a
+   * credential is issued for it, and on every MCP tool discovery.
+   */
   const verifyCaller = async (callerSessionId) => {
-    await callerRuntime(callerSessionId);
-    return { sessionId: callerSessionId };
+    const runtime = await callerRuntime(callerSessionId);
+    return { sessionId: callerSessionId, kind: await kindOf(callerSessionId, runtime) };
   };
 
   /**

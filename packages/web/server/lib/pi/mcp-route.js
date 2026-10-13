@@ -9,18 +9,18 @@
  * sees the reason; only protocol problems become JSON-RPC errors.
  */
 
-import { ORCHESTRATION_MCP_SERVER, ORCHESTRATION_TOOLS } from './session-daemon/orchestration/tool-contracts.js';
+import { ORCHESTRATION_MCP_SERVER, ORCHESTRATION_TOOLS, toolsForKind } from './session-daemon/orchestration/tool-contracts.js';
 import { CALLER_GONE } from './session-daemon/orchestration/orchestration-service.js';
 import { ORCHESTRATION_MCP_PATH, bearerTokenFrom } from '../client-auth/orchestration-credentials.js';
 
 const MCP_PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_INFO = { name: ORCHESTRATION_MCP_SERVER, version: '1.0.0' };
 const TOOL_NAMES = new Set(ORCHESTRATION_TOOLS.map((tool) => tool.name));
-const MCP_TOOLS = ORCHESTRATION_TOOLS.map((tool) => ({
+const toMcpTool = (tool) => ({
   name: tool.name,
   description: tool.description,
   inputSchema: tool.parameters,
-}));
+});
 
 const rpcResult = (id, result) => ({ jsonrpc: '2.0', id, result });
 const rpcError = (id, code, message) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } });
@@ -55,6 +55,21 @@ export const registerOrchestrationMcpRoute = (app, { getDaemonRuntime, credentia
     }
   };
 
+  // The list follows the caller's kind, decided by the daemon on every
+  // discovery, so a removed mark empties it on the next tools/list.
+  const listTools = async (sessionId, id) => {
+    try {
+      const response = await getDaemonRuntime().request('orchestration.caller', { sessionId });
+      if (response?.error) {
+        if (response.error.code === CALLER_GONE) credentialStore.revokeSession(sessionId);
+        return rpcError(id, -32603, `${response.error.code}: the tool list is unavailable.`);
+      }
+      return rpcResult(id, { tools: toolsForKind(response?.value?.kind).map(toMcpTool) });
+    } catch {
+      return rpcError(id, -32603, 'The PiChamber session daemon did not answer.');
+    }
+  };
+
   const handleMessage = async (sessionId, message) => {
     if (!message || typeof message !== 'object' || message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
       return rpcError(message?.id, -32600, 'Invalid request');
@@ -74,7 +89,7 @@ export const registerOrchestrationMcpRoute = (app, { getDaemonRuntime, credentia
       case 'ping':
         return rpcResult(message.id, {});
       case 'tools/list':
-        return rpcResult(message.id, { tools: MCP_TOOLS });
+        return listTools(sessionId, message.id);
       case 'tools/call':
         return rpcResult(message.id, await callTool(sessionId, message.params));
       default:
