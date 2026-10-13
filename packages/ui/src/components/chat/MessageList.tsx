@@ -4,6 +4,7 @@ import { elementScroll, useVirtualizer as useTanstackVirtualizer, type ReactVirt
 import FoldedHistoryGate from './components/FoldedHistoryGate';
 import { TurnBlock } from './components/TurnBlock';
 import { UngroupedMessageRow } from './components/UngroupedMessageRow';
+import { VirtualHistoryRow } from './components/VirtualHistoryRow';
 import { HISTORY_GATE_ESTIMATED_SIZE, nextRevealedOlderCount, revealedCountForTurn, shouldFoldHistoryTurn } from './lib/turns/foldHistoryTurns';
 import type { AnimationHandlers, ContentChangeReason } from '@/hooks/useChatAutoFollow';
 import type { ChatMessageEntry, TurnRecord } from './lib/turns/types';
@@ -581,14 +582,14 @@ const StaticHistoryList = React.memo(({ entries, engine, contentRef, scrollRef, 
                         const entry = renderEntries[item.index];
                         if (!entry) return null;
                         return (
-                            <div
+                            <VirtualHistoryRow
                                 key={entry.key}
-                                data-index={item.index}
-                                ref={tanstackVirtualizer.measureElement}
-                                data-turn-entry={entry.key}
+                                index={item.index}
+                                entryKey={entry.key}
+                                measureElement={tanstackVirtualizer.measureElement}
                             >
                                 {renderEntry(entry)}
-                            </div>
+                            </VirtualHistoryRow>
                         );
                     })}
                 </div>
