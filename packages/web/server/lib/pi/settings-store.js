@@ -77,6 +77,11 @@ const normalizeRetryLimit = (value) => {
 export const ORCHESTRATION_ROLES = Object.freeze(['orchestrate', 'plan', 'oracle', 'debug', 'task-easy', 'task-medium', 'task-hard', 'task-extreme', 'research', 'small', 'review']);
 const ORCHESTRATION_MIN_WORKER_LIMIT = 1;
 const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
+// Bounds of the wake and watchdog settings (O16).
+const ORCHESTRATION_BOUNDS = Object.freeze({
+  coalesceMs: [0, 60_000],
+  stallAfterMs: [60_000, 7_200_000],
+});
 
 // Role defaults name only the model id: the provider that serves it is resolved
 // against the live catalog when a worker starts, so a default never pins a
@@ -84,6 +89,8 @@ const ORCHESTRATION_MAX_WORKER_LIMIT = 16;
 // Claude 5.5 models always think, so no default uses `off`.
 export const DEFAULT_ORCHESTRATION_SETTINGS = Object.freeze({
   workerLimit: 4,
+  wakes: Object.freeze({ coalesceMs: 3_000 }),
+  watchdog: Object.freeze({ stallAfterMs: 600_000, enabled: true }),
   roles: Object.freeze({
     orchestrate: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
     plan: Object.freeze({ modelId: 'claude-opus-5-5', thinking: 'high' }),
@@ -114,6 +121,21 @@ const normalizeRole = (value) => {
   };
 };
 
+// A settings group such as `wakes`: each field is a bounded duration or a flag.
+const normalizeGroup = (value, fields) => {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+  const result = {};
+  for (const [field, type] of Object.entries(fields)) {
+    const entry = value[field];
+    if (entry === undefined || entry === null) continue;
+    if (type === 'boolean' ? typeof entry !== 'boolean' : !Number.isInteger(entry)
+      || entry < ORCHESTRATION_BOUNDS[field][0] || entry > ORCHESTRATION_BOUNDS[field][1]) throw invalidSettings();
+    result[field] = entry;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+};
+
 const normalizeOrchestration = (value) => {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
@@ -124,6 +146,10 @@ const normalizeOrchestration = (value) => {
       || value.workerLimit > ORCHESTRATION_MAX_WORKER_LIMIT) throw invalidSettings();
     result.workerLimit = value.workerLimit;
   }
+  const wakes = normalizeGroup(value.wakes, { coalesceMs: 'ms' });
+  if (wakes) result.wakes = wakes;
+  const watchdog = normalizeGroup(value.watchdog, { stallAfterMs: 'ms', enabled: 'boolean' });
+  if (watchdog) result.watchdog = watchdog;
   if (value.roles !== undefined && value.roles !== null) {
     if (typeof value.roles !== 'object' || Array.isArray(value.roles)) throw invalidSettings();
     const roles = {};
@@ -144,6 +170,13 @@ const mergeOrchestration = (current, incoming) => {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw invalidSettings();
   const next = { ...(current ?? {}) };
   if (Object.hasOwn(incoming, 'workerLimit')) next.workerLimit = incoming.workerLimit;
+  for (const group of ['wakes', 'watchdog']) {
+    if (!Object.hasOwn(incoming, group)) continue;
+    const value = incoming[group];
+    if (value === null) delete next[group];
+    else if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
+    else next[group] = { ...(current?.[group] ?? {}), ...value };
+  }
   if (Object.hasOwn(incoming, 'roles')) {
     if (incoming.roles === null) {
       delete next.roles;
@@ -162,7 +195,12 @@ export const resolveOrchestrationSettings = (stored) => {
   for (const role of ORCHESTRATION_ROLES) {
     roles[role] = { ...DEFAULT_ORCHESTRATION_SETTINGS.roles[role], ...(overrides.roles?.[role] ?? {}) };
   }
-  return { workerLimit: overrides.workerLimit ?? DEFAULT_ORCHESTRATION_SETTINGS.workerLimit, roles };
+  return {
+    workerLimit: overrides.workerLimit ?? DEFAULT_ORCHESTRATION_SETTINGS.workerLimit,
+    wakes: { ...DEFAULT_ORCHESTRATION_SETTINGS.wakes, ...overrides.wakes },
+    watchdog: { ...DEFAULT_ORCHESTRATION_SETTINGS.watchdog, ...overrides.watchdog },
+    roles,
+  };
 };
 
 const normalize = (value) => {

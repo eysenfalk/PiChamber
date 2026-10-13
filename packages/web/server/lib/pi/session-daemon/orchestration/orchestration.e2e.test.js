@@ -9,7 +9,7 @@ import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
 
 // Orchestration through the real Pi SDK: the daemon's inline extension gives
 // a session the mcp__pichamber__* tools, a scripted faux model calls
-// session_spawn, and the worker's result comes back as a parent turn. Pi's
+// session_spawn, and the worker's run end wakes the parent with a turn. Pi's
 // faux provider stands in for a model; its script reacts to the transcript.
 
 const fauxExtension = (fauxUrl, workerDir) => `
@@ -19,7 +19,7 @@ const textOf = (message) => typeof message?.content === 'string'
   ? message.content
   : (message?.content ?? []).filter((part) => part.type === 'text').map((part) => part.text).join('\\n');
 
-const respond = (context) => {
+const respond = async (context) => {
   const log = globalThis.__pichamberOrchestrationLog ??= [];
   const messages = context.messages ?? [];
   const system = messages.filter((message) => message.role === 'system');
@@ -39,7 +39,14 @@ const respond = (context) => {
       clientRequestId: 'spawn-1',
     })], { stopReason: 'toolUse' });
   }
-  if (lastText.includes('WORKER DONE')) return fauxAssistantMessage('PARENT GOT RESULT');
+  if (lastText.includes('FAIL NOW')) return fauxAssistantMessage('broken', { stopReason: 'error', errorMessage: 'invalid request: FAUX BROKEN' });
+  if (lastText.includes('RUN AGAIN')) return fauxAssistantMessage('WORKER RAN AGAIN');
+  if (lastText.includes('HOLD')) {
+    await globalThis.__pichamberHold?.promise;
+    return fauxAssistantMessage('PARENT HELD');
+  }
+  if (lastText.includes('run_finished: WORKER DONE')) return fauxAssistantMessage('PARENT GOT RESULT');
+  if (lastText.includes('orchestration_digest')) return fauxAssistantMessage('PARENT WOKEN');
   return fauxAssistantMessage(fauxText('UNSCRIPTED'));
 };
 
@@ -59,10 +66,12 @@ describe('orchestration end-to-end through the real SDK', () => {
     daemon = undefined;
     if (previousDataDir === undefined) delete process.env.PICHAMBER_DATA_DIR;
     else process.env.PICHAMBER_DATA_DIR = previousDataDir;
+    globalThis.__pichamberHold?.resolve();
+    delete globalThis.__pichamberHold;
     delete globalThis.__pichamberOrchestrationLog;
   });
 
-  it('spawns a worker without spawn rights and delivers its result as a parent turn', async () => {
+  const startDaemon = async ({ coalesceMs } = {}) => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-orchestration-e2e-'));
     const projectDir = join(root, 'project');
     const workerDir = join(root, 'worker');
@@ -72,27 +81,39 @@ describe('orchestration end-to-end through the real SDK', () => {
     await mkdir(join(agentDir, 'extensions'), { recursive: true });
     await writeFile(join(agentDir, 'extensions', 'faux-orchestration.ts'), fauxExtension(piAiFauxUrl(), workerDir));
     process.env.PICHAMBER_DATA_DIR = join(root, 'data');
+    if (coalesceMs !== undefined) {
+      await mkdir(join(root, 'data', 'pi'), { recursive: true });
+      await writeFile(join(root, 'data', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { wakes: { coalesceMs } } }));
+    }
 
     const endpoint = join(root, 'daemon.sock');
     daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir });
     await daemon.start();
     const client = connectClient(endpoint);
     await client.authenticate();
+    const createSession = async () => {
+      const created = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
+      expect(created.kind).toBe('response');
+      return created.result.session.id;
+    };
+    return { root, projectDir, workerDir, client, createSession };
+  };
 
-    const created = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
-    expect(created.kind).toBe('response');
-    const parentId = created.result.session.id;
+  it('spawns a worker without spawn rights and wakes the parent when its run ends', async () => {
+    const { root, projectDir, workerDir, client, createSession } = await startDaemon();
+    const parentId = await createSession();
 
     const delivered = client.next((message) => message.event === 'extension.message'
       && message.payload?.sessionId === parentId
-      && message.payload?.customType === 'pichamber.orchestration.result', 30_000);
+      && message.payload?.customType === 'pichamber.orchestration.events', 30_000);
     const parentAnswered = client.next((message) => message.event === 'assistant.message.end'
       && message.payload?.sessionId === parentId
       && message.payload?.text === 'PARENT GOT RESULT', 30_000);
     await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
 
     const result = await delivered;
-    expect(result.payload.text).toContain('WORKER DONE with');
+    expect(result.payload.text).toContain('run_finished: WORKER DONE with');
+    expect(result.payload.text).toContain('orchestration_digest');
     await parentAnswered;
 
     const log = globalThis.__pichamberOrchestrationLog ?? [];
@@ -116,7 +137,7 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(workerTurn.hasInstructions).toBe(false);
 
     // The worker is an ordinary session the owner can open, linked to its parent.
-    const workerId = result.payload.details?.sessionId;
+    const workerId = result.payload.details?.events?.[0]?.sessionId;
     expect(workerId).toBeTruthy();
     const workerOpened = await client.request('sessions.open', { sessionId: workerId });
     expect(workerOpened.kind).toBe('response');
@@ -163,6 +184,69 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(oldStop.result.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
     const listed = await client.request('orchestration.call', { sessionId: successorId, tool: 'session_list', args: {} });
     expect(listed.result.value.sessions).toEqual([expect.objectContaining({ sessionId: workerId, lifecycle: 'active' })]);
+
+    await client.close();
+  }, 120_000);
+
+  it('wakes an idle orchestrator per question and failure, a busy one once per burst, and the new owner after a takeover', async () => {
+    const { client, createSession } = await startDaemon({ coalesceMs: 300 });
+    const parentId = await createSession();
+    const wakesOf = (sessionId) => client.events.filter((message) => message.event === 'extension.message'
+      && message.payload?.sessionId === sessionId
+      && message.payload?.customType === 'pichamber.orchestration.events')
+      .map((message) => message.payload.details.events.map(({ sessionId: worker, kind, reason }) => ({ sessionId: worker, kind, reason })));
+    const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === sessionId && message.payload?.text === text).length;
+    // Some conditions change without a daemon message (the faux log), so poll.
+    const reached = (check) => vi.waitFor(() => expect(check(), String(check)).toBe(true), { timeout: 30_000, interval: 50 });
+
+    await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
+    await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
+    const workerId = wakesOf(parentId)[0][0].sessionId;
+    expect(wakesOf(parentId)).toEqual([[{ sessionId: workerId, kind: 'run_finished', reason: expect.stringContaining('WORKER DONE') }]]);
+
+    // A question through worker_report wakes the idle orchestrator.
+    const asked = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH BRANCH', audience: 'orchestrator' } });
+    expect(asked.result.error).toBeUndefined();
+    const questionId = asked.result.value.openQuestion;
+    await reached(() => replies(parentId, 'PARENT WOKEN') === 1);
+    expect(wakesOf(parentId)[1]).toEqual([{ sessionId: workerId, kind: 'question', reason: 'WHICH BRANCH' }]);
+
+    // A run that ends in a provider error Pi does not retry is a failure.
+    await client.request('sessions.prompt', { sessionId: workerId, text: 'FAIL NOW' });
+    await reached(() => replies(parentId, 'PARENT WOKEN') === 2);
+    expect(wakesOf(parentId)[2]).toEqual([{ sessionId: workerId, kind: 'run_failed', reason: expect.stringContaining('FAUX BROKEN') }]);
+
+    // While the orchestrator runs, three events wait and arrive as one message after its run.
+    let release;
+    globalThis.__pichamberHold = { promise: new Promise((done) => { release = done; }), resolve: () => release() };
+    await client.request('sessions.prompt', { sessionId: parentId, text: 'HOLD while workers report' });
+    await reached(() => (globalThis.__pichamberOrchestrationLog ?? []).some((entry) => entry.lastText === 'HOLD while workers report'));
+    await client.request('sessions.prompt', { sessionId: workerId, text: 'RUN AGAIN' });
+    await reached(() => replies(workerId, 'WORKER RAN AGAIN') === 1);
+    await client.request('sessions.prompt', { sessionId: workerId, text: 'FAIL NOW' });
+    // The worker's fourth reply: done, failed, ran again, failed.
+    await reached(() => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === workerId).length === 4);
+    const blocked = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'blocked', summary: 'NEED ACCESS', audience: 'orchestrator', resolves: questionId } });
+    expect(blocked.result.error).toBeUndefined();
+    // Longer than the coalescing window: a wake now would already be here.
+    await new Promise((done) => { setTimeout(done, 1_000); });
+    expect(wakesOf(parentId)).toHaveLength(3);
+    release();
+    await reached(() => replies(parentId, 'PARENT WOKEN') === 3);
+    expect(wakesOf(parentId)).toHaveLength(4);
+    // A run end is applied after the run settles, so it can follow a later report.
+    expect(wakesOf(parentId)[3].map((event) => event.kind).sort()).toEqual(['question', 'run_failed', 'run_finished']);
+
+    // After a takeover the next wake goes to the new owner.
+    const successorId = await createSession();
+    const takeover = await client.request('orchestration.call', { sessionId: successorId, tool: 'orchestration_takeover', args: { fromSessionId: parentId } });
+    expect(takeover.result.error).toBeUndefined();
+    await client.request('sessions.prompt', { sessionId: workerId, text: 'RUN AGAIN' });
+    await reached(() => wakesOf(successorId).length === 1);
+    expect(wakesOf(successorId)[0]).toEqual([{ sessionId: workerId, kind: 'run_finished', reason: 'WORKER RAN AGAIN' }]);
+    expect(wakesOf(parentId)).toHaveLength(4);
 
     await client.close();
   }, 120_000);

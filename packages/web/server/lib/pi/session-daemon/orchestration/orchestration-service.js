@@ -7,6 +7,7 @@ import { workerPreamble } from './instructions.js';
 import { authorize, needsOwnership } from './policy.js';
 import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTime } from './process-identity.js';
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
+import { createWakes } from './wakes.js';
 import {
   applyDurability,
   admitForInput,
@@ -35,7 +36,7 @@ import {
 } from './worker-registry.js';
 
 // Daemon-owned orchestration: tool semantics, permissions, limits, ownership,
-// idempotency and completion delivery. Adapters (the in-process Pi extension
+// idempotency and wakes (`wakes.js`). Adapters (the in-process Pi extension
 // and the MCP endpoint) only resolve the calling session and forward here.
 //
 // Ownership and bookkeeping live in the durable registry
@@ -48,16 +49,13 @@ import {
 export const LINEAGE_ENTRY = 'pichamber.orchestration.lineage';
 export const CHILD_ENTRY = 'pichamber.orchestration.child';
 const STOPPED_ENTRY = 'pichamber.orchestration.stopped';
+// #107 delivered a worker's final reply as this message; wakes replaced it.
+// Kept so old transcripts still render.
 export const RESULT_MESSAGE = 'pichamber.orchestration.result';
 
-const RESULT_TEXT_LIMIT = 16 * 1024;
 const READ_TEXT_LIMIT = 8 * 1024;
 const DEFAULT_WAIT_MS = 30_000;
 const MAX_WAIT_MS = 3_600_000;
-// Result delivery retries a parent that cannot be reached: 1s, 2s, 4s, then
-// the failure is reported instead of dropped silently.
-const DELIVERY_ATTEMPTS = 4;
-const DELIVERY_RETRY_MS = 1_000;
 // Codes with which the daemon reports a session that no longer exists.
 const GONE_CODES = new Set(['INVALID_SESSION', 'SESSION_NOT_FOUND']);
 // A lookup that failed on storage errors is marked `incomplete`: the
@@ -191,11 +189,9 @@ export function createOrchestrationService(deps) {
     now = () => Date.now(),
     // Canonical form of a worker directory, so spellings share one lock.
     canonicalDirectory = async (directory) => directory,
-    onDeliveryFailed = () => {},
     // An admitted input whose outcome could not be recorded keeps its slot;
     // the daemon reports it to the session.
     onAdmissionUnresolved = () => {},
-    delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
     processId = process.pid,
     processInstance = PROCESS_INSTANCE,
     isProcessAlive = isPidAlive,
@@ -246,6 +242,17 @@ export function createOrchestrationService(deps) {
     if (pendingRuns.has(sessionId) && state !== 'busy' && state !== 'retry') return 'starting';
     return state;
   };
+  const wakes = createWakes({
+    registry,
+    getLiveRuntime,
+    activateSession,
+    holdSession,
+    stateOf,
+    runStartedAt: (sessionId) => getSessionActivity(sessionId)?.runStartedAt,
+    readSettings,
+    now,
+    isGone,
+  });
   const isSettled = (sessionId) => {
     const state = stateOf(sessionId);
     return state === 'idle' || state === 'dormant';
@@ -866,6 +873,8 @@ export function createOrchestrationService(deps) {
     const { value, generation } = await withDoneReport(callerSessionId, run, (document) => recordReport(document, callerSessionId, args, {
       at: now(), questionId: `q-${randomUUID().slice(0, 8)}`, repository,
     }));
+    wakes.touch(callerSessionId);
+    if ((args.kind === 'question' || args.kind === 'blocked') && !value.deduplicated) wakes.emit(callerSessionId, 'question', args.summary);
     return {
       sessionId: callerSessionId,
       kind: args.kind,
@@ -992,126 +1001,13 @@ export function createOrchestrationService(deps) {
     notifyWaiters();
   };
 
-  // The recipient of a worker's result, read from the registry at each
-  // delivery: the current owner, or none once the worker is stopping, stopped
-  // or gone. The result itself stays the settled turn's.
-  const resultRecipient = async (sessionId, lineage) => {
-    const document = await registry.read();
-    const worker = document.workers[sessionId];
-    if (!worker || worker.stopping || worker.state === 'stopped' || worker.state === 'removed') return undefined;
-    const owner = worker.orchestratorSessionId;
-    const cwd = document.owners[owner]?.cwd ?? (owner === lineage?.parentSessionId ? lineage.parentDirectory : undefined);
-    return { owner, cwd, worker };
-  };
-
-  // A parent that cannot be reached is retried with backoff. Every decision
-  // is taken against a registry read that succeeded: a stopped or removed
-  // worker ends the delivery silently, an owner change goes on at once with
-  // the new owner and its own attempts, a deleted current owner drops the
-  // result, and a final failure is reported for the current owner through
-  // onDeliveryFailed. A failed read confirms no recipient, old or new; it is
-  // retried with backoff and, after the last try, reported as it is. Every
-  // owner change the loop sees counts against one budget, also one that flips
-  // back before the next read.
-  const deliverWithRetry = async (sessionId, result, lineage) => {
-    let owner;
-    let ownerCwd;
-    let attempts = 0;
-    let ownerChanges = 0;
-    let readFailures = 0;
-    // The failed attempt to `owner`, judged against the next successful read.
-    let failure;
-    const read = () => resultRecipient(sessionId, lineage).then((recipient) => ({ recipient }), (error) => ({ error }));
-    const report = (error) => onDeliveryFailed({
-      sessionId,
-      parentSessionId: owner ?? lineage?.parentSessionId,
-      parentDirectory: ownerCwd ?? lineage?.parentDirectory,
-      error,
-    });
-    let next = await read();
-    for (;;) {
-      if (next.error) {
-        readFailures += 1;
-        if (readFailures >= DELIVERY_ATTEMPTS) {
-          report(next.error);
-          return;
-        }
-        await delay(DELIVERY_RETRY_MS * 2 ** (readFailures - 1));
-        next = await read();
-        continue;
-      }
-      readFailures = 0;
-      const { recipient } = next;
-      if (!recipient) return;
-      if (owner !== undefined && recipient.owner !== owner) {
-        ownerChanges += 1;
-        attempts = 0;
-        // A failure of the old owner says nothing about the new one.
-        failure = undefined;
-      }
-      ({ owner, cwd: ownerCwd } = recipient);
-      if (ownerChanges > DELIVERY_ATTEMPTS) {
-        report(new OrchestrationError('ORCHESTRATION_OWNER_CHANGED', 'The worker kept changing its owner during delivery.', { sessionId }));
-        return;
-      }
-      if (failure) {
-        // `owner` is still the recipient, so the failure is its own.
-        if (isGone(failure)) return;
-        attempts += 1;
-        if (attempts >= DELIVERY_ATTEMPTS) {
-          report(failure);
-          return;
-        }
-        failure = undefined;
-        await delay(DELIVERY_RETRY_MS * 2 ** (attempts - 1));
-        next = await read();
-        continue;
-      }
-      try {
-        // The owner's guard covers its activation and the send until Pi
-        // accepted it, but not the backoff between attempts. A recipient read
-        // in it that differs is decided by the loop like any other read.
-        next = await withSession(owner, async () => {
-          const parent = getLiveRuntime(owner) ?? await activateSession(owner, ownerCwd);
-          const current = await resultRecipient(sessionId, lineage);
-          if (current?.owner !== owner) return { recipient: current };
-          await deliverResult(parent, sessionId, result, current.worker);
-          return { delivered: true };
-        });
-        if (next.delivered) return;
-      } catch (error) {
-        failure = error;
-        next = await read();
-      }
-    }
-  };
-
-  const deliverResult = async (parent, sessionId, result, worker) => {
-    const { assistant, cwd } = result;
-    const outcome = outcomeOf(assistant);
-    const reply = truncate(textOf(assistant?.content), RESULT_TEXT_LIMIT);
-    const title = result.title || worker.title;
-    const header = `Worker "${title}" (${sessionId}) ${outcome === 'completed' ? 'finished' : outcome === 'interrupted' ? 'was interrupted' : 'failed'}.`;
-    await parent.session.sendCustomMessage({
-      customType: RESULT_MESSAGE,
-      content: [header, assistant?.errorMessage ? `Error: ${assistant.errorMessage}` : '', reply].filter(Boolean).join('\n\n'),
-      display: true,
-      details: { sessionId, title, cwd, outcome, ...(worker.role ? { role: worker.role } : {}) },
-    }, { triggerTurn: true, deliverAs: 'followUp' });
-  };
-
-  const captureResult = (runtime) => ({
-    assistant: lastAssistant(runtime),
-    title: runtime?.session.sessionManager?.getSessionName?.(),
-    cwd: runtime?.cwd,
-  });
+  const captureResult = (runtime) => ({ assistant: lastAssistant(runtime) });
 
   /**
    * Called by the daemon for every agent_settled. A run this service tracks
    * ends with its prompt (`finishRun`); any other settle applies the worker's
-   * state transition, resolves waits and delivers a worker's result to its
-   * current owner as a custom message that starts a turn, or queues as
-   * follow-up while the owner is busy.
+   * state transition, resolves waits and emits a worker's run end as a wake.
+   * Every settle also hands a settled owner its queued wakes.
    * The `done` rule applies only to the generation that ended. While an
    * admitted input has no outcome yet it waits, because that input may start
    * the next run in the same slot (`resolveInput` applies or drops it).
@@ -1119,6 +1015,7 @@ export function createOrchestrationService(deps) {
   const onSessionSettled = async (sessionId, runtime) => {
     pendingRuns.delete(sessionId);
     notifyWaiters();
+    wakes.settled(sessionId);
     // Taken before any await: a later turn must not replace it.
     const result = captureResult(runtime);
     // A run of this service ends only with its own prompt (`finishRun`). The
@@ -1145,7 +1042,7 @@ export function createOrchestrationService(deps) {
   };
 
   // Applies a run's end: durability, the `done` rule of its generation (none
-  // for a run of no tracked start), and the result delivery.
+  // for a run of no tracked start), and the run end's wake.
   const applyRunEnd = async (sessionId, runtime, run, result) => {
     // A run whose start could not be recorded completes its commit at its
     // end (R7-S1).
@@ -1196,7 +1093,10 @@ export function createOrchestrationService(deps) {
       throw error;
     }
     if (!settled.worker || settled.worker.stopping || settled.state === 'stopped') return;
-    await deliverWithRetry(sessionId, result, lineage);
+    const { assistant } = result;
+    const outcome = outcomeOf(assistant);
+    if (outcome === 'error') wakes.emit(sessionId, 'run_failed', assistant.errorMessage ?? 'the run failed');
+    else wakes.emit(sessionId, 'run_finished', outcome === 'interrupted' ? 'interrupted' : textOf(assistant?.content));
   };
 
   /*
@@ -1637,6 +1537,12 @@ export function createOrchestrationService(deps) {
     resolveInput,
     recordDoneReport,
     onInputCompleted,
+    // Message and tool events of a session: progress for the stall watchdog.
+    onSessionActivity: wakes.touch,
+    // An extension dialog opened in a session; in a worker it is a question.
+    onDialogOpened: (sessionId, title) => wakes.emit(sessionId, 'question', `dialog: ${title ?? 'input requested'}`),
+    startWakes: wakes.start,
+    stopWakes: wakes.stop,
     verifyCaller,
     isWorker: (sessionManager) => Boolean(lineageOf({ session: { sessionManager } })),
     toolNames: ORCHESTRATION_TOOL_NAMES,

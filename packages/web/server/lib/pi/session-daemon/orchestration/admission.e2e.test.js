@@ -79,6 +79,9 @@ const setup = async () => {
   await mkdir(join(agentDir, 'extensions'), { recursive: true });
   await writeFile(join(agentDir, 'extensions', 'faux-admission.ts'), extension(piAiFauxUrl(), workerDir));
   process.env.PICHAMBER_DATA_DIR = join(root, 'data');
+  // Each settle wakes the parent at once, so wakes count run ends.
+  await mkdir(join(root, 'data', 'pi'), { recursive: true });
+  await writeFile(join(root, 'data', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { wakes: { coalesceMs: 0 } } }));
   const endpoint = join(root, 'daemon.sock');
   const daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir });
   await daemon.start();
@@ -89,16 +92,18 @@ const setup = async () => {
   const parentId = created.result.session.id;
   const results = () => client.events.filter((message) => message.event === 'extension.message'
     && message.payload?.sessionId === parentId
-    && message.payload?.customType === 'pichamber.orchestration.result');
+    && message.payload?.customType === 'pichamber.orchestration.events')
+    .flatMap((message) => message.payload.details.events)
+    .filter((event) => event.kind === 'run_finished');
   const answered = client.next((message) => message.event === 'assistant.message.end'
     && message.payload?.sessionId === parentId && message.payload?.text === 'PARENT GOT RESULT');
   await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
   await answered;
-  const workerId = results()[0].payload.details.sessionId;
+  const workerId = results()[0].sessionId;
 
   const file = join(root, 'data', 'pi', 'orchestration-registry.json');
   const worker = async () => JSON.parse(await readFile(file, 'utf8')).workers[workerId];
-  // Settles are applied, and their results delivered, in order.
+  // Settles are applied, and their run ends delivered as wakes, in order.
   const delivered = (count) => client.next(() => results().length >= count, 30_000);
   // What Slice 2's worker_report records: the current run reported done.
   const reportDone = () => createOrchestrationRegistryStore({ file }).update((document) => {
