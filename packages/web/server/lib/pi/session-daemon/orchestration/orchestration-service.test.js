@@ -596,6 +596,17 @@ describe('orchestration service', () => {
     ]);
   });
 
+  it('wakes the owner when an extension dialog opens in a worker, and not for a dialog elsewhere', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    harness.service.onDialogOpened('orch', 'Own dialog');
+    harness.service.onDialogOpened('worker-1', 'Allow network?');
+    await vi.waitFor(() => expect(harness.orchestrator.delivered).toHaveLength(1));
+    expect(harness.orchestrator.delivered[0].message.details.events).toEqual([
+      expect.objectContaining({ sessionId: 'worker-1', kind: 'question', reason: 'dialog: Allow network?' }),
+    ]);
+  });
+
   it('stops a worker without delivering the stopped result', async () => {
     const { service, deps, orchestrator, settle, workers } = createHarness();
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
