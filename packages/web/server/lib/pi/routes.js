@@ -14,7 +14,7 @@ import {
 } from '../package-manager.js';
 import { listPiCustomThemes } from './custom-themes.js';
 import { readUpdateJob } from '../update-job-store.js';
-import { createPiSettingsStore } from './settings-store.js';
+import { createPiSettingsStore, resolveOrchestrationSettings } from './settings-store.js';
 import { isPiThinkingLevel } from './thinking-levels.js';
 import { createPiSessionFoldersStore } from './session-folders-store.js';
 import {
@@ -25,6 +25,8 @@ import {
 } from './extension-protocol.js';
 import { createPiUiSettingsStore } from './ui-settings-store.js';
 import { createPiSnippetsStore } from './snippets-store.js';
+import { createOrchestrationCredentialStore } from '../client-auth/orchestration-credentials.js';
+import { registerOrchestrationMcpRoute } from './mcp-route.js';
 import { isValidSendOperationId, isValidStreamEpoch } from './session-daemon/send-operation-registry.js';
 import {
   DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
@@ -852,6 +854,7 @@ export const registerPiRuntimeRoutes = (app, {
   sessionFoldersStore = createPiSessionFoldersStore(),
   uiSettingsStore = createPiUiSettingsStore(),
   snippetsStore = createPiSnippetsStore(),
+  orchestrationCredentialStore = createOrchestrationCredentialStore(),
   listCustomThemes = listPiCustomThemes,
   updateChecker = checkForUpdates,
   updateLauncher = launchUpdateCommand,
@@ -863,6 +866,10 @@ export const registerPiRuntimeRoutes = (app, {
   eventStreamMaxBufferedBytes = DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
 }) => {
   const eventStreamRegistry = createPiEventStreamRegistry();
+  registerOrchestrationMcpRoute(app, {
+    getDaemonRuntime: () => getDaemonRuntime(getPiSessionDaemonRuntime),
+    credentialStore: orchestrationCredentialStore,
+  });
   app.get('/api/pi/ui-settings', async (_req, res) => {
     try {
       res.json(await uiSettingsStore.read());
@@ -1252,7 +1259,7 @@ export const registerPiRuntimeRoutes = (app, {
     try {
       const pi = projectPiSettings(await getDaemonRuntime(getPiSessionDaemonRuntime).request('settings.get'));
       const pichamber = await settingsStore.read();
-      res.json({ ...pi, pichamber });
+      res.json({ ...pi, pichamber, orchestration: resolveOrchestrationSettings(pichamber) });
     } catch (error) {
       writeDaemonError(res, error);
     }
@@ -1271,7 +1278,7 @@ export const registerPiRuntimeRoutes = (app, {
   app.put('/api/pi/settings/defaults', async (req, res) => {
     try {
       const pichamber = await settingsStore.update(req.body ?? {});
-      res.json({ pichamber });
+      res.json({ pichamber, orchestration: resolveOrchestrationSettings(pichamber) });
     } catch (error) {
       writeDaemonError(res, error);
     }
@@ -1713,7 +1720,35 @@ export const registerPiRuntimeRoutes = (app, {
 
   app.delete('/api/pi/sessions/:sessionId', async (req, res) => {
     const result = await requestSessionOperation(req, res, getPiSessionDaemonRuntime, 'sessions.delete');
-    if (result !== undefined) res.status(204).end();
+    if (result !== undefined) {
+      orchestrationCredentialStore.revokeSession(req.params.sessionId);
+      res.status(204).end();
+    }
+  });
+
+  // Mints an MCP credential that acts as this one session (Adapter B). Only an
+  // authenticated client reaches here: the /api gate lets orchestration
+  // credentials through to `/api/pi/mcp` alone. The raw token is returned once.
+  app.post('/api/pi/sessions/:sessionId/orchestration-credential', async (req, res) => {
+    const sessionId = sessionIdFrom(req);
+    if (!sessionId) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    // A credential acts as one existing session; never mint for an unknown id.
+    try {
+      const verified = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.caller', { sessionId });
+      if (verified?.error) {
+        res.status(verified.error.code === 'ORCHESTRATION_CALLER_GONE' ? 404 : 503).json({ error: { code: verified.error.code } });
+        return;
+      }
+    } catch (error) {
+      writeDaemonError(res, error);
+      return;
+    }
+    const { token, expiresAt, idleTimeoutMs } = orchestrationCredentialStore.mint(sessionId);
+    res.status(201).json({ token, sessionId, expiresAt, idleTimeoutMs, url: '/api/pi/mcp', server: 'pichamber' });
   });
 
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {

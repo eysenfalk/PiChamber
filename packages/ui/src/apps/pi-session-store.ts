@@ -114,6 +114,28 @@ const affectsCatalogLifecycle = (event: PiSessionEvent): boolean => (
   lifecycleFromEvent(event) !== undefined || LIFECYCLE_EVENT_NAMES.has(event.name)
 );
 
+/**
+ * A stub row carries only identity, directory and lifecycle; its listing is
+ * expected to replace it. When the directory was already listed nothing
+ * schedules that listing, so the row would keep `parentId: null` (a spawned
+ * worker would render flat instead of under its parent) until an unrelated
+ * refresh. Returns those already listed directories so they are re-listed
+ * once. Scans only this batch's events, never the whole catalog.
+ */
+const listedDirectoriesOfNewStubs = (
+  events: readonly PiSessionEvent[],
+  previous: PiSessionCatalogState,
+  next: PiSessionCatalogState,
+): string[] => {
+  const directories = new Set<string>();
+  for (const event of events) {
+    if (previous.byId.has(event.sessionId)) continue;
+    const directory = next.byId.get(event.sessionId)?.directory;
+    if (directory && next.listStatusByDirectory.get(directory) === 'ready') directories.add(directory);
+  }
+  return [...directories];
+};
+
 export const getPiSessionStore = (): PiSessionStore => {
   sharedStore ??= new PiSessionStore();
   return sharedStore;
@@ -3474,6 +3496,7 @@ export class PiSessionStore {
     // stale-epoch event, must not resurrect a catalog row here.
     const nextCatalog = this.applyCatalogFromEvents(acceptedEvents, working);
     const catalogChanged = nextCatalog !== this.state.catalog;
+    const stubbedDirectories = catalogChanged ? listedDirectoriesOfNewStubs(acceptedEvents, this.state.catalog, nextCatalog) : [];
     if (catalogChanged) {
       this.state = { ...this.state, catalog: nextCatalog };
     }
@@ -3487,6 +3510,7 @@ export class PiSessionStore {
     if (topics.length > 0) this.emit(topics);
     if (touched) this.scheduleIdleEviction();
     for (const sessionId of restoreIds) this.restoreTranscript(sessionId);
+    if (stubbedDirectories.length > 0) void this.refreshAllDirectoryCatalogs(stubbedDirectories);
     if (epochChangedResidents) {
       // Verified epoch change: reconcile every known directory catalog and
       // re-fetch the residents that were hydrated before the reset. Selected

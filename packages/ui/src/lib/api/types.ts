@@ -599,6 +599,7 @@ export interface SettingsPayload {
   activeProjectId?: string;
   securityScopedBookmarks?: string[];
   pinnedDirectories?: string[];
+  hiddenProjectIds?: string[];
   showDeletionDialog?: boolean;
   nativeNotificationsEnabled?: boolean;
   notificationMode?: 'always' | 'hidden-only';
@@ -623,6 +624,8 @@ export interface SettingsPayload {
   shortcutOverrides?: Record<string, string>;
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side';
   gitChangesViewMode?: 'flat' | 'tree';
+  gitAutoFetchEnabled?: boolean;
+  gitAutoFetchIntervalMinutes?: 5 | 15 | 30 | 60;
   filesViewShowGitignored?: boolean;
   openInAppId?: string;
   gitProviderId?: string;

@@ -11,6 +11,7 @@ lab/run record lab           # captioned screenshots and H.264 video in .proof/l
 lab/run record fork-rename   # renamed large fork listed by a fresh daemon, in .proof/fork-rename/
 lab/run record add-device    # Add a device dialog without Tailscale, in .proof/add-device/
 lab/run record sidebar-tree  # Workspace tree: Chats, worktrees, fork chain, other folders, in .proof/sidebar-tree/
+lab/run record orchestration # Orchestrator spawns a worker on the faux model (#107), in .proof/orchestration/
 lab/run down                # removes pod, internal network and lab state volume
 ```
 
@@ -27,6 +28,8 @@ The internal network has no internet route. The host port is published only on l
 The server gets 1.9 CPUs and 3968 MiB; infra gets 0.1 CPU and 128 MiB before pod startup; the recorder gets 2 CPUs, 4096 MiB and a 512 PID limit. Together: 4 CPUs and 8 GiB, no extra swap allowance. After starting the pod, `up` verifies the applied CPU quota/period, memory and swap limits with `podman inspect` for server and infra; ignored or mismatched limits fail startup and trigger cleanup. Server swap is derived from `lab.yaml`. The lifecycle lock prevents concurrent recorders and overlapping up/down/build operations. Image builds get at most 4 CPUs and 8 GiB and cannot overlap this lab through `run`'s lifecycle lock. Do not start separate recorder containers outside that budget.
 
 The image has Ubuntu 26.04, Bun 1.4.2, Node 24, git, ffmpeg with libx264 and drawtext, and Chromium (Chrome for Testing 154.0.8037.92). Ubuntu's chromium package is a Snap transition package; pinned full Chrome for Testing avoids snapd in a rootless container. Only the container recorder uses `lab/chromium`, which adds `--no-sandbox`: capability dropping and no-new-privileges prevent the setuid sandbox, and nested namespace sandboxing is unavailable in this rootless environment. The read-only container and internal network remain the accidental-access boundary. Host recording and perf helpers never add this flag. The host's installed `node_modules` are used unchanged, and assets must be built on the host before `up`.
+
+The lab has no real model. The seed writes one Pi extension, `pi-agent/extensions/faux-orchestration.js` from `scripts/lab/faux-orchestration.mjs`, that registers the scripted faux provider `faux/faux-1`; the seeded `Lab: orchestrator` session runs on it. The agent directory may hold only `sessions` and these `extensions`.
 
 Projects are registered after daemon readiness through `/api/pi/projects/select`, and their UI settings through `/api/pi/ui-settings`, the same routes used by the UI. `projects.list` starts with only the server cwd; it does not discover every seeded session cwd automatically.
 

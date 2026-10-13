@@ -62,6 +62,8 @@ export type TreeNode = {
   folderScopeKey?: string;
   /** Id of the session folder behind a `folder` node. */
   folderId?: string;
+  /** Search only: this Chats or project root is hidden and appears because something in it matched. */
+  hiddenMatch?: boolean;
 };
 
 export type WorkspaceTreeProject = { id: string; label: string; root: string };
@@ -87,15 +89,26 @@ export type WorkspaceTreeInput = {
   discoveryComplete: boolean;
   /** The previous tree; keeps ownerless sessions in place while discovery is incomplete. */
   previous?: Pick<WorkspaceTree, 'placement' | 'parents'>;
+  /** Project ids, plus `'chats'` for Chats, the owner hid. Omitted from the roots unless a query matches inside them. */
+  hidden?: ReadonlySet<string>;
+  /** Quick search, matched case-insensitively after trimming. A non-empty query narrows the tree to the matching paths. */
+  query?: string;
 };
 
 export type WorkspaceTree = {
   roots: TreeNode[];
   sessionCount: number;
-  /** Parent of every non-root node. */
+  /** Parent of every non-root node of the unfiltered tree; a query does not change it. */
   parents: ReadonlyMap<NodeKey, NodeKey>;
-  /** Container node (worktree, flat project, Chats, other folder) of every session. */
+  /** Container node (worktree, flat project, Chats, other folder) of every session; a query does not change it. */
   placement: ReadonlyMap<string, NodeKey>;
+  /**
+   * Transient expansion for a query: every kept node that has kept children, so each match is
+   * reachable. Render it in place of the stored expansion and never write it back. Empty without a query.
+   */
+  searchExpanded: ReadonlySet<NodeKey>;
+  /** Matching projects, worktrees, folders and sessions, hidden projects included. 0 without a query. */
+  matchCount: number;
 };
 
 export type TreeRow = {
@@ -178,6 +191,31 @@ type Builder = {
 const linkChildren = (builder: Builder, node: TreeNode): TreeNode => {
   for (const child of node.children) builder.parents.set(child.key, node.key);
   return node;
+};
+
+/**
+ * The session whose container a session lives in: its topmost active ancestor.
+ * Forks and orchestration workers follow their parent even when they run in
+ * another directory, so a worker tree stays in one place. A parent cycle
+ * anchors at the session where the walk meets it again.
+ */
+const sessionAnchors = (sessions: readonly Session[]): ((session: Session) => Session) => {
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const anchors = new Map<string, Session>();
+  return (session) => {
+    const known = anchors.get(session.id);
+    if (known) return known;
+    const seen = new Set<string>([session.id]);
+    let anchor = session;
+    for (;;) {
+      const parent = anchor.parentID ? byId.get(anchor.parentID) : undefined;
+      if (!parent || seen.has(parent.id)) break;
+      seen.add(parent.id);
+      anchor = parent;
+    }
+    anchors.set(session.id, anchor);
+    return anchor;
+  };
 };
 
 /** Session nodes with forks nested under their parent; forks whose parent is outside the container stay roots. */
@@ -348,11 +386,67 @@ const containerNode = (
   rollup: { ...EMPTY_ROLLUP },
 });
 
+const SEARCHABLE_KINDS: ReadonlySet<TreeNodeKind> = new Set(['project', 'worktree', 'folder', 'otherFolder', 'session']);
+
+type QueryResult = {
+  roots: TreeNode[];
+  searchExpanded: Set<NodeKey>;
+  matchCount: number;
+};
+
+/**
+ * Keeps the nodes whose label matches the lowercase `query` and their ancestors in one walk.
+ * "N more" cuts are dissolved so every match shows. A match without matching descendants keeps its
+ * whole subtree, collapsed, so a branch hit still leads to its sessions; a match with matching
+ * descendants narrows to those. `sessionCount` counts the sessions that are kept; rollups and
+ * `lastActivity` keep the unfiltered values, which are live status and not a display count.
+ */
+const narrowToQuery = (roots: readonly TreeNode[], query: string, hidden: ReadonlySet<string>): QueryResult => {
+  const searchExpanded = new Set<NodeKey>();
+  let matchCount = 0;
+
+  const matches = (node: TreeNode): boolean =>
+    SEARCHABLE_KINDS.has(node.kind) && node.label.toLowerCase().includes(query);
+
+  const visit = (node: TreeNode): TreeNode | null => {
+    const own = matches(node);
+    const kept: TreeNode[] = [];
+    for (const child of node.children) {
+      if (child.kind === 'more') {
+        for (const hiddenByCut of child.children) {
+          const narrowed = visit(hiddenByCut);
+          if (narrowed) kept.push(narrowed);
+        }
+        continue;
+      }
+      const narrowed = visit(child);
+      if (narrowed) kept.push(narrowed);
+    }
+    if (!own && kept.length === 0) return null;
+    if (own) matchCount += 1;
+    if (own && kept.length === 0) return node;
+    if (kept.length > 0) searchExpanded.add(node.key);
+    let sessionCount = 0;
+    for (const child of kept) sessionCount += child.kind === 'session' ? 1 + child.sessionCount : child.sessionCount;
+    return { ...node, children: kept, sessionCount };
+  };
+
+  const narrowedRoots: TreeNode[] = [];
+  for (const root of roots) {
+    const narrowed = visit(root);
+    if (!narrowed) continue;
+    const hiddenKey = root.kind === 'chats' ? 'chats' : root.projectId;
+    narrowedRoots.push(hiddenKey !== undefined && hidden.has(hiddenKey) ? { ...narrowed, hiddenMatch: true } : narrowed);
+  }
+  return { roots: narrowedRoots, searchExpanded, matchCount };
+};
+
 export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => {
   const builder: Builder = { input, parents: new Map(), placement: new Map() };
   const ownedById = input.ownership.bySessionId;
   const globalIds = new Set(input.ownership.globalSessions.map((session) => session.id));
   const active = input.sessions.filter((session) => !session.time?.archived);
+  const anchorOf = sessionAnchors(active);
 
   type ProjectBucket = {
     project: WorkspaceTreeProject;
@@ -379,7 +473,8 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   const chats: Session[] = [];
   const unowned: Session[] = [];
   for (const session of active) {
-    const owner = ownedById.get(session.id);
+    const anchor = anchorOf(session);
+    const owner = ownedById.get(anchor.id);
     const bucket = owner ? buckets.get(owner.projectId) : undefined;
     if (owner && bucket) {
       const scope = normalizePath(owner.scopeDirectory) ?? owner.scopeDirectory;
@@ -389,7 +484,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
       else bucket.sessionsByScope.set(scope, [session]);
       continue;
     }
-    if (globalIds.has(session.id)) chats.push(session);
+    if (globalIds.has(anchor.id)) chats.push(session);
     else unowned.push(session);
   }
 
@@ -398,7 +493,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   // While discovery is incomplete, an ownerless session stays in the container it was in before.
   const stillOther: Session[] = [];
   for (const session of unowned) {
-    const container = input.discoveryComplete ? undefined : input.previous?.placement.get(session.id);
+    const container = input.discoveryComplete ? undefined : input.previous?.placement.get(anchorOf(session).id);
     let projectKey: NodeKey | undefined = container;
     while (projectKey && !projectKey.startsWith('p:')) projectKey = input.previous?.parents.get(projectKey);
     const bucketForPrevious = projectKey ? buckets.get(projectKey.slice(2)) : undefined;
@@ -501,7 +596,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   if (stillOther.length > 0) {
     const byDirectory = new Map<string, Session[]>();
     for (const session of stillOther) {
-      const directory = sessionDirectory(session) ?? '';
+      const directory = sessionDirectory(anchorOf(session)) ?? '';
       const list = byDirectory.get(directory);
       if (list) list.push(session);
       else byDirectory.set(directory, [session]);
@@ -527,11 +622,30 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
     })));
   }
 
+  const hidden = input.hidden ?? new Set<string>();
+  const query = (input.query ?? '').trim().toLowerCase();
+  if (query) {
+    const narrowed = narrowToQuery(roots, query, hidden);
+    return {
+      roots: narrowed.roots,
+      sessionCount: narrowed.roots.reduce((sum, node) => sum + node.sessionCount, 0),
+      parents: builder.parents,
+      placement: builder.placement,
+      searchExpanded: narrowed.searchExpanded,
+      matchCount: narrowed.matchCount,
+    };
+  }
+
+  const shown = hidden.size === 0
+    ? roots
+    : roots.filter((node) => !hidden.has(node.kind === 'chats' ? 'chats' : node.projectId ?? ''));
   return {
-    roots,
-    sessionCount: roots.reduce((sum, node) => sum + node.sessionCount, 0),
+    roots: shown,
+    sessionCount: shown.reduce((sum, node) => sum + node.sessionCount, 0),
     parents: builder.parents,
     placement: builder.placement,
+    searchExpanded: new Set(),
+    matchCount: 0,
   };
 };
 

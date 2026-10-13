@@ -53,6 +53,8 @@ export type DesktopSettings = {
   activeProjectId?: string;
   securityScopedBookmarks?: string[];
   pinnedDirectories?: string[];
+  /** Sidebar tree: project ids (and `chats`) the owner hid. Local to the runtime, like `projects`. */
+  hiddenProjectIds?: string[];
   showDeletionDialog?: boolean;
   nativeNotificationsEnabled?: boolean;
   notificationMode?: 'always' | 'hidden-only';
@@ -130,6 +132,8 @@ export type DesktopSettings = {
   recentEfforts?: Record<string, string[]>;
   diffLayoutPreference?: 'dynamic' | 'inline' | 'side-by-side';
   gitChangesViewMode?: 'flat' | 'tree';
+  gitAutoFetchEnabled?: boolean;
+  gitAutoFetchIntervalMinutes?: 5 | 15 | 30 | 60;
   filesViewShowGitignored?: boolean;
 
   messageLimit?: number;

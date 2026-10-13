@@ -208,3 +208,44 @@ describe('ExtensionMessageCard supervisor rows', () => {
         }
     });
 });
+
+describe('ExtensionMessageCard orchestration results', () => {
+    const resultDetails = (overrides: Record<string, unknown> = {}) => ({
+        sessionId: 'worker-1',
+        title: 'Fix the parser',
+        cwd: '/work/repo',
+        outcome: 'completed',
+        role: 'task-medium',
+        ...overrides,
+    });
+    const resultText = 'Worker "Fix the parser" (worker-1) finished.\n\nParser fixed.\nAll tests pass.';
+
+    test('renders a worker result as one compact row with title, outcome, role and first reply line', () => {
+        const markup = renderCard({ customType: 'pichamber.orchestration.result', text: resultText, details: resultDetails() });
+        expect(markup).toContain('data-orchestration-result="completed"');
+        expect(markup).toContain('Fix the parser');
+        expect(markup).toContain('finished');
+        expect(markup).toContain('Parser fixed.');
+        expect(markup).toContain('task-medium');
+        expect(markup).toContain('aria-label="Open worker Fix the parser"');
+        expect(markup).toContain('aria-expanded="false"');
+        expect(markup).not.toContain('All tests pass.');
+        expect(markup).not.toContain('(worker-1) finished');
+    });
+
+    test('expands to the full reply and labels failed workers', () => {
+        const expanded = renderCard({ customType: 'pichamber.orchestration.result', text: resultText, details: resultDetails(), defaultExpanded: true });
+        expect(expanded).toContain('All tests pass.');
+        expect(expanded).toContain('/work/repo');
+        expect(renderCard({ customType: 'pichamber.orchestration.result', text: 'Worker failed.', details: resultDetails({ outcome: 'error' }) }))
+            .toContain('data-orchestration-result="error"');
+    });
+
+    test('falls back to the generic card for malformed result details', () => {
+        for (const details of [undefined, 'x', resultDetails({ outcome: 'done' }), resultDetails({ sessionId: '' }), resultDetails({ cwd: 3 })]) {
+            const markup = renderCard({ customType: 'pichamber.orchestration.result', text: resultText, details });
+            expect(markup).not.toContain('data-orchestration-result');
+            expect(markup).toContain('data-extension-disclosure="collapsed"');
+        }
+    });
+});

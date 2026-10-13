@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
-import { chmod, link, mkdir, lstat, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { chmod, link, mkdir, lstat, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { hasTrustRequiringProjectResources } from '@earendil-works/pi-coding-agent';
 import { StringDecoder } from 'node:string_decoder';
@@ -51,12 +50,16 @@ import { withCrossProcessLock } from '../../server/cross-process-lock.js';
 import {
   findPiSessionJsonlById,
   getPiSessionDirectory,
+  scanPiSessionJsonlHeaders,
   createPiSessionListCache,
   listPiSessionJsonlDirectory,
   validatePiSessionJsonlDirectory,
   validatePiSessionJsonlFile,
 } from './session-jsonl.js';
 import { resolvePiChamberDataDir } from '../../pichamber-data-dir.js';
+import { createOrchestrationSettingsReader, readGitBranch, readHostStatus } from './orchestration/host-info.js';
+import { LINEAGE_ENTRY, OrchestrationError, createOrchestrationService } from './orchestration/orchestration-service.js';
+import { createOrchestrationExtension } from './orchestration/pi-extension.js';
 
 const textFromContent = (content) => (
   Array.isArray(content)
@@ -129,7 +132,9 @@ export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), se
     const services = await createAgentSessionServices({
       cwd: runtimeCwd,
       agentDir: runtimeAgentDir,
-      resourceLoaderOptions: {},
+      resourceLoaderOptions: hooks?.extensionFactories?.length
+        ? { extensionFactories: hooks.extensionFactories }
+        : {},
     });
 
     const result = {
@@ -598,6 +603,7 @@ export function createSessionDaemon({
     ?? ((runtimeOptions, runtimeHooks) => createPiSessionRuntime(runtimeOptions, runtimeHooks));
   const createRuntime = (runtimeOptions) => baseCreateRuntime(runtimeOptions, {
     createExtensionBindings: buildExtensionBindings,
+    extensionFactories: [orchestrationExtension],
   });
 
   const getSessionState = () => runtime
@@ -1187,7 +1193,9 @@ export function createSessionDaemon({
       case 'sessions.setThinking':
       case 'sessions.compact':
       case 'sessions.delete':
-      case 'sessions.rename': {
+      case 'sessions.rename':
+      case 'orchestration.call':
+      case 'orchestration.caller': {
         const candidate = message?.payload?.sessionId;
         return isValidIdleSessionId(candidate) ? candidate : undefined;
       }
@@ -1244,14 +1252,34 @@ export function createSessionDaemon({
           cwd: targetDir,
           name: entry.session.sessionManager?.getSessionName?.() || entry.session.title || undefined,
           messageCount: entry.session.messages?.length || 0,
+          // Pi writes the JSONL only with the first message, so the parent of a
+          // just created session (an orchestration worker) comes from its
+          // in-memory header.
+          ...(typeof entry.session.sessionManager?.getHeader?.()?.parentSession === 'string'
+            ? { parentSessionPath: entry.session.sessionManager.getHeader().parentSession }
+            : {}),
           created: new Date(),
           modified: new Date(),
         });
       }
     }
 
+    // A parent can live in another directory (a worker in its own worktree)
+    // or be unpersisted itself, so the local listing alone does not resolve
+    // it. A live runtime owns its file path; otherwise Pi names every session
+    // file `<timestamp>_<sessionId>.jsonl`.
+    const parentIdOf = (parentPath) => {
+      if (typeof parentPath !== 'string' || parentPath.length === 0) return undefined;
+      const listed = idByPath.get(parentPath);
+      if (listed) return listed;
+      const live = (runtimeRegistry?.listAll?.() ?? (runtime ? [runtime] : []))
+        .find((entry) => entry?.session?.sessionManager?.getSessionFile?.() === parentPath)?.session?.sessionId;
+      if (typeof live === 'string' && live.length > 0) return live;
+      return /^[^_]+_([^/\\]+)\.jsonl$/.exec(basename(parentPath))?.[1];
+    };
     const allSessions = [...extra, ...uncorrupted];
     return allSessions.map((session) => {
+      const parentId = parentIdOf(session.parentSessionPath);
       const createdAt = session?.created instanceof Date ? session.created.getTime() : (typeof session?.createdAt === 'number' ? session.createdAt : NaN);
       const updatedAt = session?.modified instanceof Date ? session.modified.getTime() : (typeof session?.updatedAt === 'number' ? session.updatedAt : NaN);
       if (typeof session?.id !== 'string' || session.id.length === 0 || !Number.isFinite(createdAt) || !Number.isFinite(updatedAt)) {
@@ -1266,9 +1294,7 @@ export function createSessionDaemon({
           id: session.id,
           directory: targetDir,
           ...(title ? { title } : {}),
-          ...(typeof session.parentSessionPath === 'string' && idByPath.get(session.parentSessionPath)
-            ? { parentId: idByPath.get(session.parentSessionPath) }
-            : {}),
+          ...(parentId ? { parentId } : {}),
           createdAt,
           updatedAt,
           ...(Number.isSafeInteger(session.messageCount) && session.messageCount >= 0 ? { messageCount: session.messageCount } : {}),
@@ -1327,6 +1353,10 @@ export function createSessionDaemon({
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
     }
+    // Set when a lookup path failed for another reason than absence. The
+    // final INVALID_SESSION then carries `incomplete`, because the session may
+    // exist behind a transient storage error and must not be treated as gone.
+    let incomplete = false;
     const candidateDirs = new Set();
     let requestedTargetDirectory;
     if (requestedDirectory) {
@@ -1348,6 +1378,7 @@ export function createSessionDaemon({
           return { target, directory };
         }
       } catch {
+        incomplete = true;
         // Continue through the remaining authoritative lookup paths.
       }
       return undefined;
@@ -1374,6 +1405,7 @@ export function createSessionDaemon({
         return { target: { id: sessionId, path: named.path }, directory };
       }
     } catch {
+      incomplete = true;
       // Fall through to list / header scan for non-standard filenames.
     }
 
@@ -1383,44 +1415,26 @@ export function createSessionDaemon({
       if (target) return target;
     }
 
-    // If not found in candidateDirs, scan all directory stores under agentDir/sessions
-    try {
-      const sessionsRoot = join(agentDir, 'sessions');
-      const dirEntries = await readdir(sessionsRoot, { withFileTypes: true });
-      for (const dirEntry of dirEntries) {
-        if (!dirEntry.isDirectory()) continue;
-        const dirPath = join(sessionsRoot, dirEntry.name);
-        const files = await readdir(dirPath, { withFileTypes: true });
-        for (const file of files) {
-          if (!file.name.endsWith('.jsonl')) continue;
-          const fullPath = join(dirPath, file.name);
-          try {
-            const input = createReadStream(fullPath, { encoding: 'utf8' });
-            const lines = createInterface({ input, crlfDelay: Infinity });
-            let sessionCwd = null;
-            let fileId = null;
-            for await (const line of lines) {
-              if (!line.trim()) continue;
-              const header = JSON.parse(line);
-              if (header?.type === 'session' && typeof header.id === 'string') {
-                fileId = header.id;
-                sessionCwd = header.cwd;
-              }
-              break;
-            }
-            lines.close();
-            if (fileId === sessionId && sessionCwd) {
-              await validatePiSessionJsonlFile(fullPath);
-              const validated = await resolveDirectory(sessionCwd);
-              knownDirectories.add(validated);
-              return { target: { id: sessionId, path: fullPath }, directory: validated };
-            }
-          } catch {}
-        }
-      }
-    } catch {}
+    // Last resort for non-standard filenames: read the header of every
+    // file in every directory store under agentDir/sessions.
+    const scanned = await scanPiSessionJsonlHeaders({
+      sessionId,
+      agentDir,
+      accept: async ({ path, cwd: headerCwd }) => {
+        await validatePiSessionJsonlFile(path);
+        return { target: { id: sessionId, path }, directory: await resolveDirectory(headerCwd) };
+      },
+    });
+    if (scanned.match) {
+      knownDirectories.add(scanned.match.directory);
+      return scanned.match;
+    }
+    if (scanned.incomplete) incomplete = true;
 
-    throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
+    throw Object.assign(
+      new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.'),
+      incomplete ? { incomplete: true } : {},
+    );
   };
 
   const activateInflightBySessionId = new Map();
@@ -1843,7 +1857,9 @@ export function createSessionDaemon({
     };
   };
 
-  const createSession = async (payload) => {
+  // `worker` is internal only (orchestration spawns): it links the new
+  // session to its orchestrator and leaves the daemon's active session alone.
+  const createSession = async (payload, worker) => {
     const explicitRetryLimit = payload && typeof payload === 'object' ? (payload.maxRetries ?? payload.retryLimit ?? payload.defaultRetryLimit) : undefined;
     if (explicitRetryLimit !== undefined && (!Number.isInteger(explicitRetryLimit) || explicitRetryLimit < 0 || explicitRetryLimit > 10)) {
       throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The retry limit must be an integer between 0 and 10.');
@@ -1873,7 +1889,7 @@ export function createSessionDaemon({
     const newRuntime = await createRuntime({
       cwd: targetCwd,
       agentDir,
-      ...(parent ? { sessionFile: parent.path } : {}),
+      ...(parent && !worker ? { sessionFile: parent.path } : {}),
     });
     if (!newRuntime.cwd) newRuntime.cwd = targetCwd;
     // Apply default retry limit for new sessions. Explicit per-run overrides win.
@@ -1901,9 +1917,15 @@ export function createSessionDaemon({
     } catch {}
     let result = { cancelled: false };
     if (typeof newRuntime.newSession === 'function') {
+      const parentSession = worker?.parentSessionPath ?? parent?.path;
       result = await newRuntime.newSession({
-        ...(parent ? { parentSession: parent.path } : {}),
-        ...(payload.title ? { setup: async (manager) => manager.appendSessionInfo(payload.title.trim()) } : {}),
+        ...(parentSession ? { parentSession } : {}),
+        ...(payload.title || worker ? {
+          setup: async (manager) => {
+            if (payload.title) manager.appendSessionInfo(payload.title.trim());
+            if (worker) manager.appendCustomEntry(LINEAGE_ENTRY, worker.lineage);
+          },
+        } : {}),
       });
     } else if (payload.title && newRuntime.session?.sessionManager?.appendSessionInfo) {
       newRuntime.session.sessionManager.appendSessionInfo(payload.title.trim());
@@ -1949,9 +1971,11 @@ export function createSessionDaemon({
       throw error;
     }
     runtimeRegistry.register(newRuntime, { cwd: targetCwd });
-    runtime = newRuntime;
-    activeDirectory = targetCwd;
-    rememberRuntimeSession();
+    if (!worker) {
+      runtime = newRuntime;
+      activeDirectory = targetCwd;
+      rememberRuntimeSession();
+    }
     const created = projectActiveSession(newRuntime, targetCwd);
     const createdTitle = created.session.title
       || (typeof payload.title === 'string' ? payload.title.trim() : '')
@@ -3337,6 +3361,7 @@ export function createSessionDaemon({
       // emits no agent_settled event. Close the optimistic browser lifecycle
       // when the command promise itself is the authoritative completion edge.
       publish('session.lifecycle', { state: 'idle', serverNow: Date.now() }, payload.sessionId, activeRuntime.cwd);
+      orchestration.onInputCompleted(payload.sessionId);
       completeRequestedShutdown(payload.sessionId);
     }).catch((error) => {
       removeUserStart(payload.sessionId, generation);
@@ -3712,6 +3737,7 @@ export function createSessionDaemon({
         toolInputBySession.delete(sessionId);
         clearToolTimingsForSession(sessionId, { keepCompleted: true });
         publish('session.lifecycle', { state: 'idle', serverNow: Date.now() }, sessionId, directory);
+        void orchestration.onSessionSettled(sessionId, owningRuntime).catch(() => {});
         if (!completeRequestedShutdown(sessionId)) {
           void flushPendingResourceReload(owningRuntime).then(() => {
             if (!shutdownRequestedBySession.has(sessionId)) scheduleIdleDisposal(sessionId);
@@ -3792,6 +3818,91 @@ export function createSessionDaemon({
       }
       default:
         break;
+    }
+  };
+
+  const abortSession = async (sessionId, directory) => {
+    const activeRuntime = await activateSession(sessionId, directory);
+    const streaming = activeRuntime.session.isStreaming;
+    await activeRuntime.session.abort();
+    if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, sessionId, activeRuntime.cwd);
+  };
+
+  const orchestration = createOrchestrationService({
+    activateSession,
+    // Every session a tool uses holds the idle guard like a direct request,
+    // so it is not disposed mid-use and is disposed again once idle.
+    holdSession: (sessionId) => {
+      const guard = acquireSessionAccess(sessionId);
+      return () => releaseSessionAccess(guard);
+    },
+    getLiveRuntime: (sessionId) => runtimeRegistry?.findBySessionId(sessionId),
+    listLiveRuntimes: () => runtimeRegistry?.listAll() ?? [],
+    getSessionState: (sessionId) => {
+      if (retryStateBySession.has(sessionId)) return 'retry';
+      const live = runtimeRegistry?.findBySessionId(sessionId);
+      if (!live) return 'dormant';
+      return live.session.isStreaming || activeRunStartedAt.has(sessionId) ? 'busy' : 'idle';
+    },
+    getSessionActivity: (sessionId) => ({
+      runStartedAt: activeRunStartedAt.get(sessionId),
+      retry: retryStateBySession.get(sessionId),
+      waitingForInput: Boolean(extensionBridge.getSnapshotState(sessionId).dialogs?.length),
+    }),
+    createWorkerSession: async ({ cwd: workerCwd, title, model, thinking, parentSessionPath, lineage }) => {
+      const created = await createSession(
+        { cwd: workerCwd, title, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) },
+        { parentSessionPath, lineage },
+      );
+      const sessionId = created.session.id;
+      return { sessionId, cwd: runtimeRegistry?.findBySessionId(sessionId)?.cwd ?? workerCwd };
+    },
+    sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
+      { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },
+      delivery === 'prompt' ? undefined : delivery,
+    ),
+    abortSession: (sessionId) => abortSession(sessionId),
+    readSettings: createOrchestrationSettingsReader({ dataDir: resolvePiChamberDataDir() }),
+    listModels: async () => (await listProviders()).providers.flatMap((provider) => provider.models.map((model) => ({
+      providerId: model.providerId,
+      modelId: model.id,
+      ...(model.label ? { label: model.label } : {}),
+      ...(model.thinkingLevels ? { thinkingLevels: model.thinkingLevels } : {}),
+      available: provider.authenticated,
+    }))),
+    hostStatus: readHostStatus,
+    resolveBranch: readGitBranch,
+    // Symlinks and `.` segments must not let two workers share a worktree.
+    // A missing directory keeps its lexical form; worker creation rejects it.
+    canonicalDirectory: (directory) => realpath(directory).catch(() => resolve(directory)),
+    onDeliveryFailed: ({ sessionId, parentSessionId, parentDirectory, error }) => {
+      const message = `The result of worker ${sessionId} could not be delivered: ${redactAttachmentPaths(error?.message ?? String(error))}`;
+      publish('session.error', { code: 'ORCHESTRATION_RESULT_UNDELIVERED', message }, parentSessionId, parentDirectory);
+    },
+  });
+  const orchestrationExtension = createOrchestrationExtension(orchestration);
+
+  // Bounded below the 60s tool-call timeout of MCP clients; the in-process
+  // extension path waits as long as the tool call asks.
+  const ORCHESTRATION_IPC_MAX_WAIT_MS = 50_000;
+
+  // Tool errors are results, not protocol failures: a protocol error closes
+  // the daemon connection and loses the reason the model needs to recover.
+  const callOrchestration = async (payload) => {
+    if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string' || payload.sessionId.length === 0
+      || typeof payload.tool !== 'string' || (payload.args !== undefined && (typeof payload.args !== 'object' || payload.args === null))) {
+      throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The orchestration call is invalid.');
+    }
+    try {
+      return { value: await orchestration.call(payload.sessionId, payload.tool, payload.args ?? {}, { maxWaitMs: ORCHESTRATION_IPC_MAX_WAIT_MS }) };
+    } catch (error) {
+      return {
+        error: {
+          code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED',
+          message: redactAttachmentPaths(error?.message ?? String(error)),
+          ...(error instanceof OrchestrationError && error.details !== undefined ? { details: error.details } : {}),
+        },
+      };
     }
   };
 
@@ -4143,6 +4254,20 @@ export function createSessionDaemon({
         writeDetailResponse(socket, message.requestId, result);
         return;
       }
+      case 'orchestration.call': {
+        const result = await callOrchestration(message.payload);
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.caller': {
+        if (typeof message.payload?.sessionId !== 'string' || message.payload.sessionId.length === 0) {
+          throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'A session id is required.');
+        }
+        const result = await orchestration.verifyCaller(message.payload.sessionId)
+          .then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
       case 'sessions.prompt':
       case 'sessions.steer':
       case 'sessions.followUp': {
@@ -4190,10 +4315,7 @@ export function createSessionDaemon({
         return;
       }
       case 'sessions.abort': {
-        const activeRuntime = await activateSession(message.payload?.sessionId, message.payload?.directory || message.payload?.cwd);
-        const streaming = activeRuntime.session.isStreaming;
-        await activeRuntime.session.abort();
-        if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, message.payload.sessionId, activeRuntime.cwd);
+        await abortSession(message.payload?.sessionId, message.payload?.directory || message.payload?.cwd);
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result: {} });
         return;
       }

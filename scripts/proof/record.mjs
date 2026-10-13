@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { KEYS, addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { KEYS, addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -60,6 +60,7 @@ function targetPoint(target) {
   const normalize = text => text.replace(/\s+/g, ' ').trim();
   const elements = target.selector ? [...document.querySelectorAll(target.selector)] : [...document.querySelectorAll('body *')]
     .filter(element => normalize(element.textContent) === normalize(target.text) && ![...element.children].some(child => normalize(child.textContent) === normalize(target.text)));
+  let covered = '';
   for (const element of elements) {
     const box = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -68,9 +69,10 @@ function targetPoint(target) {
       const x = box.left + box.width / 2, y = box.top + box.height / 2;
       const top = document.elementFromPoint(x, y);
       if (top && (element.contains(top) || top.contains(element))) return { x, y };
+      covered = top ? ` (covered by ${top.tagName.toLowerCase()}${top.getAttribute('aria-label') ? ` "${top.getAttribute('aria-label')}"` : ''})` : '';
     }
   }
-  throw new Error('Action target is missing, offscreen or covered');
+  throw new Error('Action target is missing, offscreen or covered' + covered);
 }
 
 export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputRoot = join(root, '.proof'), holdMs = 1200, signal, checkout, runtime = runtimeDefaults } = {}) {
@@ -197,6 +199,16 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
             await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
             await send('Input.insertText', { text: action.value });
           }
+        } else if (action.type === 'hover') {
+          // Moves the pointer without pressing, so :hover styles and pointer-enter handlers apply.
+          const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+        } else if (action.type === 'long-press') {
+          // A held finger on a touch viewport, longer than the 500 ms long press menus wait for.
+          const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
+          await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+          await runtime.wait(700);
+          await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
         } else if (action.type === 'press') {
           const key = { key: action.key, code: action.key, windowsVirtualKeyCode: KEYS[action.key] };
           await send('Input.dispatchKeyEvent', action.key === 'Enter' ? { type: 'keyDown', ...key, text: '\r' } : { type: 'rawKeyDown', ...key });
@@ -277,7 +289,7 @@ async function main() {
   } });
   if (values.help) { console.log(usage); return; }
   const [name] = positionals;
-  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour };
+  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour };
   const fixtureTours = { fixture, 'fixture-broken': brokenFixture };
   if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device or sidebar-tree; see --help');
   const isLab = Object.hasOwn(labTours, name);

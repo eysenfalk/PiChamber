@@ -21,9 +21,14 @@ const readStored = (): Set<NodeKey> | null => {
  * stored value the model's `defaultExpanded` applies once the tree has
  * sessions; when the active session changes, its ancestors open once, and
  * closing them afterwards sticks.
+ *
+ * While `query` is non-empty the tree shows the model's `searchExpanded`
+ * overlay plus the toggles made during that query, and the stored expansion
+ * stays untouched, so clearing the query restores the previous view.
  */
-export const useWorkspaceTreeExpansion = (tree: WorkspaceTree, activeSessionId: string | null) => {
+export const useWorkspaceTreeExpansion = (tree: WorkspaceTree, activeSessionId: string | null, query = '') => {
   const [expanded, setExpanded] = React.useState<Set<NodeKey> | null>(readStored);
+  const [searchToggles, setSearchToggles] = React.useState<{ query: string; open: ReadonlyMap<NodeKey, boolean> } | null>(null);
   const revealedForRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -53,7 +58,23 @@ export const useWorkspaceTreeExpansion = (tree: WorkspaceTree, activeSessionId: 
     }
   }, [expanded]);
 
+  const searchView = React.useMemo(() => {
+    if (!query) return null;
+    const view = new Set(tree.searchExpanded);
+    if (searchToggles?.query === query) {
+      searchToggles.open.forEach((open, key) => (open ? view.add(key) : view.delete(key)));
+    }
+    return view;
+  }, [query, searchToggles, tree.searchExpanded]);
+
   const setOpen = React.useCallback((key: NodeKey, open: boolean) => {
+    if (query) {
+      setSearchToggles((previous) => ({
+        query,
+        open: new Map(previous?.query === query ? previous.open : []).set(key, open),
+      }));
+      return;
+    }
     setExpanded((previous) => {
       const base = previous ?? new Set<NodeKey>();
       if (base.has(key) === open) return previous ?? base;
@@ -62,9 +83,9 @@ export const useWorkspaceTreeExpansion = (tree: WorkspaceTree, activeSessionId: 
       else next.delete(key);
       return next;
     });
-  }, []);
+  }, [query]);
 
-  return { expanded: expanded ?? EMPTY, setOpen };
+  return { expanded: searchView ?? expanded ?? EMPTY, setOpen };
 };
 
 const EMPTY: ReadonlySet<NodeKey> = new Set();

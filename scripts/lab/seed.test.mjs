@@ -2,11 +2,12 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, rm, stat, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
+import { existsSync } from 'node:fs';
 // PiChamber's parent may point PI_PACKAGE_DIR into an Electron asar.
 const packageDir = process.env.PI_PACKAGE_DIR;
 delete process.env.PI_PACKAGE_DIR;
-const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES } = await import('./seed.mjs');
+const { seedLab, SessionManager, SEED_MANIFEST, FORK_WORK_AFTER_RENAME_BYTES, remotePath } = await import('./seed.mjs');
 if (packageDir !== undefined) process.env.PI_PACKAGE_DIR = packageDir;
 
 test('SDK-written fixtures round trip, list per project, link a subsession and keep recency order', async () => {
@@ -48,17 +49,47 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(Buffer.byteLength(forkText) - renameAt).toBeGreaterThan(FORK_WORK_AFTER_RENAME_BYTES);
     expect(Buffer.byteLength(forkText)).toBeGreaterThan(512 * 1024);
     expect((await stat(long.path)).mtimeMs).toBeGreaterThan((await stat(seed.sessions.find((s) => s.project === 'lab-beta').path)).mtimeMs);
+    // Orchestration (#107): the orchestrator runs on the faux model the seeded extension registers.
+    const orchestrator = seed.sessions.find((s) => s.role === 'orchestrator');
+    const orchestratorModel = SessionManager.open(orchestrator.path).getEntries().find((e) => e.type === 'model_change');
+    expect([orchestratorModel.provider, orchestratorModel.modelId]).toEqual(['faux', 'faux-1']);
+    const extension = await readFile(join(root, 'pi-agent/extensions/faux-orchestration.js'), 'utf8');
+    expect(extension).toContain('pi.registerProvider(faux.provider)');
+    expect(extension).toContain(JSON.stringify(orchestrator.directory));
     // Sidebar tree fixtures: committed projects, linked worktrees, a fork chain, a home chat and a foreign folder.
     const alpha = seed.projects.find((p) => p.name === 'lab-alpha');
     const worktrees = spawnSync('git', ['-C', alpha.path, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }).stdout;
     for (const worktree of SEED_MANIFEST.worktrees) {
       const path = join(root, 'projects', 'lab-alpha-worktrees', worktree.name);
       expect(worktrees).toContain(`worktree ${path}\nHEAD `);
-      expect(worktrees).toContain(`branch refs/heads/${worktree.name}`);
+      // A stopped rebase detaches HEAD; every other worktree has its branch checked out.
+      if (worktree.git !== 'rebase') expect(worktrees).toContain(`branch refs/heads/${worktree.name}`);
+      const branchLine = spawnSync('git', ['-C', path, 'status', '--short', '--branch'], { encoding: 'utf8' }).stdout.split('\n')[0];
+      if (worktree.git === 'dirty') expect(branchLine).toBe(`## ${worktree.name}...main [behind 1]`);
+      if (worktree.git === 'ahead-behind') expect(branchLine).toBe(`## ${worktree.name}...main [ahead 2, behind 1]`);
+      if (worktree.git === 'remote-ahead') {
+        // Tracks the bare remote and shows neither ahead nor behind: the remote's extra commit is not fetched yet.
+        expect(branchLine).toBe(`## ${worktree.name}...origin/${worktree.name}`);
+        const remote = remotePath(root, worktree.project);
+        const remoteHead = spawnSync('git', ['-C', remote, 'rev-parse', `refs/heads/${worktree.name}`], { encoding: 'utf8' }).stdout.trim();
+        const trackingHead = spawnSync('git', ['-C', path, 'rev-parse', `refs/remotes/origin/${worktree.name}`], { encoding: 'utf8' }).stdout.trim();
+        expect(remoteHead).not.toBe(trackingHead);
+        expect(spawnSync('git', ['-C', remote, 'rev-list', '--count', `${trackingHead}..${remoteHead}`], { encoding: 'utf8' }).stdout.trim()).toBe('1');
+        // The fetch Auto fetch runs makes the remote commit visible as one behind.
+        expect(spawnSync('git', ['-C', alpha.path, 'fetch', '--quiet', 'origin'], { encoding: 'utf8' }).status).toBe(0);
+        expect(spawnSync('git', ['-C', path, 'status', '--short', '--branch'], { encoding: 'utf8' }).stdout.split('\n')[0])
+          .toBe(`## ${worktree.name}...origin/${worktree.name} [behind 1]`);
+      }
       const session = seed.sessions.find((s) => s.worktree === worktree.name);
+      if (!session) continue;
       expect(session.directory).toBe(path);
       expect((await SessionManager.list(path, SessionManager.open(session.path).getSessionDir())).map((s) => s.name)).toEqual([session.title]);
     }
+    const dirty = SEED_MANIFEST.worktrees.find((worktree) => worktree.git === 'dirty');
+    expect(spawnSync('git', ['-C', join(root, 'projects', 'lab-alpha-worktrees', dirty.name), 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim().split('\n')).toHaveLength(2);
+    const rebase = SEED_MANIFEST.worktrees.find((worktree) => worktree.git === 'rebase');
+    const rebaseDir = spawnSync('git', ['-C', join(root, 'projects', 'lab-alpha-worktrees', rebase.name), 'rev-parse', '--git-path', 'rebase-merge'], { encoding: 'utf8' }).stdout.trim();
+    expect(existsSync(isAbsolute(rebaseDir) ? rebaseDir : join(root, 'projects', 'lab-alpha-worktrees', rebase.name, rebaseDir))).toBe(true);
     expect(spawnSync('git', ['-C', alpha.path, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim()).toBe('main');
     const forkChild = seed.sessions.find((s) => s.role === 'fork-child');
     expect(SessionManager.open(forkChild.path).getHeader().parentSession).toBe(fork.path);

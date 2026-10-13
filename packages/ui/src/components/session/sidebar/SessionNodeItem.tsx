@@ -22,47 +22,6 @@ import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore'
 import type { SessionNodeItemProps } from './sessionNodeTypes';
 import { areSessionNodeItemPropsEqual } from './sessionNodeComparators';
 import { useSessionNodeItemMetadata } from './useSessionNodeItemMetadata';
-import { useGitHubSelectedRepo } from '@/stores/useGitHubScopeStore';
-import { openPullRequestInSurface } from '@/components/views/github/openPullRequestInSurface';
-
-/** Clickable PR badge: opens the PR in the Pull requests surface (§6.6). */
-const PrBadgeButton: React.FC<{
-  prDirectory: string | null;
-  prNumber: number;
-  prStatusLabel: string | null;
-  prIconColor: string | undefined;
-}> = ({ prDirectory, prNumber, prStatusLabel, prIconColor }) => {
-  const repo = useGitHubSelectedRepo(prDirectory);
-  if (!prDirectory || !repo) {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1"
-        style={prIconColor ? { color: prIconColor } : undefined}
-        title={prStatusLabel ? `PR #${prNumber} — ${prStatusLabel}` : `PR #${prNumber}`}
-      >
-        <Icon name="git-pull-request" className="size-3.5 shrink-0" />
-        <span>#{prNumber}</span>
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        openPullRequestInSurface(prDirectory, repo, prNumber);
-      }}
-      className="inline-flex shrink-0 items-center gap-1 rounded hover:bg-interactive-hover"
-      style={prIconColor ? { color: prIconColor } : undefined}
-      title={prStatusLabel ? `PR #${prNumber} — ${prStatusLabel}. Open in Pull requests` : `Open PR #${prNumber} in Pull requests`}
-      aria-label={prStatusLabel ? `Open pull request #${prNumber}, ${prStatusLabel}, in Pull requests` : `Open pull request #${prNumber} in Pull requests`}
-    >
-      <Icon name="git-pull-request" className="size-3.5 shrink-0" />
-      <span>#{prNumber}</span>
-    </button>
-  );
-};
-
 export type { Folder, SecondaryMeta, SessionNodeItemProps } from './sessionNodeTypes';
 
 function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode {
@@ -129,18 +88,12 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const {
     session,
     sessionDirectory,
-    prDirectory,
-    prBranch,
-    prNumber,
     isActive,
     tooltipProjectLabel,
     tooltipBranchLabel,
     isGitRepo,
     subtaskCount,
     agentName,
-    prSummary,
-    prIconColor,
-    prStatusLabel,
     selectionScopeKey,
     selectionModeEnabled,
     isRowSelected,

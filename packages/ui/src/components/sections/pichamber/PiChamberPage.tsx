@@ -4,6 +4,7 @@ import { AboutSettings } from './AboutSettings';
 import { SessionRetentionSettings } from './SessionRetentionSettings';
 import { PasskeySettings } from './PasskeySettings';
 import { DefaultsSettings } from './DefaultsSettings';
+import { OrchestrationSettings } from './OrchestrationSettings';
 import { GitSettings } from './GitSettings';
 import { NotificationSettings } from './NotificationSettings';
 import { TunnelSettings } from './TunnelSettings';
@@ -33,6 +34,7 @@ export const PiChamberPage: React.FC<PiChamberPageProps> = ({ section }) => {
             <SettingsPageLayout className="pichamber-page-body space-y-3 sm:space-y-6">
                 <PiChamberVisualSettings />
                 <DefaultsSettings />
+                <OrchestrationSettings />
                 {showDesktopNetworkSettings && <DesktopNetworkSettings />}
                 <SessionRetentionSettings />
                 {isWebRuntime() && !isDesktopShell() && !isCapacitorApp() && <PasskeySettings />}
@@ -165,11 +167,12 @@ const ChatSectionContent: React.FC = () => {
     );
 };
 
-// Sessions section: default/small/walkthrough models, thinking, session retention
+// Sessions section: default/small/walkthrough models, thinking, orchestration, session retention
 const SessionsSectionContent: React.FC = () => {
     return (
         <>
             <DefaultsSettings />
+            <OrchestrationSettings />
             <SessionRetentionSettings />
         </>
     );
