@@ -2,6 +2,7 @@ import React from 'react';
 import type { GitWorktree } from '@/lib/api/types';
 import type { Session } from '@/lib/chat/types';
 import { isSessionPinned } from '@/stores/useSessionPinnedStore';
+import { getGitHubPrStatusKey, useGitHubPrStatusStore, type GitHubPrStatusEntry } from '@/stores/useGitHubPrStatusStore';
 import type { SessionFoldersMap } from '@/stores/useSessionFoldersStore';
 import type { SessionOwnershipIndex } from '../sessionOwnership';
 import { formatProjectLabel, normalizePath } from '../utils';
@@ -46,6 +47,28 @@ const indexNodes = (roots: readonly TreeNode[]): Map<NodeKey, TreeNode> => {
   return nodes;
 };
 
+/**
+ * Linked worktrees whose pull request is merged, as a newline joined, sorted
+ * path list so the tree only rebuilds when the set itself changes.
+ */
+const mergedWorktreePaths = (
+  worktreesByProject: ReadonlyMap<string, readonly GitWorktree[]>,
+  results: Record<string, GitHubPrStatusEntry>,
+): string => {
+  const paths: string[] = [];
+  for (const worktrees of worktreesByProject.values()) {
+    for (const worktree of worktrees) {
+      if (worktree.isPrimary || !worktree.branch) continue;
+      const key = getGitHubPrStatusKey(worktree.path, worktree.branch);
+      if (key && results[key]?.pr?.state === 'merged') {
+        const path = normalizePath(worktree.path);
+        if (path) paths.push(path);
+      }
+    }
+  }
+  return paths.sort().join('\n');
+};
+
 /** The label a project shows in the tree and in the visibility menu. */
 export const treeProjectLabel = (project: { label?: string; normalizedPath: string }): string =>
   formatProjectLabel(project.label?.trim() || project.normalizedPath.split('/').filter(Boolean).pop() || project.normalizedPath);
@@ -87,6 +110,10 @@ export const useWorkspaceTreeModel = ({
     return byId;
   }, [projects, worktreesByProjectPath]);
 
+  const prResults = useGitHubPrStatusStore((state) => state.results);
+  const mergedKey = React.useMemo(() => mergedWorktreePaths(worktreesByProject, prResults), [prResults, worktreesByProject]);
+  const mergedWorktrees = React.useMemo(() => new Set(mergedKey ? mergedKey.split('\n') : []), [mergedKey]);
+
   const activity = React.useMemo(() => {
     const map = new Map<string, SessionActivity>();
     runningSessionIds.forEach((id) => map.set(id, 'running'));
@@ -107,6 +134,7 @@ export const useWorkspaceTreeModel = ({
       previous: previousRef.current,
       hidden,
       query,
+      mergedWorktrees,
     });
     previousRef.current = tree;
     return { tree, nodesByKey: indexNodes(tree.roots) };
@@ -115,6 +143,7 @@ export const useWorkspaceTreeModel = ({
     discoveryComplete,
     foldersByScope,
     hidden,
+    mergedWorktrees,
     ownership,
     query,
     pinnedSessionIds,

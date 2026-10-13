@@ -824,27 +824,6 @@ const hasRemote = async (git, directory, remoteName) => {
   return exists;
 };
 
-const buildRawGitOptions = (raw) => {
-  if (Array.isArray(raw)) {
-    return raw.map((value) => String(value || '').trim()).filter(Boolean);
-  }
-
-  if (!raw || typeof raw !== 'object') {
-    return [];
-  }
-
-  return Object.entries(raw).flatMap(([key, value]) => {
-    const option = String(key || '').trim();
-    if (!option || value === false) {
-      return [];
-    }
-    if (value === true || value == null) {
-      return [option];
-    }
-    return [option, String(value)];
-  });
-};
-
 const getRemoteBranchComparison = async (git, remoteName, branchName) => {
   const remote = String(remoteName || '').trim();
   const branch = String(branchName || '').trim();
@@ -896,13 +875,14 @@ const isMissingDirectoryError = (error) => {
   return /directory that does not exist|does not exist|no such file or directory/i.test(text);
 };
 
-const runGitCommand = async (cwd, args) => {
+const runGitCommand = async (cwd, args, { env: envOverrides, timeoutMs } = {}) => {
   try {
     const { stdout, stderr } = await execFileAsync(getGitBinary(), args, {
       cwd,
-      env: await buildGitEnv(),
+      env: { ...(await buildGitEnv()), ...envOverrides },
       windowsHide: true,
       maxBuffer: 20 * 1024 * 1024,
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
     });
     return {
       success: true,
@@ -911,12 +891,16 @@ const runGitCommand = async (cwd, args) => {
       stderr: String(stderr || ''),
     };
   } catch (error) {
+    // execFile kills the process when `timeout` expires and flags it as killed.
+    const timedOut = Boolean(timeoutMs) && error?.killed === true;
     return {
       success: false,
       exitCode: typeof error?.code === 'number' ? error.code : 1,
       stdout: String(error?.stdout || ''),
       stderr: String(error?.stderr || ''),
-      message: parseGitErrorText(error),
+      message: timedOut
+        ? `git ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s`
+        : parseGitErrorText(error),
     };
   }
 };
@@ -3034,30 +3018,36 @@ export async function deleteRemoteBranch(directory, options = {}) {
   }
 }
 
-export async function fetch(directory, options = {}) {
-  const { git } = await createRepositoryGitContext(directory);
+// A fetch must fail instead of asking for credentials or hanging: nobody can
+// answer a prompt, and automatic callers (auto fetch) run it unattended.
+// simple-git is not used here because it rejects these variables in its env.
+const GIT_FETCH_NON_INTERACTIVE_ENV = Object.freeze({
+  GIT_TERMINAL_PROMPT: '0',
+  GCM_INTERACTIVE: 'never',
+  GIT_ASKPASS: '',
+  SSH_ASKPASS: '',
+});
+const GIT_FETCH_TIMEOUT_MS = 60_000;
 
-  try {
-    const remote = String(options.remote || '').trim();
-    const branch = String(options.branch || '').trim();
-    const fetchOptions = options.options || {};
+// `remote` and `branch` come from the request body; the `--` keeps them from
+// being read as git options. The third parameter is not reachable over HTTP.
+export async function fetch(directory, options = {}, { timeoutMs = GIT_FETCH_TIMEOUT_MS } = {}) {
+  const { repoRoot } = await createRepositoryGitContext(directory);
+  const remote = String(options.remote || '').trim() || 'origin';
+  const branch = String(options.branch || '').trim();
 
-    if (remote && !branch) {
-      // simple-git drops the remote when branch is omitted, so use raw to preserve `git fetch <remote>`.
-      await git.raw(['fetch', ...buildRawGitOptions(fetchOptions), remote]);
-    } else {
-      await git.fetch(
-        remote || 'origin',
-        branch || undefined,
-        fetchOptions
-      );
-    }
-
-    return { success: true };
-  } catch (error) {
+  const result = await runGitCommand(
+    repoRoot,
+    ['fetch', '--', remote, ...(branch ? [branch] : [])],
+    { env: GIT_FETCH_NON_INTERACTIVE_ENV, timeoutMs },
+  );
+  if (!result.success) {
+    const error = new Error(result.message || 'Failed to fetch from remote');
     console.error('Failed to fetch:', error);
     throw error;
   }
+
+  return { success: true };
 }
 
 export async function stageFile(directory, filePath) {

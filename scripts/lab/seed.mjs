@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { mkdir, readFile, writeFile, utimes, rm, readdir, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -48,10 +49,66 @@ function withSeedClock(createdAt, write) {
   try { return write(); } finally { globalThis.Date = RealDate; }
 }
 
-function git(cwd, args) {
+function git(cwd, args, { allowFailure = false } = {}) {
   const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env,
-    GIT_AUTHOR_NAME: 'Lab', GIT_AUTHOR_EMAIL: 'lab@example.invalid', GIT_COMMITTER_NAME: 'Lab', GIT_COMMITTER_EMAIL: 'lab@example.invalid' } });
-  if (result.error || result.status !== 0) throw result.error ?? new Error(result.stderr);
+    GIT_AUTHOR_NAME: 'Lab', GIT_AUTHOR_EMAIL: 'lab@example.invalid', GIT_COMMITTER_NAME: 'Lab', GIT_COMMITTER_EMAIL: 'lab@example.invalid',
+    GIT_EDITOR: 'true' } });
+  if (result.error || (result.status !== 0 && !allowFailure)) throw result.error ?? new Error(result.stderr);
+  return result.status;
+}
+
+function commitFile(cwd, file, content, message) {
+  writeFileSync(join(cwd, file), content);
+  git(cwd, ['add', file]);
+  git(cwd, ['commit', '--quiet', '-m', message]);
+}
+
+/** The local bare remote of a project's remote-ahead worktree; a sibling of the project, discarded on a reseed. */
+export const remotePath = (root, project) => join(root, 'projects', `${project}-remote.git`);
+
+// The worktree pushes its branch to a local bare remote and tracks it; then a second clone adds one
+// commit to the remote branch. The worktree's remote-tracking ref stays behind until it fetches.
+function seedRemoteAhead(root, project, worktreePath, branch) {
+  const remote = remotePath(root, project);
+  git(root, ['init', '--bare', '--quiet', '--initial-branch=main', remote]);
+  git(worktreePath, ['remote', 'add', 'origin', remote]);
+  git(worktreePath, ['push', '--quiet', '--set-upstream', 'origin', branch]);
+  const clone = mkdtempSync(join(tmpdir(), 'pichamber-seed-remote-'));
+  try {
+    git(root, ['clone', '--quiet', '--branch', branch, remote, clone]);
+    commitFile(clone, 'remote-change.md', 'A commit made on the remote.\n', 'Remote change');
+    git(clone, ['push', '--quiet', 'origin', branch]);
+  } finally {
+    rmSync(clone, { recursive: true, force: true });
+  }
+}
+
+// Put the worktrees into the states the sidebar git pills show (slice 5 of #95).
+function seedWorktreeGitStates(root, projects) {
+  const stated = SEED_MANIFEST.worktrees.filter((worktree) => worktree.git);
+  for (const project of projects.filter((candidate) => stated.some((worktree) => worktree.project === candidate.name))) {
+    commitFile(project.path, 'README.md', `# ${project.name}\n\nSynthetic proof lab project. Main moved on.\n`, 'Main moves on');
+  }
+  for (const worktree of stated) {
+    const path = join(root, 'projects', `${worktree.project}-worktrees`, worktree.name);
+    if (worktree.git === 'remote-ahead') {
+      seedRemoteAhead(root, worktree.project, path, worktree.name);
+      continue;
+    }
+    git(path, ['branch', '--quiet', '--set-upstream-to=main']);
+    if (worktree.git === 'dirty') {
+      writeFileSync(join(path, 'README.md'), '# Work in progress\n');
+      writeFileSync(join(path, 'notes.md'), 'Uncommitted notes.\n');
+    } else if (worktree.git === 'ahead-behind') {
+      commitFile(path, 'filter-1.md', 'First filter change.\n', 'First filter change');
+      commitFile(path, 'filter-2.md', 'Second filter change.\n', 'Second filter change');
+    } else if (worktree.git === 'rebase') {
+      commitFile(path, 'README.md', '# Conflicting change\n', 'Conflicting change');
+      if (git(path, ['rebase', '--quiet', 'main'], { allowFailure: true }) === 0) throw new Error(`Rebase in ${path} did not stop on a conflict`);
+    } else {
+      throw new Error(`Unknown worktree git state: ${worktree.git}`);
+    }
+  }
 }
 
 // A two-turn session, named before its first prompt.
@@ -89,6 +146,7 @@ export async function seedLab(root, now = Date.now()) {
   for (const fixture of SEED_MANIFEST.projects) {
     await rm(join(root, 'projects', fixture.name), { recursive: true, force: true });
     await rm(join(root, 'projects', `${fixture.name}-worktrees`), { recursive: true, force: true });
+    await rm(remotePath(root, fixture.name), { recursive: true, force: true });
   }
   for (const fixture of SEED_MANIFEST.sessions) {
     if (fixture.folder) await rm(join(root, 'folders', fixture.folder), { recursive: true, force: true });
@@ -206,6 +264,7 @@ async function seedTreeFixtures({ root, agentDir, now, projects, sessions }) {
     await mkdir(join(root, 'projects', `${worktree.project}-worktrees`), { recursive: true });
     git(project.path, ['worktree', 'add', '--quiet', '-b', worktree.name, path]);
   }
+  seedWorktreeGitStates(root, projects);
   for (const folder of SEED_MANIFEST.sessions.filter((spec) => spec.folder)) {
     await mkdir(join(root, 'folders', folder.folder), { recursive: true });
   }

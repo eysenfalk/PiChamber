@@ -29,12 +29,15 @@ export function validateTour(tour) {
       const schemas = {
         navigate: ['type', 'path'], click: ['type', 'selector', 'text', 'button'], type: ['type', 'selector', 'value'],
         press: ['type', 'key'], drag: ['type', 'from', 'to'],
+        hover: ['type', 'selector', 'text'], 'long-press': ['type', 'selector', 'text'],
         scroll: ['type', 'selector', 'x', 'y'], wait: ['type', 'ms', 'selector', 'text'],
         'set-theme': ['type', 'theme'], 'set-viewport': ['type', 'viewport'],
       };
       if (!Object.hasOwn(schemas, action.type) || !keys(action, schemas[action.type])) fail();
       if (action.type === 'navigate' && (typeof action.path !== 'string' || (/^[a-z]+:/i.test(action.path) || action.path.startsWith('//')))) fail();
       if (action.type === 'click' && (!target(action) || ![undefined, 'right'].includes(action.button))) fail();
+      if ((action.type === 'hover' || action.type === 'long-press') && !target(action)) fail();
+      if (action.type === 'long-press' && !VIEWPORTS[step.viewport]?.mobile) fail();
       if (action.type === 'press' && (typeof action.key !== 'string' || !Object.hasOwn(KEYS, action.key))) fail();
       if (action.type === 'drag' && ![action.from, action.to].every(end => end && typeof end === 'object' && keys(end, ['selector', 'text']) && target(end))) fail();
       if (action.type === 'type' && (!nonempty(action.selector) || typeof action.value !== 'string')) fail();
@@ -139,12 +142,52 @@ export function sidebarTreeTour(manifest) {
   const nameField = 'input[aria-label="Folder name"]';
   const tree = [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }, { selector: `${main}[aria-expanded="true"]` },
     ...worktrees.map(worktree => ({ text: worktree.worktree })), { text: long.title }];
+  // Git pills (slice 5): the seed puts each linked worktree into one git state.
+  const gitRow = state => {
+    const worktree = manifest.worktrees.find(candidate => candidate.git === state);
+    if (!worktree) throw new Error(`Invalid lab seed manifest: no ${state} worktree`);
+    return row(`w:${project.path}-worktrees/${worktree.name}`);
+  };
+  const pill = (rowSelector, label) => ({ selector: `${rowSelector} [aria-label${label.endsWith('*') ? '^' : ''}="${label.replace(/\*$/, '')}"]` });
+  const pills = [
+    pill(gitRow('dirty'), '2 changed files'), pill(gitRow('dirty'), '1 commit to pull*'),
+    pill(gitRow('ahead-behind'), '2 commits to push*'), pill(gitRow('ahead-behind'), '1 commit to pull*'), pill(gitRow('ahead-behind'), 'All committed'),
+    pill(gitRow('rebase'), 'Rebase in progress'), pill(main, 'No upstream branch'),
+  ];
+  const projectRollup = pill(projectNode(project), '2 worktrees have uncommitted changes');
+  // Auto fetch (slice 6): the seed pushes a commit to fetch-me's remote that the checkout has not fetched yet.
+  const fetchMe = gitRow('remote-ahead');
+  const fetched = pill(fetchMe, '1 commit to pull*');
+  const autoFetch = '[data-settings-item="git.auto-fetch"]';
+  // Quick create (slice 7): the `+` shows on hover over the row's count slot, as a sibling of the row button.
+  const plus = rowSelector => `${rowSelector} ~ button[aria-label^="New session in"]`;
+  const composerFocused = { selector: '[data-chat-input="true"] .cm-content:focus' };
+  // `target` is the directory chip the new draft shows; the composer may already have focus from an earlier step.
+  const quickCreate = (rowSelector, target) => [{ type: 'hover', selector: rowSelector }, { type: 'wait', ms: 200 }, { type: 'click', selector: plus(rowSelector) },
+    ...(target ? [{ type: 'wait', text: target }] : []), { type: 'wait', selector: composerFocused.selector }];
+  const flat = projectNode(others[0]);
   return validateTour({ name: 'sidebar-tree', steps: [
     { caption: 'One tree instead of two areas: Chats on top, then projects. Nothing is expanded yet.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[role="tree"]' }, { type: 'wait', text: label }],
       evidence: [{ selector: '[role="tree"]' }, { text: 'Chats' }, { text: label }] },
     { caption: `Clicking ${label} selects and expands it and shows its worktrees. Clicking main shows its sessions.`, viewport: 'desktop', theme: 'light',
       actions: expand, evidence: tree },
+    { caption: 'Each worktree shows its git state: ●2 uncommitted files, ↑2 ↓1 against main, ✓ all committed, a warning while a rebase is stopped, a cloud where main has no upstream.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', selector: pills[0].selector }, { type: 'wait', selector: pills[5].selector }],
+      evidence: [...pills, { selector: `${fetchMe}:not(:has([aria-label^="1 commit to pull"]))` }] },
+    { caption: 'Settings > Git has Auto fetch, off by default. Turning it on fetches every 15 minutes, without ever asking for credentials.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '?settings=git' }, { type: 'wait', selector: `${autoFetch}[aria-pressed="false"]` },
+        { type: 'click', selector: autoFetch }, { type: 'wait', selector: `${autoFetch}[aria-pressed="true"]` }],
+      evidence: [{ selector: `${autoFetch}[aria-pressed="true"]` }, { text: 'Auto fetch interval' }, { text: '15 min' }] },
+    { caption: 'Back in the tree, fetch-me shows ↓1: the commit pushed to its remote arrived without a manual fetch.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: main }, { type: 'wait', selector: fetched.selector }],
+      evidence: [fetched, { text: long.title }] },
+    { caption: 'Hovering a row swaps its count for a +. The + on Chats starts a chat without a project folder and puts the cursor in the composer.', viewport: 'desktop', theme: 'light',
+      actions: quickCreate(row('chats')), evidence: [{ selector: plus(row('chats')) }, composerFocused] },
+    { caption: `The + on main starts a session in ${project.name} main.`, viewport: 'desktop', theme: 'light',
+      actions: quickCreate(main, project.name), evidence: [{ selector: plus(main) }, { text: project.name }, composerFocused] },
+    { caption: `${titleCase(others[0].name)} has one checkout, so its project row takes the + itself. The click also selects the row.`, viewport: 'desktop', theme: 'light',
+      actions: quickCreate(flat, others[0].name), evidence: [{ selector: plus(flat) }, { selector: `${flat}[aria-current="true"]` }, { text: others[0].name }, composerFocused] },
     { caption: 'Forks sit under their parent session, with a fork count.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: fork.title },
         { type: 'click', selector: 'button[aria-label="Expand forks"]' }, { type: 'wait', text: forkChild.title }],
@@ -186,12 +229,21 @@ export function sidebarTreeTour(manifest) {
       evidence: [{ selector: hiddenTree }, { selector: `${folder}[aria-expanded="false"]` }, { text: chat.title }] },
     { caption: 'The same tree in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [role="tree"]' }, { text: chat.title }, { text: 'Reviews' }] },
+    { caption: `Collapsed, ${label} sums its worktrees up as "2 dirty".`, viewport: 'desktop', theme: 'dark',
+      actions: [{ type: 'click', selector: `${projectNode(project)} [data-tree-toggle]` }, { type: 'wait', selector: projectRollup.selector }],
+      evidence: [projectRollup, { selector: `${projectNode(project)}[aria-expanded="false"]` }] },
     { caption: 'The hosted mobile drawer shows the same tree.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: '[data-mobile-sessions-drawer] [role="tree"]' }],
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: 'Chats' }, { text: label }] },
     { caption: 'Mobile in light theme.', viewport: 'mobile', theme: 'light', actions: [],
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { text: label }] },
+    { caption: 'Touch has no hover, so the + is not there. A long press on Chats opens its menu with New session.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'long-press', selector: `[data-mobile-sessions-drawer] ${row('chats')}` }, { type: 'wait', text: 'New session' }],
+      evidence: [{ selector: '[role="menuitem"]' }, { text: 'New session' }] },
+    { caption: 'New session closes the drawer and opens an empty chat.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'click', text: 'New session' }, { type: 'wait', selector: '[data-chat-input="true"]' }],
+      evidence: [{ selector: '[data-chat-input="true"]' }] },
   ] });
 }
 

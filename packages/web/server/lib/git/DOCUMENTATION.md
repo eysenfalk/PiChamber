@@ -62,7 +62,7 @@ The following functions are exported and used by the web server:
 - `commit(directory, message, options)`: Create a commit from the current index. `options.stageFiles` may be provided with `options.files` by older callers to stage only selected unstaged rows before committing, but the shared Git panel now stages/unstages explicitly before commit.
 - `pull(directory, options)`: Pull changes from remote.
 - `push(directory, options)`: Push changes to remote (auto-sets upstream if needed).
-- `fetch(directory, options)`: Fetch changes from remote.
+- `fetch(directory, { remote, branch })`: Fetch from `remote` (default `origin`), optionally one `branch`. Runs non-interactively and bounded: git gets `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` and empty `GIT_ASKPASS`/`SSH_ASKPASS`, and is killed after 60 s, so a remote that needs credentials or never answers rejects (HTTP 500 with git's message, or `git fetch timed out after 60s`) instead of prompting or hanging. `remote` and `branch` are passed after `--`; free-form git options from the request body are not accepted. Exposed as `POST /api/git/fetch`.
 - `removeRemote(directory, options)`: Remove a configured remote (except `origin`).
 - `deleteRemoteBranch(directory, options)`: Delete a remote branch.
 
