@@ -107,7 +107,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'session_read',
     label: 'Read session',
-    description: 'Read a session\'s state and its latest messages as text. ' + RUN_STATUS,
+    description: 'Read a session\'s state and the latest messages of its active branch as text, each with its entryId. ' + RUN_STATUS,
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -159,6 +159,23 @@ export const ORCHESTRATION_TOOLS = [
     description: 'Abort one of your own workers, free its slot and stop its result delivery. Cascades to its workers.',
     childAllowed: false,
     parameters: { type: 'object', additionalProperties: false, required: ['sessionId'], properties: { sessionId } },
+  },
+  {
+    name: 'session_rewind',
+    label: 'Rewind worker',
+    description: 'Move one of your own idle workers back to an earlier entry of its session (entry ids are in session_read), optionally prompting it from there in the same call. The session id stays; entries after the target leave the active branch, but file changes and commands of those entries are not undone. Refused while the worker runs or waits for input (ORCHESTRATION_SESSION_BUSY). Choosing a user message rewinds to just before it.',
+    childAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sessionId', 'entryId'],
+      properties: {
+        sessionId,
+        entryId: { type: 'string', minLength: 1, maxLength: 256, description: 'The session entry to move back to.' },
+        prompt: { type: 'string', minLength: 1, maxLength: 60000, description: 'Sent to the worker after the rewind.' },
+        clientRequestId,
+      },
+    },
   },
   {
     name: 'orchestration_takeover',

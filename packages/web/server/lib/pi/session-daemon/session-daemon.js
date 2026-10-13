@@ -3898,8 +3898,35 @@ export function createSessionDaemon({
     }
   };
 
+  // Moves a session's leaf to a tree entry (a live message id or a Pi entry
+  // id). Used by `sessions.navigate` and by the orchestration `session_rewind`.
+  const navigateSession = async (sessionId, directory, requestedId) => {
+    const runtime = await activateSession(sessionId, directory);
+    if (typeof requestedId !== 'string' || requestedId.length === 0) throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The requested tree entry is invalid.');
+    const targetEntryId = messageEntryAliases.resolve({
+      cwd: runtime.cwd,
+      sessionId,
+      requestedId,
+      sessionManager: runtime.session.sessionManager,
+    });
+    const previousLeafId = runtime.session.sessionManager?.getLeafId?.() ?? null;
+    const result = await runtime.session.navigateTree(targetEntryId);
+    if (result?.cancelled) throw new SessionDaemonProtocolError('SESSION_TREE_NOT_FOUND', 'Pi cancelled tree navigation.');
+    const newLeafId = runtime.session.sessionManager?.getLeafId?.() ?? null;
+    return {
+      runtime,
+      navigation: {
+        targetEntryId,
+        previousLeafId: typeof previousLeafId === 'string' ? previousLeafId : null,
+        newLeafId: typeof newLeafId === 'string' ? newLeafId : null,
+        ...(typeof result?.editorText === 'string' && result.editorText.length > 0 ? { editorText: result.editorText } : {}),
+      },
+    };
+  };
+
   const orchestration = createOrchestrationService({
     activateSession,
+    navigateSession: async (sessionId, entryId) => (await navigateSession(sessionId, undefined, entryId)).navigation,
     // Every session a tool uses holds the idle guard like a direct request,
     // so it is not disposed mid-use and is disposed again once idle.
     holdSession: (sessionId) => {
@@ -4304,27 +4331,12 @@ export function createSessionDaemon({
         return;
       }
       case 'sessions.navigate': {
-        const activeRuntime = await activateSession(message.payload?.sessionId, message.payload?.directory || message.payload?.cwd);
-        const requestedId = message.payload?.messageId;
-        if (typeof requestedId !== 'string' || requestedId.length === 0) throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The requested tree entry is invalid.');
-        const messageId = messageEntryAliases.resolve({
-          cwd: activeRuntime.cwd,
-          sessionId: message.payload.sessionId,
-          requestedId,
-          sessionManager: activeRuntime.session.sessionManager,
-        });
-        const previousLeafId = activeRuntime.session.sessionManager?.getLeafId?.() ?? null;
-        const result = await activeRuntime.session.navigateTree(messageId);
-        if (result?.cancelled) throw new SessionDaemonProtocolError('SESSION_TREE_NOT_FOUND', 'Pi cancelled tree navigation.');
-        const newLeafId = activeRuntime.session.sessionManager?.getLeafId?.() ?? null;
-        const navigation = {
-          targetEntryId: messageId,
-          previousLeafId: typeof previousLeafId === 'string' ? previousLeafId : null,
-          newLeafId: typeof newLeafId === 'string' ? newLeafId : null,
-          ...(typeof result?.editorText === 'string' && result.editorText.length > 0 ? { editorText: result.editorText } : {}),
-        };
-        const navigateDetail = projectActiveSession(activeRuntime, activeRuntime.cwd);
-        writeDetailResponse(socket, message.requestId, { ...navigateDetail, navigation });
+        const { runtime: activeRuntime, navigation } = await navigateSession(
+          message.payload?.sessionId,
+          message.payload?.directory || message.payload?.cwd,
+          message.payload?.messageId,
+        );
+        writeDetailResponse(socket, message.requestId, { ...projectActiveSession(activeRuntime, activeRuntime.cwd), navigation });
         return;
       }
       case 'sessions.fork':

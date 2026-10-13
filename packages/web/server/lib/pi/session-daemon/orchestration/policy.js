@@ -8,7 +8,7 @@ import { ORCHESTRATION_TOOLS } from './tool-contracts.js';
 
 const workerAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool.childAllowed !== false]));
 const orchestratorAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool.orchestratorAllowed !== false]));
-const OWNERSHIP_TOOLS = new Set(['session_stop']);
+const OWNERSHIP_TOOLS = new Set(['session_stop', 'session_rewind']);
 
 /**
  * @param {{ toolName: string, callerSessionId: string, callerKind: 'worker' | 'orchestrator',
@@ -23,7 +23,7 @@ export const authorize = ({ toolName, callerSessionId, callerKind, targetOwner }
     throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', `Only workers can call ${toolName}.`);
   }
   if (OWNERSHIP_TOOLS.has(toolName) && targetOwner !== callerSessionId) {
-    throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', 'Only your own workers can be stopped.');
+    throw new OrchestrationError('ORCHESTRATION_FORBIDDEN', `Only your own workers can be used with ${toolName}.`);
   }
 };
 

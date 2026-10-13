@@ -167,6 +167,8 @@ export function createOrchestrationService(deps) {
   const {
     registry,
     activateSession,
+    // Moves a session's leaf to a tree entry: (sessionId, entryId) => navigation.
+    navigateSession,
     getLiveRuntime,
     listLiveRuntimes,
     getSessionState,
@@ -648,14 +650,17 @@ export function createOrchestrationService(deps) {
   const readSession = async (_callerSessionId, args) => {
     const runtime = getLiveRuntime(args.sessionId) ?? await activateSession(args.sessionId);
     const limit = args.limit ?? 10;
-    const messages = (runtime.session.messages ?? [])
-      .filter((message) => message?.role === 'user' || message?.role === 'assistant' || message?.role === 'custom')
+    // Entries of the active branch, so a message carries the id a rewind takes.
+    const sessionManager = runtime.session.sessionManager;
+    const messages = (sessionManager?.getBranch?.() ?? sessionManager?.getEntries?.() ?? [])
+      .map((entry) => (entry?.type === 'message'
+        ? { entryId: entry.id, role: entry.message?.role, text: textOf(entry.message?.content) || (entry.message?.role === 'toolResult' ? '(no text)' : '') }
+        : entry?.type === 'custom_message'
+          ? { entryId: entry.id, role: 'custom', customType: entry.customType, text: textOf(entry.content) }
+          : undefined))
+      .filter((message) => message && (message.role === 'user' || message.role === 'assistant' || message.role === 'toolResult' || message.role === 'custom'))
       .slice(-limit)
-      .map((message) => ({
-        role: message.role,
-        ...(message.customType ? { customType: message.customType } : {}),
-        text: truncate(textOf(message.content), READ_TEXT_LIMIT),
-      }))
+      .map((message) => ({ ...message, text: truncate(message.text, READ_TEXT_LIMIT) }))
       .filter((message) => message.text.length > 0);
     const lineage = lineageOf(runtime);
     return {
@@ -685,6 +690,31 @@ export function createOrchestrationService(deps) {
       state: stateOf(args.sessionId),
     };
   };
+
+  // Moves an idle worker of the caller back to an earlier entry and, with a
+  // prompt, runs it again from there. A run, a retry, a start and an open
+  // dialog all refuse: navigating under them would change a live transcript.
+  const rewind = (_callerSessionId, args) => withSession(args.sessionId, async () => {
+    if (!isSettled(args.sessionId) || getSessionActivity(args.sessionId)?.waitingForInput) {
+      throw new OrchestrationError('ORCHESTRATION_SESSION_BUSY', 'The worker is running or waiting for input; interrupt it or wait until it is idle.', { sessionId: args.sessionId });
+    }
+    let navigation;
+    try {
+      navigation = await navigateSession(args.sessionId, args.entryId);
+    } catch (error) {
+      if (error?.code === 'SESSION_TREE_NOT_FOUND' || /^Entry .* not found$/.test(error?.message ?? '')) {
+        throw new OrchestrationError('SESSION_TREE_NOT_FOUND', `The session has no entry ${args.entryId}; read it with session_read.`, { sessionId: args.sessionId });
+      }
+      throw error;
+    }
+    if (args.prompt !== undefined) await startTask(args.sessionId, args.prompt, 'prompt', args.clientRequestId);
+    return {
+      sessionId: args.sessionId,
+      previousLeafId: navigation.previousLeafId,
+      newLeafId: navigation.newLeafId,
+      prompted: args.prompt !== undefined,
+    };
+  });
 
   const wait = async (_callerSessionId, args, options = {}) => {
     const sessionIds = [...new Set(args.sessionIds)];
@@ -991,6 +1021,7 @@ export function createOrchestrationService(deps) {
     session_wait: wait,
     session_interrupt: interrupt,
     session_stop: stop,
+    session_rewind: rewind,
     orchestration_takeover: takeover,
   };
 
