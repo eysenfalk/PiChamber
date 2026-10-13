@@ -146,6 +146,9 @@ export function createOrchestrationService(deps) {
     // An admitted input whose outcome could not be recorded keeps its slot;
     // the daemon reports it to the session.
     onAdmissionUnresolved = () => {},
+    // A run this service tracked ended (proven or not): the daemon applies
+    // the native settle it held for that run (idle, cleanup).
+    onRunEnded = () => {},
     delay = (ms) => new Promise((done) => { setTimeout(done, ms); }),
     processId = process.pid,
     processInstance = PROCESS_INSTANCE,
@@ -974,8 +977,6 @@ export function createOrchestrationService(deps) {
    * the next run in the same slot (`resolveInput` applies or drops it).
    */
   const onSessionSettled = async (sessionId, runtime) => {
-    pendingRuns.delete(sessionId);
-    notifyWaiters();
     // Taken before any await: a later turn must not replace it.
     const result = captureResult(runtime);
     // A run of this service ends only with its own prompt (`finishRun`). The
@@ -987,12 +988,26 @@ export function createOrchestrationService(deps) {
       if (latestStart.get(sessionId) === run.seq) run.result = result;
       return;
     }
+    pendingRuns.delete(sessionId);
+    notifyWaiters();
     await applyRunEnd(sessionId, runtime, undefined, result);
+  };
+
+  /** Whether a run of this service is live: its end is not applied yet. */
+  const tracksRun = (sessionId) => liveRuns.has(sessionId);
+  // A tracked run ended, proven or not: it is no longer pending, and the
+  // daemon may apply the native settle it held for it (R9 addendum).
+  const untrackRun = (sessionId, run) => {
+    if (liveRuns.get(sessionId) !== run) return;
+    liveRuns.delete(sessionId);
+    pendingRuns.delete(sessionId);
+    notifyWaiters();
+    onRunEnded(sessionId);
   };
 
   // The prompt that started `run` ended: the proven end of exactly this run.
   const finishRun = async (sessionId, run) => {
-    if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
+    untrackRun(sessionId, run);
     const runtime = getLiveRuntime(sessionId);
     try {
       await applyRunEnd(sessionId, runtime, run, run.result ?? captureResult(runtime));
@@ -1294,9 +1309,14 @@ export function createOrchestrationService(deps) {
    * no such proof. Returns `{ completion }` for a started verdict, settled
    * once its end is applied.
    */
-  const resolveInput = async (ticket, outcome, { run: handle, finished } = {}) => {
+  const resolveInput = async (ticket, outcome, { run: handle, finished: claimed } = {}) => {
     if (!ticket || ticket.state === 'closed') return undefined;
     const { sessionId, admission } = ticket;
+    // A prompt accepted without a verdict was deferred: its own promise is
+    // fulfilled before its late run starts, so nothing proves that run's end
+    // (R9 addendum). The mark outlives a stop.
+    if (outcome === 'unresolved') ticket.deferred = true;
+    const finished = ticket.deferred ? undefined : claimed;
     if (ticket.state === 'stale') {
       // A stop ended this input's admission: a run it starts has no slot.
       if (outcome === 'unresolved') return undefined;
@@ -1366,7 +1386,7 @@ export function createOrchestrationService(deps) {
     ticket.decide();
     if (committed?.stale) {
       // A stop or a later start took the slot meanwhile: this run has none.
-      if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
+      untrackRun(sessionId, run);
       return staleStarted(ticket, signal, finished);
     }
     return {
@@ -1375,7 +1395,7 @@ export function createOrchestrationService(deps) {
           await finishRun(sessionId, run);
           return;
         }
-        if (liveRuns.get(sessionId) === run) liveRuns.delete(sessionId);
+        untrackRun(sessionId, run);
         await holdUnprovenRun(sessionId, run.start);
       }),
     };
@@ -1482,6 +1502,7 @@ export function createOrchestrationService(deps) {
     resolveInput,
     recordDoneReport,
     onInputCompleted,
+    tracksRun,
     verifyCaller,
     isWorker: (sessionManager) => Boolean(lineageOf({ session: { sessionManager } })),
     toolNames: ORCHESTRATION_TOOL_NAMES,
