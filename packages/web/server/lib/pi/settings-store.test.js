@@ -151,6 +151,8 @@ describe('Pi settings sidecar', () => {
 
     expect(resolveOrchestrationSettings(await store.read())).toEqual({
       workerLimit: 4,
+      wakes: { coalesceMs: 3_000 },
+      watchdog: { stallAfterMs: 600_000, enabled: true },
       gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
       roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
     });
@@ -183,6 +185,21 @@ describe('Pi settings sidecar', () => {
     await store.update({ orchestration: { roles: { small: null } } });
     expect((await store.read()).orchestration.roles).not.toHaveProperty('small');
     await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
+  });
+
+  it('stores wake and watchdog settings field by field over their defaults', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { wakes: { coalesceMs: 0 }, watchdog: { stallAfterMs: 60_000 } } });
+    await store.update({ orchestration: { watchdog: { enabled: false } } });
+    const stored = await store.read();
+    expect(stored.orchestration).toEqual({ wakes: { coalesceMs: 0 }, watchdog: { stallAfterMs: 60_000, enabled: false } });
+    expect(resolveOrchestrationSettings(stored)).toMatchObject({
+      wakes: { coalesceMs: 0 },
+      watchdog: { stallAfterMs: 60_000, enabled: false },
+    });
+    await store.update({ orchestration: { watchdog: null } });
+    expect(resolveOrchestrationSettings(await store.read()).watchdog).toEqual({ stallAfterMs: 600_000, enabled: true });
   });
 
   it('stores an absolute worktree root and clears it with null', async () => {
@@ -238,6 +255,12 @@ describe('Pi settings sidecar', () => {
       { roles: { small: { modelId: '' } } },
       { roles: { small: { modelId: 'x', thinking: 'loud' } } },
       { roles: [] },
+      { wakes: { coalesceMs: -1 } },
+      { wakes: { coalesceMs: 60_001 } },
+      { watchdog: { stallAfterMs: 59_999 } },
+      { watchdog: { stallAfterMs: 7_200_001 } },
+      { watchdog: { enabled: 'yes' } },
+      { wakes: [] },
       { worktreeRoot: 'relative/path' },
       { worktreeRoot: 7 },
       'four',

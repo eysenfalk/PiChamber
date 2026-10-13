@@ -578,7 +578,11 @@ export function createSessionDaemon({
   };
 
   const extensionBridge = createExtensionBridge({
-    publish,
+    publish: (event, payload, sessionId, directory) => {
+      // A dialog opened in a worker is a question for its orchestrator.
+      if (event === 'extension.dialog') orchestration.onDialogOpened(sessionId, payload?.title);
+      publish(event, payload, sessionId, directory);
+    },
     resolveDirectory,
     redactAttachmentPaths: (value) => redactAttachmentPaths(value),
     redactAttachmentValues: (value) => redactAttachmentValues(value),
@@ -3535,6 +3539,8 @@ export function createSessionDaemon({
   const publishSessionEvent = (sessionId, event, directory = activeDirectory || cwd) => {
     const owningRuntime = runtimeRegistry?.get({ cwd: directory, sessionId })
       || (runtime?.session?.sessionId === sessionId ? runtime : undefined);
+    // Message and tool events are progress for the orchestration stall watchdog.
+    if (event.type.startsWith('message_') || event.type.startsWith('tool_execution_')) orchestration.onSessionActivity(sessionId);
     switch (event.type) {
       case 'message_start': {
         if (event.message?.role === 'user') {
@@ -3973,10 +3979,6 @@ export function createSessionDaemon({
     // Symlinks and `.` segments must not let two workers share a worktree.
     // A missing directory keeps its lexical form; worker creation rejects it.
     canonicalDirectory: (directory) => realpath(directory).catch(() => resolve(directory)),
-    onDeliveryFailed: ({ sessionId, parentSessionId, parentDirectory, error }) => {
-      const message = `The result of worker ${sessionId} could not be delivered: ${redactAttachmentPaths(error?.message ?? String(error))}`;
-      publish('session.error', { code: 'ORCHESTRATION_RESULT_UNDELIVERED', message }, parentSessionId, parentDirectory);
-    },
     onAdmissionUnresolved: ({ sessionId, error }) => {
       const message = `The worker slot of ${sessionId} could not be updated after Pi accepted its input; the slot stays taken until the worker settles or stops: ${redactAttachmentPaths(error?.message ?? String(error))}`;
       publish('session.error', { code: 'ORCHESTRATION_ADMISSION_UNRESOLVED', message }, sessionId);
@@ -4608,6 +4610,7 @@ export function createSessionDaemon({
         });
         if (platform !== 'win32') await chmod(endpoint, 0o600);
         started = true;
+        orchestration.startWakes();
       } catch (error) {
         messageEntryAliases.clear();
         await disposeRuntime();
@@ -4620,6 +4623,7 @@ export function createSessionDaemon({
       // Async request and reload completions may still release their guards
       // while teardown awaits sockets/disposal. They must not arm new timers.
       stopping = true;
+      orchestration.stopWakes();
       clearAllIdleDisposals();
       for (const attempt of loginAttempts.values()) {
         attempt.controller.abort();

@@ -17,9 +17,10 @@ export const piAiFauxUrl = () => {
 };
 
 // The tests run on a real host; its load or free memory must not refuse their spawns.
-export function disableHostGate(dataDir) {
+// `orchestration` adds further settings to the same file.
+export function disableHostGate(dataDir, orchestration = {}) {
   mkdirSync(join(dataDir, 'pi'), { recursive: true });
-  writeFileSync(join(dataDir, 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { gate: { enabled: false } } }));
+  writeFileSync(join(dataDir, 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { ...orchestration, gate: { enabled: false } } }));
 }
 
 export function connectClient(endpoint) {
