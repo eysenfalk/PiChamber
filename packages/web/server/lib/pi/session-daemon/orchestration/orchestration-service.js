@@ -37,6 +37,8 @@ import {
   takeOver,
 } from './worker-registry.js';
 import { prepareWorkerTree } from './worker-start.js';
+import { cleanupRefusal } from './cleanup-guard.js';
+import { readTreeState, removeWorkerTree, resolveCleanupTarget } from './worker-cleanup.js';
 
 // Daemon-owned orchestration: tool semantics, permissions, limits, ownership,
 // idempotency and wakes (`wakes.js`). Adapters (the in-process Pi extension
@@ -187,6 +189,10 @@ export function createOrchestrationService(deps) {
     resolveRepository = async () => undefined,
     // Branch and worktree of a `worker_start` (see worker-start.js).
     prepareWorktree = prepareWorkerTree,
+    // Uncached merge reads for `worker_cleanup` (lib/github/merge-lookup.js).
+    pullLookup,
+    // The daemon's session deletion, the last cleanup step.
+    deleteSession,
     getSessionActivity = () => ({}),
     holdSession = () => () => {},
     // 'present' | 'absent' | 'unknown' for the worker's JSONL.
@@ -540,6 +546,7 @@ export function createOrchestrationService(deps) {
       ...(thinking ? { thinking } : {}),
       ...(args.issue ? { issue: args.issue } : {}),
       ...(args.branch ? { branch: args.branch } : {}),
+      ...(args.servesPr ? { servesPr: args.servesPr } : {}),
     };
     const reserved = await registry.update((document) => {
       ensureOwner(document, callerSessionId, runtime.cwd);
@@ -1034,6 +1041,118 @@ export function createOrchestrationService(deps) {
     return { at: now(), limit: { workerLimit, used }, host: { ...hostGateNumbers(hostStatus()), workers: used, limit: workerLimit }, operations, workers };
   };
 
+  // Removes a worker after the proven merge of its pull request (#118):
+  // worktree, local and remote branch, then the session, then the record.
+  // A refusal removes nothing and returns the reason. The target is stored
+  // before the first step, so a repeated call finds it after the worktree is
+  // gone. A helper bound by `servesPr` has no tree; only its session goes.
+  // The call holds the worker's `stopping` claim throughout, so no new input
+  // is admitted, and the session's idle guard, so it stays resident here.
+  const cleanupWorker = async (_callerSessionId, { sessionId }) => {
+    const claim = { ...self, token: randomUUID() };
+    const claimed = await registry.update((document) => {
+      const worker = document.workers[sessionId];
+      if (!worker || worker.stopping) return false;
+      worker.stopping = claim;
+      return true;
+    });
+    if (!claimed) return { sessionId, removed: [], reason: 'The worker is being stopped or cleaned up; retry once that has finished.' };
+    try {
+      return await withSession(sessionId, () => cleanupClaimed(sessionId, claim));
+    } finally {
+      await registry.update((document) => {
+        const worker = document.workers[sessionId];
+        if (worker?.stopping?.token === claim.token) delete worker.stopping;
+      });
+    }
+  };
+
+  // Why the worker may not lose its work now, or null. As for takeover, only a
+  // session proven idle here counts: one resident in another daemon or that
+  // cannot be checked is not idle; a deleted one has no run left.
+  const cleanupBusy = async (sessionId, claim) => {
+    let runtime = getLiveRuntime(sessionId);
+    if (!runtime) {
+      try {
+        runtime = await activateSession(sessionId);
+      } catch (error) {
+        if (!isGone(error)) return 'The worker cannot be checked here, it may still run in another PiChamber instance.';
+      }
+    }
+    const worker = (await registry.read()).workers[sessionId];
+    if (worker?.stopping?.token !== claim.token) return 'The worker was stopped meanwhile.';
+    // A stop leaves a hold for an input or run it could not settle; Pi may
+    // still start it, so the hold counts as busy until it is released.
+    if (worker.hold) return `The worker still holds an unsettled input or run from a stop (${worker.hold.reason}); retry once it is released.`;
+    const activity = getSessionActivity(sessionId) ?? {};
+    if ((runtime && !isSettled(sessionId)) || activity.waitingForInput || activity.inputActive || worker.admission || ticketsOf(sessionId).length > 0) {
+      return 'The worker is running or waiting for input; stop it or wait until it is idle.';
+    }
+    return null;
+  };
+
+  const cleanupClaimed = async (sessionId, claim) => {
+    const refused = (reason) => ({ sessionId, removed: [], reason });
+    const busy = await cleanupBusy(sessionId, claim);
+    if (busy) return refused(busy);
+    const worker = (await registry.read()).workers[sessionId];
+    const lookup = async (read) => {
+      if (!pullLookup) return { lookupError: 'GitHub is not available in this daemon.' };
+      try {
+        return { pr: await read() };
+      } catch (error) {
+        return { lookupError: error?.message ?? String(error) };
+      }
+    };
+    let removed = [];
+    if (worker.servesPr && !worker.cleanup) {
+      const { repo: repository, number } = worker.servesPr;
+      const reason = cleanupRefusal({ helper: true, ...(await lookup(() => pullLookup.pullByNumber({ repository, number }))) });
+      if (reason) return refused(reason);
+      // Checked again after the GitHub read.
+      const busyNow = await cleanupBusy(sessionId, claim);
+      if (busyNow) return refused(busyNow);
+    } else {
+      let target = worker.cleanup;
+      if (!target) {
+        try {
+          target = await resolveCleanupTarget(worker.cwd);
+        } catch (error) {
+          return refused(`${error.message} Without a servesPr binding it stays for the owner.`);
+        }
+      }
+      if (!target.branch) return refused(cleanupRefusal({}));
+      const { pr, lookupError } = target.repository
+        ? await lookup(() => pullLookup.pullForBranch({ repository: target.repository, branch: target.branch }))
+        : { lookupError: 'The worktree has no github.com origin.' };
+      // The run and the tree are read after the GitHub read, right before the
+      // first git step.
+      const busyNow = await cleanupBusy(sessionId, claim);
+      if (busyNow) return refused(busyNow);
+      const tree = await readTreeState(target);
+      const reason = cleanupRefusal({ branch: target.branch, pr, lookupError, ...tree });
+      if (reason) return refused(reason);
+      if (!worker.cleanup) {
+        await registry.update((document) => {
+          if (document.workers[sessionId]) document.workers[sessionId].cleanup = target;
+        });
+      }
+      removed = await removeWorkerTree(target, tree, pr.headSha);
+    }
+    try {
+      await deleteSession(sessionId);
+      removed.push(`session ${sessionId}`);
+    } catch (error) {
+      if (!isGone(error)) {
+        throw new OrchestrationError('WORKER_CLEANUP_FAILED', `Cleanup failed at step session: ${error?.message ?? String(error)}. Call worker_cleanup again.`, { step: 'session', removed });
+      }
+    }
+    await registry.update((document) => {
+      delete document.workers[sessionId];
+    });
+    return { sessionId, removed };
+  };
+
   const handlers = {
     orchestration_capabilities: capabilities,
     orchestration_digest: digest,
@@ -1047,6 +1166,7 @@ export function createOrchestrationService(deps) {
     session_interrupt: interrupt,
     session_stop: stop,
     session_rewind: rewind,
+    worker_cleanup: cleanupWorker,
     orchestration_takeover: takeover,
   };
 

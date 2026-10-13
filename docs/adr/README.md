@@ -16,6 +16,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0008](0008-dev-integration-branch.md) | Work merges into `dev`; `main` only fast-forwards to stable states | Accepted |
 | [0009](0009-spec-folder-for-multi-pr-features.md) | A feature delivered in several pull requests gets a temporary spec folder | Accepted |
 | [0010](0010-orchestration-through-daemon-tools.md) | Orchestration through daemon-owned tools, an in-process adapter and a session-scoped MCP endpoint | Proposed |
+| [0011](0011-fixed-orchestrator.md) | Fixed orchestrator: registry, wakes and proven-merge cleanup | Proposed |
 
 ## Rules
 

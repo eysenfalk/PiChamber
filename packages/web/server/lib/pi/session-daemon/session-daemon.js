@@ -61,6 +61,7 @@ import { createOrchestrationSettingsReader, readGitBranch, readGitRepository, re
 import { OrchestrationError } from './orchestration/errors.js';
 import { LINEAGE_ENTRY, createOrchestrationService } from './orchestration/orchestration-service.js';
 import { createOrchestrationRegistryStore } from './orchestration/registry-store.js';
+import { createMergeLookup } from '../../github/merge-lookup.js';
 import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
@@ -4006,6 +4007,8 @@ export function createSessionDaemon({
     hostStatus: readHostStatus,
     resolveBranch: readGitBranch,
     resolveRepository: readGitRepository,
+    pullLookup: createMergeLookup(),
+    deleteSession: (sessionId) => deleteSession(sessionId),
     // Symlinks and `.` segments must not let two workers share a worktree.
     // A missing directory keeps its lexical form; worker creation rejects it.
     canonicalDirectory: (directory) => realpath(directory).catch(() => resolve(directory)),

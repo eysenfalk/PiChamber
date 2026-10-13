@@ -97,11 +97,11 @@ Background for the thinking levels: Anthropic's effort guidance (https://platfor
 
 After the owner merged a worker's pull request, remove what the worker leaves. Only for workers this orchestrator spawned; never `main`, `dev`, or a worktree of another session.
 
-1. Confirm: `gh pr view <n> --json state,headRefOid` shows `MERGED`, `git -C <path> status --porcelain` is empty, and the branch tip equals `headRefOid`. Squash merges leave the branch unmerged in git's eyes, so `git branch --merged` cannot decide this. Anything else (dirty tree, commits after the merged head, a pull request closed without merge): stop and ask the owner.
-2. Stop the session with `session_stop` if it still runs. There is no tool to delete a session yet; list it for the owner in the report.
-3. `git worktree remove <path>` without `--force`, `git branch -D <branch>`, and `git push origin --delete <branch>` if the remote branch still exists.
+1. On `pr_merged`, call `worker_cleanup` for the worker. It proves the merge itself (a merged pull request for exactly the worker's branch, its head equal to the local tip, a clean worktree on exactly that branch, a session proven idle in this PiChamber; new inputs are refused while it runs) and then removes the worktree without `--force`, the local branch, the remote branch under a lease on the merged head, and the session last. Do not remove these by hand.
+2. A refusal removes nothing and names the reason. Commits after the merged head, a dirty tree, or a pull request closed without merge (`pr_closed`): ask the owner. A live run: let it settle or stop it with `session_stop`, then call again. A hold a stop left for an unsettled input or run: it ends once that settles or the stopping process is gone; call again later. A failed step names itself (`WORKER_CLEANUP_FAILED`, `step`); fix the cause and call again, it continues where it stopped.
+3. Spawn helpers without their own branch (review, research, oracle) with `servesPr: { repo, number }`; `worker_cleanup` deletes such a helper's session once that pull request is merged. A helper without `servesPr` stays; list it for the owner.
 
-Done when `git worktree list`, `git branch` and `session_list` no longer show the worker.
+Done when `session_list` no longer shows the worker and the report names what `worker_cleanup` removed.
 
 ## Without the tools
 
