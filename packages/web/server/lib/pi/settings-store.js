@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import { resolvePiChamberDataDir } from '../pichamber-data-dir.js';
 import { withCrossProcessLock } from '../server/cross-process-lock.js';
@@ -152,6 +152,10 @@ const normalizeOrchestration = (value) => {
     }
     if (Object.keys(roles).length > 0) result.roles = roles;
   }
+  if (value.worktreeRoot !== undefined && value.worktreeRoot !== null) {
+    if (typeof value.worktreeRoot !== 'string' || !isAbsolute(value.worktreeRoot) || value.worktreeRoot.length > 4096) throw invalidSettings();
+    result.worktreeRoot = value.worktreeRoot;
+  }
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
@@ -170,6 +174,7 @@ const mergeOrchestration = (current, incoming) => {
       next.gate = { ...(current?.gate ?? {}), ...incoming.gate };
     }
   }
+  if (Object.hasOwn(incoming, 'worktreeRoot')) next.worktreeRoot = incoming.worktreeRoot;
   if (Object.hasOwn(incoming, 'roles')) {
     if (incoming.roles === null) {
       delete next.roles;
@@ -192,6 +197,8 @@ export const resolveOrchestrationSettings = (stored) => {
     workerLimit: overrides.workerLimit ?? DEFAULT_ORCHESTRATION_SETTINGS.workerLimit,
     gate: { ...DEFAULT_ORCHESTRATION_SETTINGS.gate, ...(overrides.gate ?? {}) },
     roles,
+    // Where `worker_start` adds worktrees; unset means next to the caller's worktree.
+    ...(overrides.worktreeRoot ? { worktreeRoot: overrides.worktreeRoot } : {}),
   };
 };
 

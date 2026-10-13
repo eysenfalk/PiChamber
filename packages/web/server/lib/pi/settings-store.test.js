@@ -185,6 +185,16 @@ describe('Pi settings sidecar', () => {
     await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
   });
 
+  it('stores an absolute worktree root and clears it with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { worktreeRoot: '/srv/worktrees' } });
+    await store.update({ orchestration: { workerLimit: 2 } });
+    expect(resolveOrchestrationSettings(await store.read())).toMatchObject({ workerLimit: 2, worktreeRoot: '/srv/worktrees' });
+    await store.update({ orchestration: { worktreeRoot: null } });
+    expect(resolveOrchestrationSettings(await store.read())).not.toHaveProperty('worktreeRoot');
+  });
+
   it('defaults the eleven roles to the owner\'s models and thinking levels, never off', () => {
     expect(DEFAULT_ORCHESTRATION_SETTINGS.roles).toEqual({
       orchestrate: { modelId: 'claude-opus-5-5', thinking: 'high' },
@@ -228,6 +238,8 @@ describe('Pi settings sidecar', () => {
       { roles: { small: { modelId: '' } } },
       { roles: { small: { modelId: 'x', thinking: 'loud' } } },
       { roles: [] },
+      { worktreeRoot: 'relative/path' },
+      { worktreeRoot: 7 },
       'four',
     ]) {
       await expect(store.update({ orchestration })).rejects.toMatchObject({ code: 'PI_SETTINGS_INVALID' });

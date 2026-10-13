@@ -166,6 +166,8 @@ export const recordSession = (document, opId, caller, session, at) => {
     ...(intent.role ? { role: intent.role } : {}),
     ...(intent.model ? { model: intent.model } : {}),
     ...(intent.thinking ? { thinking: intent.thinking } : {}),
+    ...(intent.issue ? { issue: intent.issue } : {}),
+    ...(intent.branch ? { branch: intent.branch } : {}),
     ...(session.sessionFile ? { sessionFile: session.sessionFile } : {}),
     ...(operation.process ? { process: operation.process } : {}),
     state: 'starting',
