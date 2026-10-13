@@ -26,9 +26,13 @@ exec 9<"${XDG_RUNTIME_DIR:?lab/run requires XDG_RUNTIME_DIR}"
 flock 9
 # Conmon survives podman; never let it inherit and retain the lifecycle lock.
 podman() { command podman "$@" 9>&-; }
+# The checkout that started the pod, from its label (empty for an unlabeled pod).
+holder() { podman pod inspect "$name" --format '{{index .Labels "io.pichamber.lab.checkout"}}'; }
+# A lab whose labelled checkout directory is gone cannot be stopped from there; any checkout may remove it.
+abandoned() { [[ -n "$1" && ! -d "$1" ]]; }
 check_checkout() {
   local owner
-  owner="$(podman pod inspect "$name" --format '{{index .Labels "io.pichamber.lab.checkout"}}')" || return 1
+  owner="$(holder)" || return 1
   if [[ "$owner" != "$root" ]]; then
     echo "Lab belongs to another checkout: ${owner:-unknown}; run lab/run there. Refusing from $root." >&2
     return 1
@@ -43,9 +47,14 @@ verify_limits() {
   fi
 }
 cleanup() {
-  local result=0 remaining attempt
+  local result=0 remaining attempt owner
   if podman pod exists "$name"; then
-    check_checkout || return 1
+    owner="$(holder)" || return 1
+    if abandoned "$owner"; then
+      echo "Removing the lab of $owner, which no longer exists." >&2
+    else
+      check_checkout || return 1
+    fi
     for attempt in 1 2 3; do
       if podman pod rm --force "$name"; then break; fi
       if ! podman pod exists "$name"; then break; fi
@@ -68,7 +77,14 @@ cleanup() {
 case "$1" in
   up)
     if podman pod exists "$name"; then
-      echo 'Lab already exists; use lab/run status or lab/run down first.' >&2; exit 1
+      holder_checkout="$(holder)"
+      if abandoned "$holder_checkout"; then
+        cleanup || exit 1
+      elif [[ "$holder_checkout" == "$root" ]]; then
+        echo 'Lab already exists; use lab/run status or lab/run down first.' >&2; exit 1
+      else
+        echo "Lab already exists and belongs to ${holder_checkout:-an unknown checkout}; run lab/run status there, or lab/run down from that checkout, first." >&2; exit 1
+      fi
     fi
     [[ -f "$root/packages/web/dist/index.html" && -d "$root/node_modules" ]] || {
       echo 'Run bun install --frozen-lockfile and bun run build on the host first.' >&2; exit 1;
@@ -155,8 +171,9 @@ case "$1" in
   down) cleanup ;;
   status)
     if ! podman pod exists "$name"; then echo 'Lab is down.'; exit 0; fi
-    check_checkout
-    echo "Checkout: $root"
+    owner="$(holder)"
+    echo "Holder: ${owner:-unknown}"
+    if abandoned "$owner"; then echo 'The holder no longer exists; lab/run down from any checkout removes the lab.'; fi
     podman pod ps --filter name="^$name$"
     podman ps --all --filter pod="$name"
     curl --fail --silent --show-error --max-time 5 "$url/api/pi/runtime"

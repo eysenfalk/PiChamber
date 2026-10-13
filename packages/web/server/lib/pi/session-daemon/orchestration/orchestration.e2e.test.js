@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
-import { connectClient, credential, piAiFauxUrl } from './e2e-support.js';
+import { connectClient, credential, disableHostGate, piAiFauxUrl } from './e2e-support.js';
 import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
 
 // Orchestration through the real Pi SDK: the daemon's inline extension gives
@@ -72,6 +72,7 @@ describe('orchestration end-to-end through the real SDK', () => {
     await mkdir(join(agentDir, 'extensions'), { recursive: true });
     await writeFile(join(agentDir, 'extensions', 'faux-orchestration.ts'), fauxExtension(piAiFauxUrl(), workerDir));
     process.env.PICHAMBER_DATA_DIR = join(root, 'data');
+    disableHostGate(process.env.PICHAMBER_DATA_DIR);
 
     const endpoint = join(root, 'daemon.sock');
     daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir });

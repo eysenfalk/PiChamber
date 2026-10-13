@@ -126,23 +126,77 @@ printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const command of ['status', 'down', 'record']) {
-  test(`${command} refuses a lab owned by another checkout without touching resources`, async () => {
-    const root = await mkdtemp(join(tmpdir(), 'pichamber-owner-'));
-    try {
-      await writeFile(join(root, 'podman'), `#!/usr/bin/env bash
+// A pod labelled with `holder`; podman commands are logged, `pod rm` removes it.
+const withHeldLab = async (holder, command, run) => {
+  const root = await mkdtemp(join(tmpdir(), 'pichamber-owner-'));
+  try {
+    await writeFile(join(root, 'podman'), `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE_LAB/calls"
-if [[ "$1" == info ]]; then echo true; elif [[ "$2" == inspect ]]; then echo /other/checkout; fi
+if [[ "$1" == info ]]; then echo true
+elif [[ "$1 $2" == "pod exists" ]]; then [[ -e "$FAKE_LAB/pod" ]]
+elif [[ "$1 $2" == "pod inspect" ]]; then echo "$FAKE_HOLDER"
+elif [[ "$1 $2" == "pod rm" ]]; then rm -f "$FAKE_LAB/pod"
+elif [[ "$2" == exists ]]; then exit 1
+fi
 `, { mode: 0o700 });
-      const result = spawnSync('bash', [labRun, command, ...(command === 'record' ? ['lab'] : [])], {
-        env: { ...process.env, PATH: `${root}:${process.env.PATH}`, XDG_RUNTIME_DIR: root, FAKE_LAB: root }, encoding: 'utf8', timeout: 5000,
-      });
+    await writeFile(join(root, 'pod'), '');
+    const result = spawnSync('bash', [labRun, ...command], {
+      env: { ...process.env, PATH: `${root}:${process.env.PATH}`, XDG_RUNTIME_DIR: root, FAKE_LAB: root, FAKE_HOLDER: holder(root) }, encoding: 'utf8', timeout: 5000,
+    });
+    await run(result, async () => readFile(join(root, 'calls'), 'utf8'), root);
+  } finally { await rm(root, { recursive: true, force: true }); }
+};
+const otherCheckout = (root) => root; // an existing directory that is not this checkout
+const goneCheckout = (root) => join(root, 'removed-checkout');
+
+for (const command of [['down'], ['record', 'lab']]) {
+  test(`${command[0]} refuses a lab held by another existing checkout without removing anything`, () =>
+    withHeldLab(otherCheckout, command, async (result, calls) => {
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain('Lab belongs to another checkout: /other/checkout');
-      expect(await readFile(join(root, 'calls'), 'utf8')).not.toMatch(/ rm | ps /);
-    } finally { await rm(root, { recursive: true, force: true }); }
-  });
+      expect(result.stderr).toContain('Lab belongs to another checkout:');
+      expect(await calls()).not.toMatch(/ rm /);
+    }));
 }
+
+test('status names the holder from the pod label, from any checkout, without changing anything', () =>
+  withHeldLab(otherCheckout, ['status'], async (result, calls, root) => {
+    expect(result.stdout).toContain(`Holder: ${root}\n`);
+    expect(result.stdout).not.toContain('no longer exists');
+    expect(await calls()).not.toMatch(/ rm /);
+  }));
+
+test('up from a second checkout is refused and names the holder', () =>
+  withHeldLab(otherCheckout, ['up'], async (result, calls, root) => {
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`Lab already exists and belongs to ${root};`);
+    expect(await calls()).not.toMatch(/ rm | build /);
+  }));
+
+test('a lab whose checkout is gone is abandoned: status says so and down removes it from another checkout', async () => {
+  await withHeldLab(goneCheckout, ['status'], async (result) => {
+    expect(result.stdout).toContain('removed-checkout');
+    expect(result.stdout).toContain('no longer exists');
+  });
+  await withHeldLab(goneCheckout, ['down'], async (result, calls) => {
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('which no longer exists');
+    expect(await calls()).toContain('pod rm --force pichamber-lab');
+  });
+});
+
+test('up removes an abandoned lab before it starts a new one', () =>
+  withHeldLab(goneCheckout, ['up'], async (result, calls) => {
+    expect(await calls()).toContain('pod rm --force pichamber-lab');
+    // The new start then needs a built checkout; the fake host has none, which proves removal came first.
+    expect(result.stderr).toContain('Run bun install --frozen-lockfile and bun run build on the host first.');
+  }));
+
+test('a pod without a checkout label stays refused', () =>
+  withHeldLab(() => '', ['down'], async (result, calls) => {
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Lab belongs to another checkout: unknown');
+    expect(await calls()).not.toMatch(/ rm /);
+  }));
 
 test('the lifecycle lock never opens a symlinked writable lock file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'pichamber-lock-'));

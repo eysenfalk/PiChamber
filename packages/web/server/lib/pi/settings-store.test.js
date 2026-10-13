@@ -151,6 +151,7 @@ describe('Pi settings sidecar', () => {
 
     expect(resolveOrchestrationSettings(await store.read())).toEqual({
       workerLimit: 4,
+      gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
       roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
     });
 
@@ -168,6 +169,15 @@ describe('Pi settings sidecar', () => {
     expect(resolved.workerLimit).toBe(2);
     expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'medium' });
     expect(resolved.roles['task-hard']).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
+
+    // The gate merges field by field; null returns it to its default.
+    await store.update({ orchestration: { gate: { enabled: false } } });
+    await store.update({ orchestration: { gate: { minAvailableBytes: 4 * 1024 ** 3 } } });
+    const gated = await store.read();
+    expect(gated.orchestration.gate).toEqual({ enabled: false, minAvailableBytes: 4 * 1024 ** 3 });
+    expect(resolveOrchestrationSettings(gated).gate).toEqual({ enabled: false, minAvailableBytes: 4 * 1024 ** 3 });
+    await store.update({ orchestration: { gate: null } });
+    expect((await store.read()).orchestration).not.toHaveProperty('gate');
 
     // A role set to null returns to its default; null clears every override.
     await store.update({ orchestration: { roles: { small: null } } });
@@ -204,6 +214,12 @@ describe('Pi settings sidecar', () => {
       { workerLimit: 0 },
       { workerLimit: 17 },
       { workerLimit: 2.5 },
+      { gate: true },
+      { gate: [] },
+      { gate: { enabled: 'yes' } },
+      { gate: { minAvailableBytes: -1 } },
+      { gate: { minAvailableBytes: 1.5 } },
+      { gate: { minAvailableBytes: 1024 ** 4 + 1 } },
       { roles: { planner: { modelId: 'x' } } },
       { roles: { implementation: { modelId: 'x' } } },
       { roles: { implement: { modelId: 'x' } } },
