@@ -226,7 +226,15 @@ describe('Pi session daemon spike', () => {
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
+    vi.unstubAllEnvs();
   });
+
+  // Only a marked session may orchestrate (#136); the daemon reads the mark from its data root.
+  const markCallerAsOrchestrator = async (root) => {
+    vi.stubEnv('PICHAMBER_DATA_DIR', root);
+    await mkdir(join(root, 'pi'), { recursive: true });
+    await writeFile(join(root, 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { orchestrators: { caller: true } } }));
+  };
 
   it('uses the selected cwd and agent directory, restricts its Unix socket, and retains event sequencing across a client reconnect', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
@@ -1031,6 +1039,7 @@ describe('Pi session daemon spike', () => {
 
   it('disposes sessions an orchestration call activated once they are idle again', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-idle-'));
+    await markCallerAsOrchestrator(root);
     const endpoint = testDaemonEndpoint(root);
     const callerFile = join(root, 'caller.jsonl');
     const targetFile = join(root, 'target.jsonl');
@@ -1068,6 +1077,7 @@ describe('Pi session daemon spike', () => {
 
   it('keeps a target an orchestration abort activated alive until the abort ended, then disposes it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-abort-'));
+    await markCallerAsOrchestrator(root);
     const endpoint = testDaemonEndpoint(root);
     const callerFile = join(root, 'caller.jsonl');
     const targetFile = join(root, 'target.jsonl');

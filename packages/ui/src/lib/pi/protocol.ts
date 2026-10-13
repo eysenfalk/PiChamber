@@ -528,6 +528,7 @@ export interface PiSettingsSnapshot {
       workerLimit?: number;
       gate?: Partial<PiOrchestrationGate>;
       roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel>>;
+      orchestrators?: Record<string, true>;
     };
   };
   /** Orchestration roles and worker limit with defaults applied. */
@@ -555,6 +556,8 @@ export interface PiOrchestrationSettings {
   workerLimit: number;
   gate: PiOrchestrationGate;
   roles: Record<PiOrchestrationRole, PiOrchestrationRoleModel>;
+  /** Ids of the sessions marked as orchestrator; only these get the orchestration tools and instructions. */
+  orchestrators: string[];
 }
 
 export interface PiSettingsUpdateInput {
@@ -582,6 +585,8 @@ export interface PiChamberDefaultsUpdateInput {
     workerLimit?: number | null;
     gate?: Partial<PiOrchestrationGate> | null;
     roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel | null>> | null;
+    /** `true` marks a session as orchestrator, `null` removes its mark; other sessions keep theirs. */
+    orchestrators?: Record<string, true | null>;
   } | null;
 }
 

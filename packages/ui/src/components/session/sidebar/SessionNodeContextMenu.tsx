@@ -17,6 +17,9 @@ import {
 } from '@/components/ui/dropdown-menu.styles';
 import { cn } from '@/lib/utils';
 import { Icon } from '@/components/icon/Icon';
+import { toast } from '@/components/ui';
+import { piClient } from '@/lib/pi/client';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 
 export interface SessionNodeMenuItemsProps {
   session: Session;
@@ -37,6 +40,44 @@ export interface SessionNodeMenuItemsProps {
     source?: { archivedBucket?: boolean; hardDelete?: boolean; skipConfirm?: boolean }
   ) => void;
   handleRestoreSession: (session: Session) => void;
+}
+
+/**
+ * The one switch for the orchestrator mark: only a marked session gets the
+ * orchestration tools, the base instructions and its workers' wakes. The
+ * mark lives in the Pi settings file, so it reads the current list when the
+ * menu opens and stays hidden until it knows the state.
+ */
+function OrchestratorMarkItem({ sessionId, Item }: { sessionId: string; Item: React.ElementType }) {
+  const [marked, setMarked] = React.useState<boolean | null>(null);
+
+  React.useEffect(() => {
+    let active = true;
+    piClient.getSettings({ runtimeKey: getRuntimeKey() }).then((settings) => {
+      if (active) setMarked(settings.orchestration.orchestrators.includes(sessionId));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [sessionId]);
+
+  if (marked === null) return null;
+
+  const toggle = () => {
+    piClient.setPiChamberDefaults(
+      { orchestration: { orchestrators: { [sessionId]: marked ? null : true } } },
+      { runtimeKey: getRuntimeKey() },
+    ).then(() => {
+      toast.success(marked ? "Orchestrator mark removed" : "Session marked as orchestrator");
+    }).catch(() => {
+      toast.error("Failed to change the orchestrator mark");
+    });
+  };
+
+  return (
+    <Item onClick={toggle} className="[&>svg]:mr-1">
+      <Icon name="node-tree" className="mr-1 h-4 w-4" />
+      {marked ? 'Remove orchestrator mark' : 'Mark as orchestrator'}
+    </Item>
+  );
 }
 
 function renderSessionMenuItems(
@@ -101,6 +142,10 @@ function renderSessionMenuItems(
         )}
         {isPinnedSession ? 'Unpin session' : 'Pin session'}
       </Item>
+
+      {!session.parentID && !archivedBucket ? (
+        <OrchestratorMarkItem sessionId={session.id} Item={Item} />
+      ) : null}
 
       <Item
         onClick={() => {

@@ -29,6 +29,7 @@ After #107 ([ADR 0010](0010-orchestration-through-daemon-tools.md)) an orchestra
 | O15 | Worker guidance goes into the brief the service builds at spawn; orchestrator guidance into `instructions.js` and the `orchestrator` skill. |
 | O16 | Orchestration switches live in `settings-store.js` under `orchestration`, each with default and bounds; no new UI. |
 | O17 | GitHub access stays in `packages/web/server/lib/github`; orchestration code never runs `gh`. The merge lookup of `worker_cleanup` runs that module inside the daemon (it needs `gh` on PATH, not the HTTP server), so the merge proof is read right before removal and not handed over by the server. |
+| O18 | Only a session marked as orchestrator orchestrates (#136): its id in `orchestration.orchestrators` of the settings sidecar, set in the file or with the one switch in the session's row menu (the only UI besides O16). A marked session gets the tools and `instructions.js`, workers and unmarked sessions get neither and the service refuses their orchestrator calls with `ORCHESTRATION_FORBIDDEN`. A worker stays a worker when marked. Wakes for an owner whose mark is gone wait in memory until it is marked again. |
 
 ## Consequences
 
