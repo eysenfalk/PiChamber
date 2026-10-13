@@ -153,6 +153,7 @@ describe('Pi settings sidecar', () => {
       workerLimit: 4,
       wakes: { coalesceMs: 3_000 },
       watchdog: { stallAfterMs: 600_000, enabled: true },
+      github: { enabled: true },
       gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
       roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
     });
@@ -200,6 +201,15 @@ describe('Pi settings sidecar', () => {
     });
     await store.update({ orchestration: { watchdog: null } });
     expect(resolveOrchestrationSettings(await store.read()).watchdog).toEqual({ stallAfterMs: 600_000, enabled: true });
+  });
+
+  it('stores the pull request watch switch and returns to on with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { github: { enabled: false } } });
+    expect(resolveOrchestrationSettings(await store.read()).github).toEqual({ enabled: false });
+    await store.update({ orchestration: { github: null } });
+    expect(resolveOrchestrationSettings(await store.read()).github).toEqual({ enabled: true });
   });
 
   it('stores an absolute worktree root and clears it with null', async () => {
@@ -260,6 +270,7 @@ describe('Pi settings sidecar', () => {
       { watchdog: { stallAfterMs: 59_999 } },
       { watchdog: { stallAfterMs: 7_200_001 } },
       { watchdog: { enabled: 'yes' } },
+      { github: { enabled: 'yes' } },
       { wakes: [] },
       { worktreeRoot: 'relative/path' },
       { worktreeRoot: 7 },

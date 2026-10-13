@@ -4020,6 +4020,15 @@ export function createSessionDaemon({
   // extension path waits as long as the tool call asks.
   const ORCHESTRATION_IPC_MAX_WAIT_MS = 50_000;
 
+  // The web server reads GitHub for the pull requests of workers (#119): no
+  // payload returns what to read, `reads` hands the results back.
+  const watchPullRequests = async (payload) => {
+    if (payload?.reads === undefined) return { targets: await orchestration.prWatch.targets() };
+    if (!Array.isArray(payload.reads)) throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'The pull request reads are invalid.');
+    await orchestration.prWatch.apply(payload.reads);
+    return { targets: [] };
+  };
+
   // Tool errors are results, not protocol failures: a protocol error closes
   // the daemon connection and loses the reason the model needs to recover.
   const callOrchestration = async (payload) => {
@@ -4375,6 +4384,11 @@ export function createSessionDaemon({
       }
       case 'orchestration.call': {
         const result = await callOrchestration(message.payload);
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.prWatch': {
+        const result = await watchPullRequests(message.payload);
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
         return;
       }

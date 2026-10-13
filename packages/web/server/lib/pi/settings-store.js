@@ -92,6 +92,8 @@ export const DEFAULT_ORCHESTRATION_SETTINGS = Object.freeze({
   workerLimit: 4,
   wakes: Object.freeze({ coalesceMs: 3_000 }),
   watchdog: Object.freeze({ stallAfterMs: 600_000, enabled: true }),
+  // Watching the pull requests of workers (#119).
+  github: Object.freeze({ enabled: true }),
   // A spawn is refused while the host is busy: load above the core count or less memory available than this.
   gate: Object.freeze({ enabled: true, minAvailableBytes: 8 * 1024 ** 3 }),
   roles: Object.freeze({
@@ -153,6 +155,8 @@ const normalizeOrchestration = (value) => {
   if (wakes) result.wakes = wakes;
   const watchdog = normalizeGroup(value.watchdog, { stallAfterMs: 'ms', enabled: 'boolean' });
   if (watchdog) result.watchdog = watchdog;
+  const github = normalizeGroup(value.github, { enabled: 'boolean' });
+  if (github) result.github = github;
   if (value.gate !== undefined && value.gate !== null) {
     if (typeof value.gate !== 'object' || Array.isArray(value.gate)) throw invalidSettings();
     const gate = {};
@@ -192,7 +196,7 @@ const mergeOrchestration = (current, incoming) => {
   if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw invalidSettings();
   const next = { ...(current ?? {}) };
   if (Object.hasOwn(incoming, 'workerLimit')) next.workerLimit = incoming.workerLimit;
-  for (const group of ['wakes', 'watchdog']) {
+  for (const group of ['wakes', 'watchdog', 'github']) {
     if (!Object.hasOwn(incoming, group)) continue;
     const value = incoming[group];
     if (value === null) delete next[group];
@@ -230,6 +234,7 @@ export const resolveOrchestrationSettings = (stored) => {
     workerLimit: overrides.workerLimit ?? DEFAULT_ORCHESTRATION_SETTINGS.workerLimit,
     wakes: { ...DEFAULT_ORCHESTRATION_SETTINGS.wakes, ...overrides.wakes },
     watchdog: { ...DEFAULT_ORCHESTRATION_SETTINGS.watchdog, ...overrides.watchdog },
+    github: { ...DEFAULT_ORCHESTRATION_SETTINGS.github, ...overrides.github },
     gate: { ...DEFAULT_ORCHESTRATION_SETTINGS.gate, ...(overrides.gate ?? {}) },
     roles,
     // Where `worker_start` adds worktrees; unset means next to the caller's worktree.

@@ -8,6 +8,7 @@ import { workerPreamble } from './instructions.js';
 import { authorize, needsOwnership } from './policy.js';
 import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTime } from './process-identity.js';
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
+import { createPrWatch } from './pr-watch.js';
 import { createWakes } from './wakes.js';
 import {
   applyDurability,
@@ -260,6 +261,7 @@ export function createOrchestrationService(deps) {
     now,
     isGone,
   });
+  const prWatch = createPrWatch({ registry, emit: wakes.emit, readSettings });
   const isSettled = (sessionId) => {
     const state = stateOf(sessionId);
     return state === 'idle' || state === 'dormant';
@@ -1629,6 +1631,7 @@ export function createOrchestrationService(deps) {
     onSessionActivity: wakes.touch,
     // An extension dialog opened in a session; in a worker it is a question.
     onDialogOpened: (sessionId, title) => wakes.emit(sessionId, 'question', `dialog: ${title ?? 'input requested'}`),
+    prWatch,
     startWakes: wakes.start,
     stopWakes: wakes.stop,
     verifyCaller,

@@ -15,6 +15,7 @@ import {
 import { createGhCli, formatVersion } from './gh-cli.js';
 import { createIssuesService } from './issues.js';
 import { createPullsService } from './pulls.js';
+import { createPullWatchReader } from './pull-watch.js';
 import { getViewerPermission } from './repo-scope.js';
 import { createTemplatesService } from './templates.js';
 import { createRepoInfoLoader, createRepoScopeResolver, isValidIssueNumber, parseRepoRef } from './repo-scope.js';
@@ -559,6 +560,7 @@ export const createGitHubRoutes = (overrides = {}) => {
 
   return {
     ...handlers,
+    readPullWatch: createPullWatchReader({ scopeResolver, credential, client, checks }),
     _internals: { withRepoContext, ghCli, credential, client, scopeResolver, repoInfo, pulls, issues, checks },
   };
 };
