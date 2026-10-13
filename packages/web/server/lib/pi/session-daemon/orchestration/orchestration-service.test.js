@@ -576,6 +576,9 @@ describe('orchestration service', () => {
 
       activity.set('worker-1', { waitingForInput: true });
       await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1' }), 'ORCHESTRATION_SESSION_BUSY');
+      // A direct input that Pi has accepted but not yet turned into a run.
+      activity.set('worker-1', { inputActive: true });
+      await expectCode(harness.service.call('orch', 'session_rewind', { sessionId: 'worker-1', entryId: 'e1' }), 'ORCHESTRATION_SESSION_BUSY');
       activity.delete('worker-1');
       for (const state of ['busy', 'retry']) {
         harness.states.set('worker-1', state);
@@ -584,6 +587,25 @@ describe('orchestration service', () => {
       expect(manager.getLeafId()).toBe('e3');
       expect(harness.deps.navigateSession).not.toHaveBeenCalledWith('worker-1', 'e1');
     });
+  });
+
+  it('replays a repeated rewind by clientRequestId instead of moving the leaf again', async () => {
+    const harness = createHarness();
+    const manager = await (async () => {
+      await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      const m = harness.runtimes.get('worker-1').session.sessionManager;
+      for (const [id, role] of [['e1', 'user'], ['e2', 'assistant'], ['e3', 'user']]) m.getEntries().push({ type: 'message', id, message: { role, content: [{ type: 'text', text: id }] } });
+      m.setLeaf('e3');
+      await harness.settle('worker-1');
+      return m;
+    })();
+    const args = { sessionId: 'worker-1', entryId: 'e1', prompt: 'RUN AGAIN', clientRequestId: 'rw-1' };
+    await harness.service.call('orch', 'session_rewind', args);
+    await harness.settle('worker-1');
+    manager.setLeaf('e3');
+    await expect(harness.service.call('orch', 'session_rewind', args)).resolves.toMatchObject({ prompted: true, deduplicated: true });
+    expect(manager.getLeafId()).toBe('e3');
+    await expectCode(harness.service.call('orch', 'session_rewind', { ...args, entryId: 'e2' }), 'OPERATION_PAYLOAD_MISMATCH');
   });
 
   it('spawns in wait mode without ever cancelling the worker', async () => {

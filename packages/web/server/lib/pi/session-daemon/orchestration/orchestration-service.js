@@ -694,8 +694,9 @@ export function createOrchestrationService(deps) {
   // Moves an idle worker of the caller back to an earlier entry and, with a
   // prompt, runs it again from there. A run, a retry, a start and an open
   // dialog all refuse: navigating under them would change a live transcript.
-  const rewind = (_callerSessionId, args) => withSession(args.sessionId, async () => {
-    if (!isSettled(args.sessionId) || getSessionActivity(args.sessionId)?.waitingForInput) {
+  const rewindOnce = (args) => withSession(args.sessionId, async () => {
+    const activity = getSessionActivity(args.sessionId);
+    if (!isSettled(args.sessionId) || activity?.waitingForInput || activity?.inputActive) {
       throw new OrchestrationError('ORCHESTRATION_SESSION_BUSY', 'The worker is running or waiting for input; interrupt it or wait until it is idle.', { sessionId: args.sessionId });
     }
     let navigation;
@@ -715,6 +716,28 @@ export function createOrchestrationService(deps) {
       prompted: args.prompt !== undefined,
     };
   });
+
+  // A repeated clientRequestId replays the first answer instead of moving the
+  // leaf again, which would hide the run the first call started. The memory
+  // is per process, like the send receipts it sits in front of.
+  const rewinds = new Map();
+  const REWIND_MEMORY = 256;
+  const rewind = (_callerSessionId, args) => {
+    if (!args.clientRequestId) return rewindOnce(args);
+    const key = `${args.sessionId}\u0000${args.clientRequestId}`;
+    const seen = rewinds.get(key);
+    if (seen) {
+      if (seen.args.entryId !== args.entryId || seen.args.prompt !== args.prompt) {
+        throw new OrchestrationError('OPERATION_PAYLOAD_MISMATCH', 'This clientRequestId was already used for a different rewind.', { sessionId: args.sessionId });
+      }
+      return seen.result.then((result) => ({ ...result, deduplicated: true }));
+    }
+    const result = rewindOnce(args);
+    rewinds.set(key, { args, result });
+    result.catch(() => rewinds.delete(key));
+    if (rewinds.size > REWIND_MEMORY) rewinds.delete(rewinds.keys().next().value);
+    return result;
+  };
 
   const wait = async (_callerSessionId, args, options = {}) => {
     const sessionIds = [...new Set(args.sessionIds)];

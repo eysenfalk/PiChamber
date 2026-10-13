@@ -3945,6 +3945,9 @@ export function createSessionDaemon({
       runStartedAt: activeRunStartedAt.get(sessionId),
       retry: retryStateBySession.get(sessionId),
       waitingForInput: Boolean(extensionBridge.getSnapshotState(sessionId).dialogs?.length),
+      // A direct input that Pi has not turned into a run yet (an input hook
+      // is still deciding) is no streaming state, but it will start a run.
+      inputActive: activeSessionInputs.has(runtimeRegistry?.findBySessionId(sessionId)),
     }),
     createWorkerSession: async ({ cwd: workerCwd, title, model, thinking, parentSessionPath, lineage }) => {
       const created = await createSession(

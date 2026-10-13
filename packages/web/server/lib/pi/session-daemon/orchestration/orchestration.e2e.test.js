@@ -58,6 +58,11 @@ export default function (pi) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 50 }, () => respond));
   pi.registerProvider(faux.provider);
+  // A direct input that waits in the hook: accepted, but no run has started.
+  pi.on('input', async (event) => {
+    if (event.text.includes('GATE INPUT')) await globalThis.__pichamberGateInput?.promise;
+    return { action: 'continue' };
+  });
 }
 `;
 
@@ -72,6 +77,8 @@ describe('orchestration end-to-end through the real SDK', () => {
     else process.env.PICHAMBER_DATA_DIR = previousDataDir;
     globalThis.__pichamberHold?.resolve();
     delete globalThis.__pichamberHold;
+    globalThis.__pichamberGateInput?.resolve();
+    delete globalThis.__pichamberGateInput;
     delete globalThis.__pichamberOrchestrationLog;
   });
 
@@ -190,7 +197,7 @@ describe('orchestration end-to-end through the real SDK', () => {
   }, 120_000);
 
   it('rewinds a worker whose history fails every run and runs it again from there', async () => {
-    const { client, createSession } = await startDaemon({ coalesceMs: 100 });
+    const { root, client, createSession } = await startDaemon({ coalesceMs: 100 });
     const parentId = await createSession();
     const call = async (sessionId, tool, args) => (await client.request('orchestration.call', { sessionId, tool, args })).result;
     const wakes = () => client.events.filter((message) => message.event === 'extension.message'
@@ -215,18 +222,42 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(poisoned).toBeGreaterThan(0);
     const before = read.messages[poisoned - 1];
     expect(before.text).toContain('WORKER DONE');
+    // A direct prompt held in Pi's input hook has no run yet but will start one: no rewind under it.
+    let release;
+    globalThis.__pichamberGateInput = { promise: new Promise((resolve) => { release = resolve; }), resolve: () => release() };
+    // The UI's own connection: this daemon answers one connection's requests in order.
+    const ui = connectClient(join(root, 'daemon.sock'));
+    await ui.authenticate();
+    const gated = ui.request('sessions.prompt', { sessionId: workerId, text: 'GATE INPUT' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const gatedRewind = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN' });
+    expect(gatedRewind.error).toMatchObject({ code: 'ORCHESTRATION_SESSION_BUSY' });
+    release();
+    await gated;
+    await ui.close();
+    await reached(() => replies(workerId, 'UNSCRIPTED') + wakes().filter((event) => event.kind === 'run_failed').length >= 2);
+    const gatedRead = (await call(parentId, 'session_read', { sessionId: workerId })).value;
+    expect(gatedRead.messages.map((message) => message.text)).toContain('GATE INPUT');
+
     const foreign = await call(workerId, 'session_rewind', { sessionId: workerId, entryId: before.entryId });
     expect(foreign.error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
     const missing = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: 'no-such-entry' });
     expect(missing.error).toMatchObject({ code: 'SESSION_TREE_NOT_FOUND' });
 
-    const rewound = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN' });
+    const rewound = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN', clientRequestId: 'rewind-1' });
     expect(rewound.error).toBeUndefined();
     expect(rewound.value).toMatchObject({ sessionId: workerId, newLeafId: before.entryId, prompted: true });
     await reached(() => replies(workerId, 'WORKER RAN AGAIN') === 1);
     const after = (await call(parentId, 'session_read', { sessionId: workerId })).value;
     expect(after.outcome).toBe('completed');
     expect(after.messages.map((message) => message.text)).not.toContain('POISON');
+
+    // The same call again (a lost answer) replays; it neither moves the leaf nor prompts twice.
+    const replayed = await call(parentId, 'session_rewind', { sessionId: workerId, entryId: before.entryId, prompt: 'RUN AGAIN', clientRequestId: 'rewind-1' });
+    expect(replayed.value).toMatchObject({ newLeafId: before.entryId, prompted: true, deduplicated: true });
+    const kept = (await call(parentId, 'session_read', { sessionId: workerId })).value;
+    expect(kept.messages.map((message) => message.text)).toEqual(after.messages.map((message) => message.text));
+    expect(replies(workerId, 'WORKER RAN AGAIN')).toBe(1);
 
     await client.close();
   }, 120_000);
