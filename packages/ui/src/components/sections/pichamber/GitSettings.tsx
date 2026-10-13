@@ -11,8 +11,15 @@ import { Icon } from '@/components/icon/Icon';
 import { copyTextToClipboard } from '@/lib/clipboard';
 import { toast } from '@/components/ui';
 import {
+  AUTO_FETCH_INTERVAL_MINUTES,
+  isAutoFetchIntervalMinutes,
+  normalizeAutoFetchIntervalMinutes,
+} from '@/lib/autoFetchSettings';
+import {
   SettingsSection,
   SettingsControlGroup,
+  SettingsChipGroup,
+  SettingsInset,
   SettingsRadioGroup,
   SettingsRadioOption,
   SettingsCheckboxRow,
@@ -25,6 +32,10 @@ export const GitSettings: React.FC = () => {
   const showGitignored = useFilesViewShowGitignored();
   const gitChangesViewMode = useUIStore((state) => state.gitChangesViewMode);
   const setGitChangesViewMode = useUIStore((state) => state.setGitChangesViewMode);
+  const gitAutoFetchEnabled = useUIStore((state) => state.gitAutoFetchEnabled);
+  const setGitAutoFetchEnabled = useUIStore((state) => state.setGitAutoFetchEnabled);
+  const gitAutoFetchIntervalMinutes = useUIStore((state) => state.gitAutoFetchIntervalMinutes);
+  const setGitAutoFetchIntervalMinutes = useUIStore((state) => state.setGitAutoFetchIntervalMinutes);
 
   const [isLoading, setIsLoading] = React.useState(true);
   const viewOptions = React.useMemo(
@@ -37,6 +48,8 @@ export const GitSettings: React.FC = () => {
 
   type GitSettingsPayload = {
     gitChangesViewMode?: 'flat' | 'tree';
+    gitAutoFetchEnabled?: boolean;
+    gitAutoFetchIntervalMinutes?: number;
   };
 
   // Load current settings
@@ -59,6 +72,12 @@ export const GitSettings: React.FC = () => {
                     || (settings as Record<string, unknown>).gitChangesViewMode === 'tree'
                       ? ((settings as Record<string, unknown>).gitChangesViewMode as 'flat' | 'tree')
                       : undefined,
+                  gitAutoFetchEnabled:
+                    typeof (settings as Record<string, unknown>).gitAutoFetchEnabled === 'boolean'
+                      ? ((settings as Record<string, unknown>).gitAutoFetchEnabled as boolean)
+                      : undefined,
+                  gitAutoFetchIntervalMinutes:
+                    (settings as Record<string, unknown>).gitAutoFetchIntervalMinutes as number | undefined,
                 };
               }
             } catch {
@@ -82,6 +101,12 @@ export const GitSettings: React.FC = () => {
           if (data.gitChangesViewMode === 'flat' || data.gitChangesViewMode === 'tree') {
             setGitChangesViewMode(data.gitChangesViewMode);
           }
+          if (typeof data.gitAutoFetchEnabled === 'boolean') {
+            setGitAutoFetchEnabled(data.gitAutoFetchEnabled);
+          }
+          if (isAutoFetchIntervalMinutes(data.gitAutoFetchIntervalMinutes)) {
+            setGitAutoFetchIntervalMinutes(data.gitAutoFetchIntervalMinutes);
+          }
         }
 
       } catch (error) {
@@ -91,7 +116,7 @@ export const GitSettings: React.FC = () => {
       }
     };
     loadSettings();
-  }, [setGitChangesViewMode]);
+  }, [setGitChangesViewMode, setGitAutoFetchEnabled, setGitAutoFetchIntervalMinutes]);
 
   const handleGitChangesViewModeChange = React.useCallback((mode: 'flat' | 'tree') => {
     if (mode === gitChangesViewMode) {
@@ -101,6 +126,25 @@ export const GitSettings: React.FC = () => {
     setGitChangesViewMode(mode);
     void updateDesktopSettings({ gitChangesViewMode: mode });
   }, [gitChangesViewMode, setGitChangesViewMode]);
+
+  const handleAutoFetchEnabledChange = React.useCallback((enabled: boolean) => {
+    setGitAutoFetchEnabled(enabled);
+    void updateDesktopSettings({ gitAutoFetchEnabled: enabled });
+  }, [setGitAutoFetchEnabled]);
+
+  const handleAutoFetchIntervalChange = React.useCallback((value: string) => {
+    const minutes = normalizeAutoFetchIntervalMinutes(Number(value));
+    setGitAutoFetchIntervalMinutes(minutes);
+    void updateDesktopSettings({ gitAutoFetchIntervalMinutes: minutes });
+  }, [setGitAutoFetchIntervalMinutes]);
+
+  const autoFetchIntervalOptions = React.useMemo(
+    () => AUTO_FETCH_INTERVAL_MINUTES.map((minutes) => ({
+      value: String(minutes),
+      label: minutes === 60 ? '1 hour' : `${minutes} min`,
+    })),
+    [],
+  );
 
   if (isLoading) {
     return null;
@@ -136,6 +180,32 @@ export const GitSettings: React.FC = () => {
             label={"Display Gitignored Files"}
             ariaLabel={"Display gitignored files"}
           />
+
+          <SettingsCheckboxRow
+            settingsItem="git.auto-fetch"
+            checked={gitAutoFetchEnabled}
+            onChange={handleAutoFetchEnabledChange}
+            label={"Auto fetch"}
+            ariaLabel={"Auto fetch"}
+            info={"Fetches the remotes of the repositories in the sidebar in the background, so ahead and behind stay current. Never asks for credentials: a fetch that needs them fails and is shown in the sidebar tooltip."}
+          />
+
+          <SettingsInset className="space-y-0">
+            <SettingsFieldRow
+              settingsItem="git.auto-fetch-interval"
+              label={"Auto fetch interval"}
+            >
+              <SettingsChipGroup
+                aria-label={"Auto fetch interval"}
+                value={String(gitAutoFetchIntervalMinutes)}
+                onChange={handleAutoFetchIntervalChange}
+                options={autoFetchIntervalOptions.map((option) => ({
+                  ...option,
+                  disabled: !gitAutoFetchEnabled,
+                }))}
+              />
+            </SettingsFieldRow>
+          </SettingsInset>
         </div>
       </SettingsSection>
       <GitHubSettingsSection />

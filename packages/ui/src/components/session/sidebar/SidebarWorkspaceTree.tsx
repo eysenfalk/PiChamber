@@ -4,11 +4,17 @@ import type { GitWorktree } from '@/lib/api/types';
 import { useDeviceInfo } from '@/lib/device';
 import { applyTreeDrop } from './applyTreeDrop';
 import { ContainerRow, TreeGuides } from './TreeContainerRow';
+import { canShowQuickCreateButton } from './quickCreate';
 import { nodeLabel } from './treeNodeLabel';
 import { TreeDndItem, TreeDndProvider, type TreeDragPayload } from './treeDnd';
 import type { TreeDropData } from './treeDrop';
 import { buildTreeNodeMenu, type TreeFolderActions } from './treeNodeMenu';
 import { useTreeKeyboard } from './hooks/useTreeKeyboard';
+import { useAutoFetchScheduler } from './hooks/useAutoFetchScheduler';
+import { useWorktreeStatusScheduler } from './hooks/useWorktreeStatusScheduler';
+import type { AutoFetchRepository } from './autoFetchScheduler';
+import { ProjectDirtyPill, WorktreeGitPills } from './WorktreeGitPills';
+import { summarizeProjectDirty } from './worktreePills';
 import type { SessionNode } from './types';
 import { sidebarRowLabelClass } from './utils';
 import {
@@ -62,6 +68,18 @@ const toSessionNode = (node: TreeNode): SessionNode => {
 /** Sessions open in their container's directory; Chats and ownerless containers have none. */
 const containerDirectory = (container: TreeNode | undefined): string | null => (
   container?.directory && container.directory !== '~' ? container.directory : null
+);
+
+/** The checkout whose git status a row shows: a worktree, or a project flattened to its only checkout. */
+const statusPathOf = (node: TreeNode): string | null => {
+  if (node.kind === 'worktree') return node.directory ?? null;
+  if (node.kind === 'project' && node.folderScopeKey) return node.directory ?? null;
+  return null;
+};
+
+/** Worktrees a project row sums up for its collapsed "N dirty"; merged ones are done and do not count. */
+const projectWorktrees = (node: TreeNode): TreeNode[] => (
+  node.kind === 'project' && !node.folderScopeKey ? node.children.filter((child) => child.kind === 'worktree') : []
 );
 
 const dropDataOf = (node: TreeNode): TreeDropData | null => {
@@ -150,9 +168,93 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
     return undefined;
   };
 
+  // Status is fetched for visible checkouts and for the worktrees a visible project sums up.
+  const statusPaths = React.useMemo(() => {
+    const paths: string[] = [];
+    for (const row of rows) {
+      const own = statusPathOf(row.node);
+      if (own) paths.push(own);
+      for (const worktree of projectWorktrees(row.node)) {
+        if (worktree.directory) paths.push(worktree.directory);
+      }
+    }
+    return paths;
+  }, [rows]);
+  const { statuses, refresh: refreshStatus } = useWorktreeStatusScheduler(statusPaths);
+
+  // Auto fetch runs once per repository of a visible project (its root), and refreshes that project's visible checkouts afterwards.
+  const { autoFetchRepositories, repositoryRootByPath } = React.useMemo(() => {
+    const repositories: AutoFetchRepository[] = [];
+    const rootByPath = new Map<string, string>();
+    for (const row of rows) {
+      const node = row.node;
+      if (node.kind !== 'project' || !node.directory) continue;
+      const worktreePaths: string[] = [];
+      const own = statusPathOf(node);
+      if (own) worktreePaths.push(own);
+      for (const worktree of projectWorktrees(node)) {
+        if (worktree.directory) worktreePaths.push(worktree.directory);
+      }
+      for (const path of worktreePaths) rootByPath.set(path, node.directory);
+      repositories.push({ root: node.directory, worktreePaths });
+    }
+    return { autoFetchRepositories: repositories, repositoryRootByPath: rootByPath };
+  }, [rows]);
+  const autoFetchStates = useAutoFetchScheduler(autoFetchRepositories, refreshStatus);
+
+  // A session turn that ends may have changed its checkout, so refresh the worktrees that stopped running.
+  const runningPaths = React.useMemo(() => {
+    const running = new Set<string>();
+    const visit = (node: TreeNode) => {
+      const path = statusPathOf(node);
+      if (path && node.rollup.running) running.add(path);
+      if (node.kind === 'project' || node.kind === 'merged') node.children.forEach(visit);
+    };
+    tree.roots.forEach(visit);
+    return running;
+  }, [tree.roots]);
+  const previousRunningRef = React.useRef<ReadonlySet<string>>(runningPaths);
+  React.useEffect(() => {
+    for (const path of previousRunningRef.current) {
+      if (!runningPaths.has(path)) refreshStatus(path);
+    }
+    previousRunningRef.current = runningPaths;
+  }, [refreshStatus, runningPaths]);
+
+  const openRow = React.useCallback((key: NodeKey, open: boolean) => {
+    setOpen(key, open);
+    if (!open) return;
+    const node = rowNodeByKey.get(key);
+    if (!node) return;
+    const own = statusPathOf(node);
+    if (own) refreshStatus(own);
+    for (const worktree of projectWorktrees(node)) {
+      if (worktree.directory) refreshStatus(worktree.directory);
+    }
+  }, [refreshStatus, rowNodeByKey, setOpen]);
+
+  const gitFor = (row: TreeRow): React.ReactNode => {
+    const own = statusPathOf(row.node);
+    if (own) {
+      const root = repositoryRootByPath.get(own);
+      return (
+        <WorktreeGitPills
+          directory={own}
+          branch={row.node.worktree?.branch ?? null}
+          record={statuses.get(own)}
+          autoFetch={root ? autoFetchStates.get(root) : undefined}
+        />
+      );
+    }
+    const worktrees = projectWorktrees(row.node);
+    if (worktrees.length === 0 || row.expanded) return null;
+    const rollup = summarizeProjectDirty(worktrees.map((worktree) => (worktree.directory ? statuses.get(worktree.directory) : undefined)));
+    return <ProjectDirtyPill dirty={rollup.dirtyWorktrees} unknown={rollup.unknownWorktrees} />;
+  };
+
   const handleToggle = React.useCallback((row: TreeRow) => {
-    setOpen(row.key, !row.expanded);
-  }, [setOpen]);
+    openRow(row.key, !row.expanded);
+  }, [openRow]);
 
   const handleActivate = React.useCallback((row: TreeRow) => {
     if (row.node.kind === 'more') {
@@ -161,12 +263,12 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
     }
     const expandable = row.node.children.length > 0;
     if (selectedNodeKey === row.key) {
-      if (expandable) setOpen(row.key, !row.expanded);
+      if (expandable) openRow(row.key, !row.expanded);
       return;
     }
     onSelectNode(row.key);
-    if (expandable && !row.expanded) setOpen(row.key, true);
-  }, [onSelectNode, selectedNodeKey, setOpen]);
+    if (expandable && !row.expanded) openRow(row.key, true);
+  }, [onSelectNode, openRow, selectedNodeKey]);
 
   const rowByKey = (key: NodeKey): TreeRow | undefined => rows.find((row) => row.key === key);
 
@@ -176,8 +278,8 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
     onAction: (action) => {
       const row = rowByKey(action.key);
       if (!row) return;
-      if (action.type === 'expand') setOpen(action.key, true);
-      else if (action.type === 'collapse') setOpen(action.key, false);
+      if (action.type === 'expand') openRow(action.key, true);
+      else if (action.type === 'collapse') openRow(action.key, false);
       else if (action.type === 'newSession') onNewSessionIn(row.node);
       else if (row.node.kind === 'session' && row.node.session) {
         onOpenSession(row.node.session.id, containerDirectory(containerOf(row.key)));
@@ -195,6 +297,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
   const menuFor = (node: TreeNode): React.ReactNode => buildTreeNodeMenu(node, {
     folders,
     onCreateFolder: createFolderIn,
+    onNewSession: onNewSessionIn,
     onOpenProjectEditDialog,
     onRemoveProject,
     onCloseWorktree,
@@ -213,6 +316,8 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
 
   // The design system strips focus rings globally; data-focus-ring="accent" is its opt-in.
   const treeItemClass = 'rounded-md';
+  // The treeitem is the hover and focus group of the row's quick create button.
+  const containerItemClass = 'group/row rounded-md';
 
   return (
     <TreeDndProvider
@@ -260,8 +365,10 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                     {renderSession(toSessionNode(row.node), containerDirectory(container), container?.projectId ?? null)}
                   </div>
                   {forks > 0 ? (
-                    <span className="shrink-0 pl-1 typography-micro tabular-nums text-muted-foreground" aria-label={forks === 1 ? '1 fork' : `${forks} forks`}>
-                      {`⑂${forks}`}
+                    // An icon, not the ⑂ glyph: the interface monospace font has no fork sign.
+                    <span className="inline-flex shrink-0 items-center gap-0.5 pl-1 typography-micro tabular-nums text-muted-foreground" aria-label={forks === 1 ? '1 fork' : `${forks} forks`}>
+                      <Icon name="node-tree" className="size-3" aria-hidden />
+                      {forks}
                     </span>
                   ) : null}
                 </div>
@@ -283,7 +390,7 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                 aria-level={row.depth + 1}
                 aria-expanded={row.node.children.length > 0 ? row.expanded : undefined}
                 aria-label={row.node.kind === 'folder' ? row.node.label : undefined}
-                className={treeItemClass}
+                className={containerItemClass}
               >
                 <ContainerRow
                   row={row}
@@ -294,6 +401,8 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                   rename={renameFor(row.node)}
                   mobileVariant={mobileVariant}
                   query={query}
+                  git={gitFor(row)}
+                  onQuickCreate={canShowQuickCreateButton(row.node, { mobileVariant, hasTouchOnlyPointer }) ? onNewSessionIn : undefined}
                 />
               </div>
             </TreeDndItem>

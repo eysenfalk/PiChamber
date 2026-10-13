@@ -50,11 +50,21 @@ export const TreeGuides: React.FC<{ row: TreeRow }> = ({ row }) => {
   );
 };
 
-const CountSlot: React.FC<{ node: TreeNode; expanded: boolean }> = ({ node, expanded }) => {
+/**
+ * With `quickCreate` the slot keeps its width and fades out while the row is
+ * hovered or keyboard focused; the `+` button (`QuickCreateButton`) fades in over it.
+ * The `treeitem` around the row is the `group/row`.
+ */
+const CountSlot: React.FC<{ node: TreeNode; expanded: boolean; quickCreate?: boolean }> = ({ node, expanded, quickCreate = false }) => {
   const showRunning = node.rollup.running && !expanded;
   const showUnseen = !showRunning && node.rollup.unseen && !expanded;
   return (
-    <span className="ml-1 flex h-6 min-w-6 shrink-0 items-center justify-end gap-1 typography-micro text-muted-foreground">
+    <span
+      className={cn(
+        'ml-1 flex h-6 min-w-6 shrink-0 items-center justify-end gap-1 typography-micro text-muted-foreground',
+        quickCreate && 'group-hover/row:opacity-0 group-focus-visible/row:opacity-0',
+      )}
+    >
       {showRunning ? (
         <AgentThinkingLoader
           variant="inline"
@@ -70,6 +80,29 @@ const CountSlot: React.FC<{ node: TreeNode; expanded: boolean }> = ({ node, expa
   );
 };
 
+/**
+ * A sibling of the row button (a button inside a button is invalid), laid over the
+ * count slot's box. It is a pointer shortcut: the row has no tab stop for it, and
+ * keyboard users start a session with `n` or the row menu.
+ */
+const QuickCreateButton: React.FC<{ node: TreeNode; onQuickCreate: (node: TreeNode) => void }> = ({ node, onQuickCreate }) => (
+  <button
+    type="button"
+    tabIndex={-1}
+    aria-label={`New session in ${nodeLabel(node)}`}
+    title="New session"
+    onMouseDown={(event) => event.stopPropagation()}
+    onPointerDown={(event) => event.stopPropagation()}
+    onClick={(event) => {
+      event.stopPropagation();
+      onQuickCreate(node);
+    }}
+    className="pointer-events-none absolute right-1.5 top-1/2 inline-flex size-6 !min-h-0 !min-w-0 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-interactive-hover hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 group-hover/row:pointer-events-auto group-hover/row:opacity-100 group-focus-visible/row:pointer-events-auto group-focus-visible/row:opacity-100"
+  >
+    <Icon name="add" className="size-3.5" />
+  </button>
+);
+
 type ContainerRowProps = {
   row: TreeRow;
   selected: boolean;
@@ -80,10 +113,14 @@ type ContainerRowProps = {
   rename?: { value: string; onChange: (value: string) => void; onSave: () => void; onCancel: () => void };
   mobileVariant: boolean;
   query?: string;
+  /** Git pills of a worktree, or the dirty rollup of a collapsed project. */
+  git?: React.ReactNode;
+  /** Set where the row offers the hover `+`; the caller decides which rows and devices. */
+  onQuickCreate?: (node: TreeNode) => void;
 };
 
 /** Container rows are not tab stops: the `treeitem` around them carries the roving focus. */
-export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant, query = '' }) => {
+export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onActivate, onToggle, menu, rename, mobileVariant, query = '', git, onQuickCreate }) => {
   const { node } = row;
   const longPress = useLongPressMenu();
   const expandable = node.kind !== 'more' && node.children.length > 0;
@@ -118,7 +155,8 @@ export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onAct
               <Icon name="eye-off" className="size-3" />
             </span>
           ) : null}
-          <CountSlot node={node} expanded={row.expanded} />
+          {git}
+          <CountSlot node={node} expanded={row.expanded} quickCreate={Boolean(onQuickCreate)} />
         </>
       )}
     </>
@@ -152,14 +190,21 @@ export const ContainerRow: React.FC<ContainerRowProps> = ({ row, selected, onAct
     />
   );
 
+  const withQuickCreate = (element: React.ReactElement) => (onQuickCreate ? (
+    <div className="relative">
+      {element}
+      <QuickCreateButton node={node} onQuickCreate={onQuickCreate} />
+    </div>
+  ) : element);
+
   if (!menu) {
-    return React.cloneElement(button, undefined, body);
+    return withQuickCreate(React.cloneElement(button, undefined, body));
   }
 
-  return (
+  return withQuickCreate(
     <ContextMenu open={longPress.open} onOpenChange={longPress.setOpen}>
       <ContextMenuTrigger render={button}>{body}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[160px]">{menu}</ContextMenuContent>
-    </ContextMenu>
+    </ContextMenu>,
   );
 };

@@ -109,6 +109,7 @@ process violation. In omp sessions, `.omp/skill-flow.yml` enforces a path-based 
 | Settings UI, settings dialogs, configuration surfaces, or settings search | `settings-ui-patterns` |
 | Sortable or drag-to-reorder behavior, especially `@dnd-kit` and touch/wrapping layouts | `drag-to-reorder` |
 | iOS Simulator build, launch, preview, gestures, or `serve-sim` control | `serve-sim` |
+| Acting as the owner's standing orchestrator session: overview, taking in work, spawning, briefing, watching, unsticking or stopping workers, review rounds, host capacity, cleanup after merge, model roles | `orchestrator` |
 
 Pure code-reading or explanation does not require implementation skills unless needed to interpret a specialized subsystem.
 
