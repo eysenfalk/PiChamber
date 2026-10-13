@@ -22,6 +22,8 @@ export const createPullWatchReader = ({ scopeResolver, credential, client, check
   const scope = await scopeResolver.resolveScope(directory);
   const entry = scopeResolver.matchAllowedRepo(scope, `${WATCH_HOST}/${repository}`);
   if (!entry) return null;
+  // A background read pauses inside the rate limit window and leaves the watch state alone.
+  if (client.isRateLimited(entry.host)) return null;
   const repo = { host: entry.host, owner: entry.owner, repo: entry.repo };
   return credential.withPinnedCredential(repo.host, async (cred) => {
     const response = await client.request({

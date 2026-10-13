@@ -48,13 +48,20 @@ export const createPrWatch = ({ registry, emit, readSettings }) => {
   // sessionId -> last state; a changed pull request starts over.
   const states = new Map();
 
+  // A merged or closed pull request is finished only for the one the worker
+  // still reports; a new report starts the watch over.
+  const isFinished = (sessionId, { repository, number }) => {
+    const known = states.get(sessionId);
+    return known?.key === `${repository}#${number}` && known.state.status !== 'open';
+  };
+
   const targets = async () => {
     const settings = await readSettings().catch(() => undefined);
     if (settings?.github?.enabled === false) return [];
     const { workers } = await registry.read();
     return Object.entries(workers)
       .filter(([sessionId, worker]) => worker.pullRequest && !worker.stopping && worker.state !== 'stopped'
-        && (states.get(sessionId)?.state.status ?? 'open') === 'open')
+        && !isFinished(sessionId, worker.pullRequest))
       .map(([sessionId, worker]) => ({ sessionId, directory: worker.cwd, ...worker.pullRequest }));
   };
 

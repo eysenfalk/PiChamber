@@ -99,6 +99,16 @@ describe('createPrWatch', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it('watches a new pull request of the same worker after the old one was merged', async () => {
+    const { watch, emit, document } = setup();
+    await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ state: 'merged' }) }]);
+    expect(await watch.targets()).toEqual([]);
+    document.workers.w1.pullRequest = { number: 9, repository: 'o/r' };
+    expect(await watch.targets()).toEqual([{ sessionId: 'w1', directory: '/wt/a', number: 9, repository: 'o/r' }]);
+    await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 9, read: read({ number: 9, checks: green }) }]);
+    expect(emit).toHaveBeenLastCalledWith('w1', 'ci_passed', expect.stringContaining('PR #9'));
+  });
+
   it('starts over when the worker reports another pull request', async () => {
     const { watch, emit, document } = setup();
     await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ state: 'merged' }) }]);
