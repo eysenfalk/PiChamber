@@ -33,6 +33,7 @@ import {
   slotsInUse,
   takeOver,
 } from './worker-registry.js';
+import { prepareWorkerTree } from './worker-start.js';
 
 // Daemon-owned orchestration: tool semantics, permissions, limits, ownership,
 // idempotency and completion delivery. Adapters (the in-process Pi extension
@@ -182,6 +183,8 @@ export function createOrchestrationService(deps) {
     resolveBranch = async () => undefined,
     // `owner/repo` of a directory's origin, for a reported pull request.
     resolveRepository = async () => undefined,
+    // Branch and worktree of a `worker_start` (see worker-start.js).
+    prepareWorktree = prepareWorkerTree,
     getSessionActivity = () => ({}),
     holdSession = () => () => {},
     // 'present' | 'absent' | 'unknown' for the worker's JSONL.
@@ -522,6 +525,8 @@ export function createOrchestrationService(deps) {
       ...(args.role ? { role: args.role } : {}),
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
+      ...(args.issue ? { issue: args.issue } : {}),
+      ...(args.branch ? { branch: args.branch } : {}),
     };
     const reserved = await registry.update((document) => {
       ensureOwner(document, callerSessionId, runtime.cwd);
@@ -567,6 +572,30 @@ export function createOrchestrationService(deps) {
       return { ...result, ...waited.sessions[0], timedOut: waited.timedOut };
     }
     return { ...result, state: stateOf(sessionId) };
+  };
+
+  // `worker_start`: branch and worktree, then the spawn path under the same
+  // clientRequestId, so a repeated call reuses all three.
+  const startWorker = async (callerSessionId, args, options, context) => {
+    const { worktreeRoot } = await readSettings();
+    const { branch, worktree } = await prepareWorktree({ cwd: context.runtime.cwd, branchName: args.branchName, worktreeRoot });
+    const spawned = await spawn(callerSessionId, {
+      clientRequestId: args.clientRequestId,
+      cwd: worktree,
+      task: args.brief,
+      title: `${args.issue.repo}#${args.issue.number} ${args.branchName}`,
+      role: args.role,
+      ...(args.model ? { model: args.model } : {}),
+      ...(args.thinking ? { thinking: args.thinking } : {}),
+      issue: { repo: args.issue.repo, number: args.issue.number },
+      branch,
+    }, options, context);
+    return {
+      sessionId: spawned.sessionId,
+      branch,
+      worktree: spawned.cwd ?? worktree,
+      ...(spawned.deduplicated ? { deduplicated: true } : {}),
+    };
   };
 
   const list = async (callerSessionId, args = {}) => {
@@ -901,7 +930,7 @@ export function createOrchestrationService(deps) {
       title: worker.title ?? null,
       role: worker.role ?? null,
       issue: worker.issue ?? null,
-      branch: (await resolveBranch(worker.cwd).catch(() => undefined)) ?? null,
+      branch: (await resolveBranch(worker.cwd).catch(() => undefined)) ?? worker.branch ?? null,
       worktree: worker.cwd ?? null,
       pullRequest: worker.pullRequest ?? null,
       lifecycle: worker.state,
@@ -942,6 +971,7 @@ export function createOrchestrationService(deps) {
     orchestration_digest: digest,
     worker_report: report,
     session_spawn: spawn,
+    worker_start: startWorker,
     session_list: list,
     session_read: read,
     session_send: send,

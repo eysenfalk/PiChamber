@@ -62,6 +62,39 @@ export const ORCHESTRATION_TOOLS = [
     },
   },
   {
+    name: 'worker_start',
+    label: 'Start worker for an issue',
+    description: 'Start a worker for an issue in one call: fetch origin dev, create branchName from origin/dev, add its worktree at <worktreeRoot>/<branchName> and spawn the worker there with the role and brief. An existing branch is reused only while it points at origin/dev or is checked out at that path. A failure names the step and git\'s message and rolls nothing back; fix the cause and repeat the same call with the same clientRequestId to continue.',
+    childAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['clientRequestId', 'issue', 'role', 'branchName', 'brief'],
+      properties: {
+        clientRequestId,
+        issue: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['repo', 'number'],
+          properties: {
+            repo: { type: 'string', pattern: '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', maxLength: 200, description: 'owner/repo' },
+            number: { type: 'integer', minimum: 1 },
+          },
+        },
+        role: { type: 'string', enum: [...ORCHESTRATION_ROLES], description: 'Model and thinking from the role defaults, as for session_spawn.' },
+        branchName: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$',
+          maxLength: 200,
+          description: 'New branch, for example 118-worker-start; also the worktree directory name.',
+        },
+        brief: { type: 'string', minLength: 1, maxLength: 60000, description: 'Complete task brief for the worker.' },
+        model,
+        thinking,
+      },
+    },
+  },
+  {
     name: 'session_list',
     label: 'List sessions',
     description: 'List sessions. scope "workers" (default) lists this session\'s workers; "all" lists every live session. ' + RUN_STATUS,

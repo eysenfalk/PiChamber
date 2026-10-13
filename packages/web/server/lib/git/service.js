@@ -3593,6 +3593,28 @@ export async function getWorktrees(directory) {
   })));
 }
 
+/** The commit `ref` names in a directory's repository, or null when it names none. */
+export async function resolveCommit(directory, ref) {
+  const result = await runGitCommand(normalizeDirectoryPath(directory), ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  return result.success ? result.stdout.trim() || null : null;
+}
+
+/** Creates `branch` at `startRef` without checking it out or tracking `startRef`. */
+export async function createBranchAt(directory, branch, startRef) {
+  await runGitCommandOrThrow(normalizeDirectoryPath(directory), ['branch', '--no-track', '--', branch, startRef], 'Failed to create branch');
+  return { branch };
+}
+
+/**
+ * Adds a worktree for an existing branch at an explicit path and returns once
+ * it is checked out. `createWorktree` picks its own directory and checks out
+ * in the background, which callers that start work right away cannot use.
+ */
+export async function addWorktree(directory, worktreePath, branch) {
+  await runGitCommandOrThrow(normalizeDirectoryPath(directory), ['worktree', 'add', '--', worktreePath, branch], 'Failed to create git worktree');
+  return { path: worktreePath, branch };
+}
+
 export async function validateWorktreeCreate(directory, input = {}) {
   const mode = input?.mode === 'existing' ? 'existing' : 'new';
   const errors = [];
