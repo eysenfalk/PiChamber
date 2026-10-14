@@ -12,6 +12,10 @@ import { DEFAULT_ORCHESTRATION_SETTINGS } from '../../settings-store.js';
 // worker's settle and the watchdog tick wait for it. Entries leave the queue only after the send resolved, so events
 // emitted during a send arrive with the next message.
 //
+// A worker the owner set to quiet (#156) reaches its orchestrator only with
+// the events in QUIET_PASS; the rest is dropped when a batch is built, so the
+// current setting decides, not the one at emit time.
+//
 // Only an owner marked as orchestrator gets a batch. The events of an
 // unmarked owner's workers stay queued and go out at the first tick or
 // settle after the mark is set.
@@ -22,6 +26,9 @@ const REASON_LIMIT = 200;
 const WATCHDOG_TICK_MS = 15_000;
 // Owner states that receive the batch at their next settle.
 const BUSY_STATES = new Set(['busy', 'retry', 'starting']);
+// What a quiet worker still tells its orchestrator: done, a blocker, a ready
+// pull request, a final CI result, a merged or closed pull request.
+const QUIET_PASS = new Set(['done', 'blocked', 'ready', 'ci_passed', 'ci_failed', 'pr_merged', 'pr_closed']);
 const DIGEST_HINT = 'Read `mcp__pichamber__orchestration_digest` for details.';
 
 const oneLine = (text, fallback) => {
@@ -73,6 +80,7 @@ export function createWakes({
       stallAfterMs: value?.watchdog?.stallAfterMs ?? DEFAULT_ORCHESTRATION_SETTINGS.watchdog.stallAfterMs,
       watchdog: value?.watchdog?.enabled ?? DEFAULT_ORCHESTRATION_SETTINGS.watchdog.enabled,
       orchestrators: new Set(value?.orchestrators ?? []),
+      quietWorkers: new Set(value?.quietWorkers ?? []),
     };
   };
 
@@ -154,8 +162,9 @@ export function createWakes({
     let document;
     let coalesceMs;
     let orchestrators;
+    let quietWorkers;
     try {
-      [document, { coalesceMs, orchestrators }] = await Promise.all([registry.read(), settings()]);
+      [document, { coalesceMs, orchestrators, quietWorkers }] = await Promise.all([registry.read(), settings()]);
     } catch {
       return;
     }
@@ -168,8 +177,13 @@ export function createWakes({
         queues.delete(sessionId);
         continue;
       }
+      const quiet = quietWorkers.has(sessionId);
+      const dropped = quiet ? events.filter((event) => !QUIET_PASS.has(event.kind)) : [];
+      if (dropped.length > 0) forget(dropped);
+      const kept = events.filter((event) => !dropped.includes(event));
+      if (kept.length === 0) continue;
       const batch = byOwner.get(worker.orchestratorSessionId) ?? [];
-      for (const event of events) batch.push({ title: worker.title, event });
+      for (const event of kept) batch.push({ title: worker.title, event });
       byOwner.set(worker.orchestratorSessionId, batch);
     }
     for (const [owner, batch] of byOwner) {

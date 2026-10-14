@@ -92,11 +92,11 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
   alivePids.add(pid);
   // The daemon's one input path: a fast check, the admission under the
   // session lease right before the prompt, and Pi's verdict on the prompt.
-  const input = async (sessionId, { outcome = 'started', beforeStart, beforeVerdict, run, finished } = {}) => {
+  const input = async (sessionId, { outcome = 'started', beforeStart, beforeVerdict, run, finished, source } = {}) => {
     await service.beforeSessionInput(sessionId);
     // The daemon's activation and lease lie between the check and the admission.
     await beforeStart?.();
-    const ticket = await service.admitInput(sessionId);
+    const ticket = await service.admitInput(sessionId, source);
     // Pi's own awaits (extension commands, input handlers) lie between the
     // admission and its verdict.
     await beforeVerdict?.();
@@ -156,7 +156,8 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
       const runtime = add(createRuntime({ sessionId: `${workerPrefix}-${counter}`, cwd, lineage }));
       return { sessionId: runtime.session.sessionId, cwd, sessionFile: runtime.session.sessionFile };
     }),
-    sendInput: vi.fn(async ({ sessionId }) => input(sessionId)),
+    // The orchestration service's own sends (spawn task, session_send) are the orchestrator's writes.
+    sendInput: vi.fn(async ({ sessionId }) => input(sessionId, { source: 'orchestrator' })),
     abortSession: vi.fn(async (sessionId) => { states.set(sessionId, 'idle'); }),
     abortRun: vi.fn(() => true),
     readSettings: async () => ({ workerLimit, gate, roles: ROLES, wakes: { coalesceMs: 0 }, orchestrators }),
@@ -723,6 +724,96 @@ describe('orchestration service', () => {
     expect(harness.orchestrator.delivered[0].message.details.events).toEqual([
       expect.objectContaining({ sessionId: 'worker-1', kind: 'question', reason: 'Which branch?' }),
     ]);
+  });
+
+  describe('event routing (#156)', () => {
+    const wakeReasons = (orchestrator) => orchestrator.delivered.flatMap(({ message }) => message.details.events.map((event) => `${event.kind}: ${event.reason}`));
+
+    it('lets the last writer decide: an owner prompt ends without run_finished, a session_send run with one', async () => {
+      const { service, orchestrator, settle, input } = createHarness();
+      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      await settle('worker-1', 'spawn run');
+      await vi.waitFor(() => expect(orchestrator.delivered).toHaveLength(1));
+
+      await input('worker-1', { source: 'owner' });
+      await settle('worker-1', 'owner run');
+      await service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'again' });
+      await settle('worker-1', 'orchestrator run');
+      await vi.waitFor(() => expect(orchestrator.delivered).toHaveLength(2));
+      expect(wakeReasons(orchestrator)).toEqual(['run_finished: spawn run', 'run_finished: orchestrator run']);
+
+      // The owner writes last again: silent.
+      await input('worker-1', { source: 'owner' });
+      await settle('worker-1', 'owner again');
+      await new Promise((done) => { setTimeout(done, 20); });
+      expect(wakeReasons(orchestrator)).not.toContain('run_finished: owner again');
+    });
+
+    it('still reports failure and done of a run the owner started', async () => {
+      const { service, orchestrator, settle, input, runtimes } = createHarness();
+      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      await settle('worker-1', 'spawn run');
+      await input('worker-1', { source: 'owner' });
+      runtimes.get('worker-1').session.messages.push({ role: 'assistant', content: [], stopReason: 'error', errorMessage: 'boom' });
+      await settle('worker-1');
+      await vi.waitFor(() => expect(wakeReasons(orchestrator)).toContain('run_failed: boom'));
+
+      await input('worker-1', { source: 'owner' });
+      await service.recordDoneReport('worker-1');
+      await settle('worker-1', 'all finished');
+      await vi.waitFor(() => expect(wakeReasons(orchestrator)).toContain('done: all finished'));
+      expect(wakeReasons(orchestrator)).not.toContain('run_finished: all finished');
+    });
+
+    it('reports the done a settle held back for an open input once, when that input closes', async () => {
+      const harness = createHarness({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: false }, roles: ROLES, wakes: { coalesceMs: 0 }, orchestrators: MARKED, quietWorkers: ['worker-1'] }) } });
+      const { service, orchestrator, settle, input, workers } = harness;
+      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      await settle('worker-1', 'spawn run');
+      await input('worker-1', { source: 'owner' });
+      await service.call('worker-1', 'worker_report', { kind: 'done', summary: 'complete', evidence: ['tests pass'], pullRequest: 12 });
+      // Another input waits for its verdict when the run ends: the settle is held.
+      const open = await service.admitInput('worker-1', 'owner');
+      await settle('worker-1', 'all finished');
+      expect((await workers())['worker-1'].state).not.toBe('done');
+      await new Promise((done) => { setTimeout(done, 20); });
+      expect(wakeReasons(orchestrator)).not.toContain('done: all finished');
+
+      // The input is rejected by the preflight: the held settle applies now.
+      await service.resolveInput(open, 'rejected');
+      await vi.waitFor(() => expect(wakeReasons(orchestrator)).toContain('done: all finished'));
+      expect((await workers())['worker-1'].state).toBe('done');
+      await new Promise((done) => { setTimeout(done, 20); });
+      expect(wakeReasons(orchestrator).filter((reason) => reason.startsWith('done:'))).toEqual(['done: all finished']);
+    });
+
+    it('does not wake for a report to the owner, and wakes for blocker and ready with their own kinds', async () => {
+      const { service, orchestrator } = createHarness();
+      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      const asked = await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'OWNER QUESTION', audience: 'owner' });
+      const owned = await service.call('worker-1', 'worker_report', { kind: 'blocked', summary: 'OWNER BLOCKER', audience: 'owner', resolves: asked.openQuestion });
+      await service.call('worker-1', 'worker_report', { kind: 'blocked', summary: 'NEED KEY', audience: 'orchestrator', resolves: owned.openQuestion });
+      await service.call('worker-1', 'worker_report', { kind: 'ready', summary: 'PR is up', pullRequest: 12 });
+      await vi.waitFor(() => expect(wakeReasons(orchestrator)).toEqual(['blocked: NEED KEY', 'ready: PR is up']));
+    });
+
+    it('delivers only the important events of a quiet worker and all of a following one', async () => {
+      const harness = createHarness({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: false }, roles: ROLES, wakes: { coalesceMs: 0 }, orchestrators: MARKED, quietWorkers: ['worker-1'] }) } });
+      const { service, orchestrator, settle } = harness;
+      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      await service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'two' });
+      await settle('worker-1', 'quiet run');
+      await settle('worker-2', 'loud run');
+      const asked = await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'quiet question', audience: 'orchestrator' });
+      await service.call('worker-1', 'worker_report', { kind: 'blocked', summary: 'quiet blocker', audience: 'orchestrator', resolves: asked.openQuestion });
+      await vi.waitFor(() => expect(wakeReasons(orchestrator)).toEqual(expect.arrayContaining(['run_finished: loud run', 'blocked: quiet blocker'])));
+      expect(wakeReasons(orchestrator)).not.toContain('run_finished: quiet run');
+      expect(wakeReasons(orchestrator)).not.toContain('question: quiet question');
+
+      // The digest and the list show the quiet worker like any other.
+      const digest = await service.call('orch', 'orchestration_digest', {});
+      expect(digest.workers.map((worker) => worker.sessionId).sort()).toEqual(['worker-1', 'worker-2']);
+    });
   });
 
   it('wakes the owner when an extension dialog opens in a worker, and not for a dialog elsewhere', async () => {

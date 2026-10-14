@@ -103,8 +103,19 @@ const setup = async () => {
 
   const file = join(root, 'data', 'pi', 'orchestration-registry.json');
   const worker = async () => JSON.parse(await readFile(file, 'utf8')).workers[workerId];
-  // Settles are applied, and their run ends delivered as wakes, in order.
-  const delivered = (count) => client.next(() => results().length >= count, 30_000);
+  // Settles are applied in order. Prompts here come from the owner, whose
+  // run ends do not wake the orchestrator (#156), so a settle shows as a new
+  // `snapshot.at` in the registry; the spawn's own run end is the first.
+  const settles = new Set();
+  const sampleSettles = async () => {
+    const at = (await worker())?.snapshot?.at;
+    if (at !== undefined) settles.add(at);
+  };
+  await sampleSettles();
+  const delivered = (count) => vi.waitFor(async () => {
+    await sampleSettles();
+    expect(settles.size).toBeGreaterThanOrEqual(count);
+  }, { timeout: 30_000, interval: 5 });
   // What Slice 2's worker_report records: the current run reported done.
   const reportDone = () => createOrchestrationRegistryStore({ file }).update((document) => {
     const entry = document.workers[workerId];
@@ -184,9 +195,13 @@ describe('worker input admission through the real SDK', () => {
     // end: it holds the slot and directory visibly (`unproven_run`).
     await vi.waitFor(async () => expect(await worker()).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } }));
     gates.response.resolve();
-    await delivered(3);
-    const settled = await worker();
-    expect(settled).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } });
-    expect(settled.admission).toBeUndefined();
+    await client.next((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === workerId && message.payload?.text === 'RAN RUN two');
+    // The unproven run's end is not applied, so it shows no new settle.
+    await vi.waitFor(async () => {
+      const settled = await worker();
+      expect(settled).toMatchObject({ state: 'active', hold: { reason: 'unproven_run' } });
+      expect(settled.admission).toBeUndefined();
+    });
   }, 120_000);
 });

@@ -324,16 +324,25 @@ describe('orchestration end-to-end through the real SDK', () => {
     release();
     await reached(() => replies(parentId, 'PARENT WOKEN') === 3);
     expect(wakesOf(parentId)).toHaveLength(4);
-    // A run end is applied after the run settles, so it can follow a later report.
-    expect(wakesOf(parentId)[3].map((event) => event.kind).sort()).toEqual(['question', 'run_failed', 'run_finished']);
+    // The owner's own prompts (RUN AGAIN) end without a run_finished (#156); a
+    // blocker is its own kind. A run end is applied after the run settles, so
+    // it can follow a later report.
+    expect(wakesOf(parentId)[3].map((event) => event.kind).sort()).toEqual(['blocked', 'run_failed']);
 
     // After a takeover the next wake goes to the new owner.
     const successorId = await createSession();
     const takeover = await client.request('orchestration.call', { sessionId: successorId, tool: 'orchestration_takeover', args: { fromSessionId: parentId } });
     expect(takeover.result.error).toBeUndefined();
+    // The last writer decides (#156): a run the owner prompts and a question
+    // for the owner wake nobody; a question for the orchestrator wakes the new owner.
     await client.request('sessions.prompt', { sessionId: workerId, text: 'RUN AGAIN' });
+    await reached(() => replies(workerId, 'WORKER RAN AGAIN') === 2);
+    const forOwner = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'OWNER ONLY', audience: 'owner', resolves: blocked.result.value.openQuestion } });
+    expect(forOwner.result.error).toBeUndefined();
+    const forOrchestrator = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'ORCHESTRATOR ONLY', audience: 'orchestrator', resolves: forOwner.result.value.openQuestion } });
+    expect(forOrchestrator.result.error).toBeUndefined();
     await reached(() => wakesOf(successorId).length === 1);
-    expect(wakesOf(successorId)[0]).toEqual([{ sessionId: workerId, kind: 'run_finished', reason: 'WORKER RAN AGAIN' }]);
+    expect(wakesOf(successorId)[0]).toEqual([{ sessionId: workerId, kind: 'question', reason: 'ORCHESTRATOR ONLY' }]);
     expect(wakesOf(parentId)).toHaveLength(4);
 
     await client.close();

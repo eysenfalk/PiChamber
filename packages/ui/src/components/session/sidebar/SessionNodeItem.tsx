@@ -10,6 +10,7 @@ import type { SessionNodeChildRenderExtras } from './sessionNodeItemUtils';
 import { renderHighlightedText } from './highlightedText';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { SessionUnreadDot } from './SessionUnreadDot';
+import { QuietWorkerMarker } from './QuietWorkerMarker';
 import { getRuntimeBearerTokenSync } from '@/lib/runtime-auth';
 import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
@@ -171,8 +172,13 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const pinnedMarkerContent = (
     <Icon name="pushpin" className="h-3 w-3 flex-shrink-0 text-primary" aria-label={'Pinned session'} />
   );
-  const leadingIndicators = showPinnedMarker ? (
-    <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">{pinnedMarkerContent}</span>
+  const leadingIndicators = showPinnedMarker || session.parentID ? (
+    <>
+      {showPinnedMarker ? (
+        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">{pinnedMarkerContent}</span>
+      ) : null}
+      {session.parentID && !archivedBucket ? <QuietWorkerMarker sessionId={session.id} /> : null}
+    </>
   ) : null;
   const handleMenuOpenChange = (open: boolean) => {
     if (open) {
