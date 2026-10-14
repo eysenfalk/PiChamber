@@ -2,9 +2,6 @@ import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
-import { getActiveRelayTunnel } from '@/lib/relay/runtime-tunnel';
-import { runtimeFetch } from '@/lib/runtime-fetch';
-import { getRuntimeUrlResolver } from '@/lib/runtime-url';
 import { HtmlRenderDialog } from './HtmlRenderDialog';
 import { HtmlRenderDocument } from './HtmlRenderDocument';
 import {
@@ -12,23 +9,7 @@ import {
   HTML_RENDER_INITIAL_HEIGHT,
   type HtmlRenderReference,
 } from './htmlRenderModel';
-
-type FrameSource =
-  | { kind: 'loading' }
-  | { kind: 'ready'; src: string }
-  | { kind: 'failed' }
-  | { kind: 'unsupported' };
-
-const mintPageUrl = async (sessionId: string, renderId: string): Promise<string> => {
-  const response = await runtimeFetch(
-    `/api/pi/sessions/${encodeURIComponent(sessionId)}/html-renders/${encodeURIComponent(renderId)}/url`,
-    { method: 'POST' },
-  );
-  if (!response.ok) throw new Error(`html_render url ${response.status}`);
-  const body = await response.json() as { url?: unknown };
-  if (typeof body.url !== 'string') throw new Error('html_render url missing');
-  return getRuntimeUrlResolver().api(body.url);
-};
+import { mintHtmlRenderPageUrl, useHtmlRenderSource } from './useHtmlRenderSource';
 
 /**
  * An agent's html_render page inline in the session (#155). Loading and
@@ -40,34 +21,22 @@ export const HtmlRenderFrame: React.FC<{
   reference: HtmlRenderReference;
 }> = ({ sessionId, reference }) => {
   const { renderId, title } = reference;
-  const [source, setSource] = React.useState<FrameSource>(() => (
-    getActiveRelayTunnel() ? { kind: 'unsupported' } : { kind: 'loading' }
-  ));
+  const source = useHtmlRenderSource(sessionId, renderId);
   const [contentHeight, setContentHeight] = React.useState<number>();
   const [expandedSrc, setExpandedSrc] = React.useState<string | null>(null);
   const [expandFailed, setExpandFailed] = React.useState(false);
 
-  React.useEffect(() => {
-    if (source.kind !== 'loading') return;
-    let cancelled = false;
-    mintPageUrl(sessionId, renderId).then(
-      (src) => { if (!cancelled) setSource({ kind: 'ready', src }); },
-      () => { if (!cancelled) setSource({ kind: 'failed' }); },
-    );
-    return () => { cancelled = true; };
-  }, [renderId, sessionId, source.kind]);
-
   // The dialog gets its own fresh URL; the inline frame's may have expired.
   const openExpanded = React.useCallback(() => {
     setExpandFailed(false);
-    mintPageUrl(sessionId, renderId).then(setExpandedSrc, () => setExpandFailed(true));
+    mintHtmlRenderPageUrl(sessionId, renderId).then(setExpandedSrc, () => setExpandFailed(true));
   }, [renderId, sessionId]);
 
   const height = clampHtmlRenderHeight(contentHeight ?? HTML_RENDER_INITIAL_HEIGHT);
 
   return (
     <div
-      className="group/html-render relative overflow-hidden rounded-lg border border-[var(--interactive-border)] bg-[var(--surface-background)]"
+      className="group/html-render relative"
       style={{ height }}
       data-html-render-id={renderId}
     >
