@@ -379,6 +379,40 @@ export function htmlRenderTour(manifest) {
   ] });
 }
 
+/** Issue #160: a session stays in the sidebar while its worktree directory is removed and comes back with the recreated worktree, without a reload. */
+export function recreatedWorktreeTour(manifest) {
+  // A committed worktree closes without the discard confirmation that a dirty one needs.
+  const worktree = manifest?.worktrees?.find(candidate => candidate.git === 'ahead-behind');
+  const session = manifest?.sessions?.find(candidate => candidate.role === 'worktree' && candidate.worktree === worktree?.name && candidate.project === worktree?.project);
+  const project = manifest?.projects?.find(candidate => candidate.name === worktree?.project);
+  if (!worktree || !session || !nonempty(session.title) || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  // The seed adds each worktree as `<project>-worktrees/<name>` on a branch of the same name.
+  const path = `${project.path}-worktrees/${worktree.name}`;
+  const row = `[data-tree-node="w:${path}"]`;
+  const item = `[role="treeitem"][aria-label="${session.title}"]`;
+  const terminal = '.xterm-screen';
+  return validateTour({ name: 'recreated-worktree', steps: [
+    { caption: `${label} expanded: the worktree ${worktree.name} holds the session "${session.title}".`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label }, { type: 'wait', selector: row },
+        { type: 'click', selector: row }, { type: 'wait', selector: item }],
+      evidence: [{ selector: row }, { selector: item }] },
+    { caption: `Close worktree removes the ${worktree.name} directory. Its session is hidden while the directory is gone.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: row, button: 'right' }, { type: 'wait', text: 'Close worktree' }, { type: 'click', text: 'Close worktree' },
+        { type: 'wait', text: 'unpushed commits' }, { type: 'click', text: 'Close worktree' }, { type: 'wait', text: 'Worktree closed.' }],
+      evidence: [{ text: 'Worktree closed.' }, { selector: `[data-tree-node="w:${project.path}"]` }] },
+    { caption: `In the terminal, git worktree add recreates ${worktree.name} at the same path.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'nav[aria-label="Panel surfaces"] [aria-label="Terminal"]' }, { type: 'wait', selector: terminal }, { type: 'wait', ms: 2000 },
+        { type: 'type', selector: terminal, value: `git -C ${project.path} worktree add ${path} ${worktree.name}` }, { type: 'press', key: 'Enter' },
+        { type: 'wait', text: 'Preparing worktree' }],
+      evidence: [{ selector: terminal }, { text: 'Preparing worktree' }] },
+    // Background discovery runs every 60 s and skips results younger than 30 s, so the worktree is back within 90 s.
+    { caption: `Without a reload, the next background worktree discovery brings ${worktree.name} back, and with it "${session.title}".`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', ms: 30000 }, { type: 'wait', ms: 30000 }, { type: 'wait', ms: 30000 }, { type: 'wait', selector: row }, { type: 'wait', selector: item }],
+      evidence: [{ selector: row }, { selector: item }] },
+  ] });
+}
+
 /** Issue #46: the create-device dialog on a server without Tailscale (the lab pod has none) keeps the home network as default. */
 export function addDeviceTour() {
   // Desktop opens Settings from the URL; hosted mobile ignores `?settings=` and goes through the drawer.

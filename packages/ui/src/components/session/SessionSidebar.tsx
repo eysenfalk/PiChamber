@@ -12,7 +12,6 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { usePiSessionSnapshot } from '@/sync/pi-session-context';
 import { catalogLiveSessionIdsKey } from '@/sync/pi-session-catalog';
 import { buildKnownSessionDirectories } from '@/sync/known-session-directories';
-import { useCatalogUiSessions } from '@/sync/sync-context';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useUIStore } from '@/stores/useUIStore';
@@ -25,12 +24,11 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { ProjectSessionSelectionEffect } from './sidebar/hooks/useProjectSessionSelection';
 import { canShowQuickArchiveAction } from './sidebar/sessionQuickActions';
 import { useSessionActions } from './sidebar/hooks/useSessionActions';
-import { useAuthoritativeSessionCleanup } from './sidebar/hooks/useAuthoritativeSessionCleanup';
+import { useSidebarSessions } from './sidebar/hooks/useSidebarSessions';
 import { createSessionOwnershipIndex } from './sidebar/sessionOwnership';
 import { SidebarHeader } from './sidebar/SidebarHeader';
 import { SidebarNav } from './sidebar/SidebarNav';
 import { SidebarFooter } from './sidebar/SidebarFooter';
-import { isKnownActiveSessionDirectory } from './sidebar/sessionOwnership';
 import { SidebarWorkspaceTree } from './sidebar/SidebarWorkspaceTree';
 import { treeProjectLabel, useWorkspaceTreeModel } from './sidebar/hooks/useWorkspaceTreeModel';
 import { CHATS_VISIBILITY_ID, useProjectVisibilityStore } from '@/stores/useProjectVisibilityStore';
@@ -216,14 +214,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
 
   const { git } = useRuntimeAPIs();
   const piConnection = usePiSessionSnapshot((state) => state.connection, undefined, 'chrome');
-  const catalogReady = usePiSessionSnapshot((state) => {
-    for (const status of state.catalog.listStatusByDirectory.values()) {
-      if (status === 'ready') return true;
-    }
-    return false;
-  }, undefined, 'catalog');
-  const catalogSessions = useCatalogUiSessions({ archived: false });
-  const archivedSessions = useCatalogUiSessions({ archived: true });
   const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
   const updateSessionTitle = useSessionUIStore((state) => state.updateSessionTitle);
   const shareSession = useSessionUIStore((state) => state.shareSession);
@@ -275,18 +265,11 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     [availableWorktreesByProject, projects],
   );
 
-  const sessions = React.useMemo(() => {
-    return catalogSessions.filter((session) => isKnownActiveSessionDirectory(session, knownSessionDirectories, {
-      allowUnknownDirectory: true,
-      allowEmptyDirectorySet: true,
-      homeDirectory,
-    }));
-  }, [catalogSessions, homeDirectory, knownSessionDirectories]);
-
-  const persistenceSessions = React.useMemo(
-    () => [...sessions, ...archivedSessions],
-    [archivedSessions, sessions],
-  );
+  const { sessions, archivedSessions } = useSidebarSessions({
+    enabled: isVisible,
+    knownSessionDirectories,
+    homeDirectory,
+  });
 
   const worktreeTopologyState = React.useMemo(() => {
     const unresolved = new Set<string>();
@@ -516,11 +499,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     () => createSessionOwnershipIndex(sessions, normalizedProjects, availableWorktreesByProject, archivedSessions),
     [archivedSessions, availableWorktreesByProject, normalizedProjects, sessions],
   );
-  useAuthoritativeSessionCleanup({
-    enabled: isVisible,
-    hasAuthoritativeGlobalSessions: catalogReady,
-    sessions: persistenceSessions,
-  });
 
   const workspaceTreeModel = useWorkspaceTreeModel({
     projects: normalizedProjects,
