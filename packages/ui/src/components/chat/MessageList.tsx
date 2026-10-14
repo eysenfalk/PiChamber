@@ -4,7 +4,6 @@ import { elementScroll, useVirtualizer as useTanstackVirtualizer, type ReactVirt
 import FoldedHistoryGate from './components/FoldedHistoryGate';
 import { TurnBlock } from './components/TurnBlock';
 import { UngroupedMessageRow } from './components/UngroupedMessageRow';
-import { VirtualHistoryRow } from './components/VirtualHistoryRow';
 import { HISTORY_GATE_ESTIMATED_SIZE, nextRevealedOlderCount, revealedCountForTurn, shouldFoldHistoryTurn } from './lib/turns/foldHistoryTurns';
 import type { AnimationHandlers, ContentChangeReason } from '@/hooks/useChatAutoFollow';
 import type { ChatMessageEntry, TurnRecord } from './lib/turns/types';
@@ -582,14 +581,19 @@ const StaticHistoryList = React.memo(({ entries, engine, contentRef, scrollRef, 
                         const entry = renderEntries[item.index];
                         if (!entry) return null;
                         return (
-                            <VirtualHistoryRow
+                            // flow-root: measureElement reads the row's border box, so a
+                            // child margin collapsing out of the row would add layout
+                            // height the virtualizer never counts, and the live tail
+                            // below would be drawn over the last history rows.
+                            <div
                                 key={entry.key}
-                                index={item.index}
-                                entryKey={entry.key}
-                                measureElement={tanstackVirtualizer.measureElement}
+                                data-index={item.index}
+                                ref={tanstackVirtualizer.measureElement}
+                                data-turn-entry={entry.key}
+                                className="flow-root"
                             >
                                 {renderEntry(entry)}
-                            </VirtualHistoryRow>
+                            </div>
                         );
                     })}
                 </div>
