@@ -337,6 +337,36 @@ describe('RemoteBrowserPane lifecycle', () => {
     expect(sockets.length).toBe(3);
     expect(openSockets().length).toBe(1);
   });
+
+  // Review round 2 regression: the old answer arrives before React cleans up the
+  // status effect of the superseded switch.
+  test('a stale available answer before cleanup cannot start a client before the new status read', async () => {
+    const { switchRuntimeEndpoint } = await import('@/lib/runtime-switch');
+    const originalFetch = globalThis.fetch;
+    // Keep the real switch's URL auth refresh off the network.
+    globalThis.fetch = (async () => new Response('{}', { status: 503 })) as typeof fetch;
+    try {
+      heldStatus = [];
+      await act(async () => switchRuntimeEndpoint({ runtimeKey: 'laptop', apiBaseUrl: 'https://relay.example' }));
+      await flush();
+      expect(statusReads).toBe(2);
+      expect(heldStatus.length).toBe(1);
+      const oldAnswer = heldStatus[0];
+      const g = globalThis as Record<string, unknown>;
+      g.IS_REACT_ACT_ENVIRONMENT = false;
+      try {
+        switchRuntimeEndpoint({ runtimeKey: 'laptop', apiBaseUrl: 'https://lan.example' });
+        oldAnswer('available');
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      } finally {
+        g.IS_REACT_ACT_ENVIRONMENT = true;
+      }
+      await flush();
+      expect({ statusReads, socketsCreated: sockets.length, live: openSockets().length }).toEqual({ statusReads: 3, socketsCreated: 1, live: 0 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 describe('RemoteBrowserPane keyboard input', () => {

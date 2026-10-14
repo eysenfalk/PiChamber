@@ -12,7 +12,11 @@ import {
   type RemoteBrowserPageState,
 } from '@/lib/browser/remoteBrowserClient';
 import { isCapacitorApp } from '@/lib/platform';
-import { subscribeRuntimeEndpointChanged, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
+import {
+  getRuntimeEndpointGeneration,
+  subscribeRuntimeEndpointChanged,
+  subscribeRuntimeEndpointWillChange,
+} from '@/lib/runtime-switch';
 import { cn } from '@/lib/utils';
 
 /** Pointer travel in CSS pixels before a touch becomes a scroll instead of a tap. */
@@ -131,14 +135,18 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
   }, []);
 
   // Status is read each time the pane becomes active until the desktop app is found.
+  // An answer only counts for the endpoint it was asked at: a switch can land before
+  // this effect is cleaned up, so the endpoint generation is checked synchronously.
   React.useEffect(() => {
     if (!active || isAvailable) return;
     let cancelled = false;
+    const generation = getRuntimeEndpointGeneration();
+    const isCurrent = () => !cancelled && getRuntimeEndpointGeneration() === generation;
     setAvailability({ status: 'checking' });
     fetchRemoteBrowserAvailability()
-      .then((result) => { if (!cancelled) setAvailability({ status: result }); })
+      .then((result) => { if (isCurrent()) setAvailability({ status: result }); })
       .catch((error: unknown) => {
-        if (!cancelled) setAvailability({ status: 'error', message: error instanceof Error ? error.message : String(error) });
+        if (isCurrent()) setAvailability({ status: 'error', message: error instanceof Error ? error.message : String(error) });
       });
     return () => { cancelled = true; };
   }, [active, isAvailable, statusAttempt, endpointEpoch]);
