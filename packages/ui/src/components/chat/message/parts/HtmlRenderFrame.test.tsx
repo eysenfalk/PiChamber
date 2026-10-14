@@ -7,6 +7,8 @@ let relayActive = false;
 let connection: 'loading' | 'ready' | 'unavailable' | 'error' = 'ready';
 let mintFails = false;
 let mintCalls = 0;
+let holdMints = false;
+const heldMints: Array<{ fail: () => void }> = [];
 
 mock.module('@/contexts/useThemeSystem', () => ({
   useThemeSystem: () => ({ currentTheme: null }),
@@ -27,6 +29,11 @@ mock.module('@/lib/runtime-fetch', () => ({
   ...runtimeFetchModule,
   runtimeFetch: async () => {
     mintCalls += 1;
+    if (holdMints) {
+      return new Promise<Response>((_resolve, reject) => {
+        heldMints.push({ fail: () => reject(new TypeError('Failed to fetch')) });
+      });
+    }
     if (mintFails) throw new TypeError('Failed to fetch');
     return new Response(JSON.stringify({ url: '/api/pi/html-renders/s1/r1?expires=1&sig=x' }));
   },
@@ -129,6 +136,68 @@ describe('HtmlRenderFrame', () => {
       expect(source?.kind).toBe('ready');
       expect(mintCalls).toBe(2);
     } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  test('starts a request still running at reconnect over and ignores its late failure', async () => {
+    relayActive = false;
+    connection = 'error';
+    mintFails = false;
+    mintCalls = 0;
+    holdMints = true;
+    heldMints.length = 0;
+    let source: ReturnType<typeof useHtmlRenderSource> | undefined;
+    const Probe = () => {
+      source = useHtmlRenderSource('s1', 'r1');
+      return null;
+    };
+    const dom = installMinimalDom();
+    const root = createRoot(dom.container);
+    try {
+      await act(async () => root.render(<Probe />));
+      expect(source?.kind).toBe('loading');
+      expect(mintCalls).toBe(1);
+
+      holdMints = false;
+      connection = 'ready';
+      await act(async () => root.render(<Probe />));
+      expect(mintCalls).toBe(2);
+      expect(source).toEqual({ kind: 'ready', src: 'http://server/api/pi/html-renders/s1/r1?expires=1&sig=x' });
+
+      await act(async () => heldMints[0]?.fail());
+      await act(async () => root.render(<Probe />));
+      expect(source?.kind).toBe('ready');
+      expect(mintCalls).toBe(2);
+    } finally {
+      holdMints = false;
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  test('does not repeat a request that keeps failing while the connection stays ready', async () => {
+    relayActive = false;
+    connection = 'ready';
+    mintFails = true;
+    mintCalls = 0;
+    let source: ReturnType<typeof useHtmlRenderSource> | undefined;
+    const Probe = () => {
+      source = useHtmlRenderSource('s1', 'r1');
+      return null;
+    };
+    const dom = installMinimalDom();
+    const root = createRoot(dom.container);
+    try {
+      await act(async () => root.render(<Probe />));
+      for (let render = 0; render < 3; render += 1) {
+        await act(async () => root.render(<Probe />));
+      }
+      expect(source).toEqual({ kind: 'failed' });
+      expect(mintCalls).toBe(1);
+    } finally {
+      mintFails = false;
       await act(async () => root.unmount());
       dom.restore();
     }
