@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-10-14
+
+Compact extension messages, inline HTML pages, orchestrator routing and mobile fixes since 1.0.8.
+
+- **Extension messages render compactly (#147, #153).** Pi custom messages such as intercom, subagent notices and context plugin notes are compact, expandable rows inside the chat column with a readable label, and consecutive messages of one kind collapse into one row such as "9 Intercom messages".
+- **No more overlapping rows after long runs (#144, #150).** The live tail and the history rows above it no longer overlap after many wake cycles; the virtualized history list is as tall as its rows.
+- **Agent HTML pages inline (#155, #157).** A Pi session gets an `html_render` tool. The page is stored with the session and shows as its own row in a sandboxed iframe that fits its content, with a maximize dialog that zooms 50 to 200 %.
+- **Orchestrator sessions (#136, #141, #156, #158, #152, #159).** Only a session marked as orchestrator, in the settings file or with a switch in its row menu, gets the orchestrator tools, the roughly 1000 token instructions and worker wakes; other sessions get none of them. Mark an existing orchestrator session after updating. The last writer decides what the orchestrator hears, and a per-worker **Orchestrator: follows / quiet** switch silences all but done, blocker, ready, CI result and merge events. The orchestrator skill distinguishes worker sessions from Pi subagents.
+- **Mobile (#137, #140, #142, #149).** The composer takes at most a third of the visible height and can be minimized to a one-line pill. Settings and the sessions drawer stay clear of the system bars.
+
 ## [1.0.8] - 2026-10-13
 
 Pi 1.1.0, the workspace tree in the sidebar and worker orchestration since 1.0.7. Release 1.0.7 build 8 was an Android-only prerelease.
