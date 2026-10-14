@@ -1018,11 +1018,17 @@ describe('PiSessionStore runtime-scoped sessions', () => {
     const originalFetch = globalThis.fetch;
     const encoder = new TextEncoder();
     const pushes: Array<(event: PiSessionEvent) => void> = [];
-    globalThis.fetch = (async () => new Response(new ReadableStream({
-      start(controller) {
-        pushes.push((event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)));
-      },
-    }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch;
+    const eventRequests: AbortSignal[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal ?? new AbortController().signal;
+      if (new URL(String(input), 'http://runtime.test').pathname === '/api/pi/events') eventRequests.push(signal);
+      return new Response(new ReadableStream({
+        start(controller) {
+          pushes.push((event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)));
+          signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+        },
+      }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
     const stubs = stubDaemons({
       listSessions: async () => ({
         streamEpoch: 'epoch-1',
@@ -1040,10 +1046,17 @@ describe('PiSessionStore runtime-scoped sessions', () => {
       }
       store.reportError(new PiRequestError('DAEMON_UNAVAILABLE'));
       expect(asInternal(store).stream).not.toBeNull();
+      // The background recovery stream has not sent its request yet.
+      const requestsBefore = eventRequests.length;
+      expect(requestsBefore).toBe(attachFirst ? 1 : 0);
       await store.connectWithoutProject();
       await store.refreshDirectoryCatalog('/repo');
       await settle();
       expect(store.getState().connection).toBe('ready');
+      // The old request is aborted and exactly one replacement stream is open.
+      expect(eventRequests.slice(0, requestsBefore).every((signal) => signal.aborted)).toBe(true);
+      expect(eventRequests.filter((signal) => !signal.aborted)).toHaveLength(1);
+      expect(eventRequests.at(-1)?.aborted).toBe(false);
       expect(store.getState().catalog.byId.get('worker')?.lifecycle).toBe('idle');
 
       pushes.at(-1)?.({
