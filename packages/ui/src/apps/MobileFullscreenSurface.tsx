@@ -185,6 +185,9 @@ export const MobileFullscreenSurface: React.FC<MobileFullscreenSurfaceProps> = (
         transition: `opacity ${ENTER_DURATION_MS}ms ease-out, transform ${ENTER_DURATION_MS}ms cubic-bezier(0.32, 0.72, 0, 1)`,
       } : {
         paddingTop: 'var(--oc-safe-area-top, 0px)',
+        // Edge-to-edge Android runs under the system navigation bar; keep the
+        // surface above it, like the top inset keeps it below the status bar.
+        paddingBottom: 'var(--oc-safe-area-bottom, 0px)',
         // Push-style enter: slide in from the right edge; settled state drops
         // the transform entirely so the surface isn't kept on a compositing
         // layer (iOS clips those to the safe-area viewport).

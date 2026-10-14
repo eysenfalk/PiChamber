@@ -92,7 +92,7 @@ export const SettingsPageLayout: React.FC<SettingsPageLayoutProps> = ({
                 )
               ) : null}
             </div>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-3">
+            <div className="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-3">
               {headerEnd}
             </div>
           </div>
