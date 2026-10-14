@@ -138,14 +138,3 @@ export const normalizeBrowserUrl = (value: string): string => {
     return 'about:blank';
   }
 };
-
-export const runIframeScript = async <T,>(iframe: HTMLIFrameElement, script: string): Promise<T> => {
-  const frameWindow = iframe.contentWindow;
-  if (!frameWindow) {
-    throw new Error('Iframe window is not available');
-  }
-
-  const evaluate = (frameWindow as Window & { eval: (code: string) => unknown }).eval;
-  const result = evaluate.call(frameWindow, script) as unknown;
-  return await Promise.resolve(result) as T;
-};

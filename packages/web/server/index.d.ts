@@ -15,6 +15,16 @@ export interface StartWebUiServerOptions {
   attachSignals?: boolean;
   exitOnShutdown?: boolean;
   uiPassword?: string | null;
+  /** Injected by the desktop app; enables the remote browser route (lib/browser). */
+  remoteBrowserHost?: RemoteBrowserHost | null;
+}
+
+export interface RemoteBrowserHost {
+  attach(listener: {
+    onFrame: (jpeg: Buffer) => void;
+    onState: (state: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }) => void;
+    onNotice: (notice: string) => void;
+  }): { handle: (message: { type: string } & Record<string, unknown>) => void; detach: () => void };
 }
 
 export declare function startWebUiServer(
