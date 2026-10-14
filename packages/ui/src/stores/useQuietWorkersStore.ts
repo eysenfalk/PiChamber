@@ -21,21 +21,22 @@ interface QuietWorkersState {
 let lastStarted = 0;
 let lastApplied = 0;
 let floor = 0;
-let shared: { promise: Promise<void>; floor: number } | null = null;
+let shared: { promise: Promise<void>; floor: number; runtimeKey: string } | null = null;
 
 export const useQuietWorkersStore = create<QuietWorkersState>((set, get) => ({
   quiet: null,
   runtimeKey: null,
   load: () => {
-    if (shared && shared.floor === floor) return shared.promise;
-    const seq = ++lastStarted;
     const runtimeKey = getRuntimeKey();
+    // Another host needs its own read: the old one fails when the runtime changed.
+    if (shared && shared.floor === floor && shared.runtimeKey === runtimeKey) return shared.promise;
+    const seq = ++lastStarted;
     const read = piClient.getSettings({ runtimeKey }).then((settings) => {
       if (seq < lastApplied || seq < floor) return;
       lastApplied = seq;
       set({ quiet: new Set(settings.orchestration.quietWorkers), runtimeKey });
     });
-    const entry = { promise: read, floor };
+    const entry = { promise: read, floor, runtimeKey };
     shared = entry;
     const release = () => { if (shared === entry) shared = null; };
     read.then(release, release);

@@ -4,6 +4,7 @@ let stored: string[] = [];
 let failRead = false;
 let heldReads: Array<() => void> | null = null;
 let reads = 0;
+let runtimeKey = 'runtime-a';
 const updates: unknown[] = [];
 
 const getSettings = mock(async () => {
@@ -28,7 +29,7 @@ const setPiChamberDefaults = mock(async (input: { orchestration: { quietWorkers:
 });
 
 mock.module('@/lib/pi/client', () => ({ piClient: { getSettings, setPiChamberDefaults } }));
-mock.module('@/lib/runtime-switch', () => ({ getRuntimeKey: () => 'runtime-a' }));
+mock.module('@/lib/runtime-switch', () => ({ getRuntimeKey: () => runtimeKey }));
 
 const { useQuietWorkersStore } = await import('./useQuietWorkersStore');
 
@@ -37,6 +38,7 @@ describe('useQuietWorkersStore', () => {
     stored = [];
     failRead = false;
     heldReads = null;
+    runtimeKey = 'runtime-a';
     updates.length = 0;
     useQuietWorkersStore.setState({ quiet: null, runtimeKey: null });
   });
@@ -65,6 +67,26 @@ describe('useQuietWorkersStore', () => {
     release.forEach((answer) => answer());
     await old;
     expect(useQuietWorkersStore.getState().quiet?.has('worker-C')).toBe(true);
+  });
+
+  test('reads again on another host while the read of the first host is still open', async () => {
+    stored = ['worker-A'];
+    heldReads = [];
+    const first = useQuietWorkersStore.getState().load();
+    const release = heldReads;
+    heldReads = null;
+
+    runtimeKey = 'runtime-b';
+    stored = ['worker-B'];
+    await useQuietWorkersStore.getState().load();
+    expect(useQuietWorkersStore.getState().runtimeKey).toBe('runtime-b');
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-B')).toBe(true);
+
+    release.forEach((answer) => answer());
+    await first;
+    expect(useQuietWorkersStore.getState().runtimeKey).toBe('runtime-b');
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-B')).toBe(true);
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-A')).toBe(false);
   });
 
   test('lets rows that load at the same time share one read', async () => {
