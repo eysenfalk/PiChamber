@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-10-14
+
+A built-in browser on desktop and phone and a live updates fix since 1.0.9.
+
+- **Built-in browser (#163, #166, #168, #169, #170).** The desktop Browser surface keeps its logins in one persistent, PiChamber owned profile (`persist:pichamber-browser`), separate from PiChamber's own session. Pages are sandboxed without preload or Node, load only http, https and about:blank, and get no permissions except fullscreen and sanitized clipboard writes, so visited sites never see PiChamber tokens. In the Capacitor app, hosted mobile and the web the Browser surface is a live remote view of that laptop browser over `/api/browser/ws`, with address bar, back, forward, reload, tap, scroll and keyboard, so the phone reaches every site the laptop reaches, internal ones included. Without the desktop app it says that the browser needs it.
+- **Live updates after a reconnect without a project (#167).** When the session store reconnects without a selected project after an error, it replaces the old event stream, so live replies and busy session states show again instead of being dropped while the socket stayed open.
+
 ## [1.0.9] - 2026-10-14
 
 Compact extension messages, inline HTML pages, orchestrator routing and mobile fixes since 1.0.8.
