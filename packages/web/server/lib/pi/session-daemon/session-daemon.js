@@ -268,6 +268,9 @@ export function createSessionDaemon({
   const releaseResidentLease = async ({ cwd: leaseCwd, sessionId }) => {
     const owner = leaseOwner();
     if (!owner || typeof sessionId !== 'string' || sessionId.length === 0) return { released: false };
+    // An undisposed failed-create runtime still holds the session, so no
+    // path releases the lease before its cleanup succeeded (#164).
+    if (pendingFailedCreateCleanups.has(sessionId)) return { released: false };
     try {
       return await releaseSessionLease({ agentDir, cwd: leaseCwd, sessionId, owner });
     } catch {
@@ -747,9 +750,10 @@ export function createSessionDaemon({
   // the race for its session here the same way. Disposal is attempted first
   // and the lease is released only after successful disposal, and only when
   // no other runtime of this daemon owns the session; a failed retry stays
-  // pending without releasing ownership. Entries are removed only when the
-  // drained object is still current, so a newer owner's record is never
-  // erased. The failed runtime is never registered and never installs
+  // pending without releasing ownership, and while an entry is pending no
+  // other path releases the session's lease either. Entries are removed only
+  // when the drained object is still current, so a newer owner's record is
+  // never erased. The failed runtime is never registered and never installs
   // dormant state.
   const pendingFailedCreateCleanups = new Map();
   const pendingFailedCreateDraining = new Set();
@@ -764,10 +768,10 @@ export function createSessionDaemon({
       } catch {
         return false;
       }
-      await releaseUnownedLease({ cwd: pending.cwd, sessionId: pending.sessionId });
       if (pendingFailedCreateCleanups.get(sessionId) === pending) {
         pendingFailedCreateCleanups.delete(sessionId);
       }
+      await releaseUnownedLease({ cwd: pending.cwd, sessionId: pending.sessionId });
       return true;
     } finally {
       pendingFailedCreateDraining.delete(sessionId);

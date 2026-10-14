@@ -165,8 +165,11 @@ const writeSessionFile = async ({ agentDir, cwd, sessionId }) => {
 describe('default runtime after session deletion', () => {
   let tempRoot;
   let daemon;
+  let peer;
 
   afterEach(async () => {
+    await peer?.stop().catch(() => {});
+    peer = undefined;
     await daemon?.stop().catch(() => {});
     daemon = undefined;
     if (tempRoot) await rm(tempRoot, { recursive: true, force: true }).catch(() => {});
@@ -214,6 +217,30 @@ describe('default runtime after session deletion', () => {
     await daemon.start();
     const request = (command, payload) => daemonRequest(endpoint, command, payload);
     return { agentDir, runtimes, hold, request };
+  };
+
+  // A second daemon with its own identity on the same agent directory, like
+  // another PiChamber instance. It may open session-a only when the lease is
+  // free.
+  const startPeer = async ({ agentDir, project }) => {
+    const peerRoot = join(tempRoot, 'peer');
+    await mkdir(peerRoot, { recursive: true });
+    const endpoint = testDaemonEndpoint(peerRoot);
+    peer = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: project,
+      agentDir,
+      profileKey: 'default-runtime-peer-profile',
+      serverInstanceId: 'default-runtime-peer-server',
+      daemonId: 'default-runtime-peer-daemon',
+      createRuntime: async ({ cwd: runtimeCwd, sessionFile }) => new FakeRuntime({
+        cwd: runtimeCwd,
+        session: new FakeSession('session-a', sessionFile, runtimeCwd),
+      }),
+    });
+    await peer.start();
+    return () => daemonRequest(endpoint, 'sessions.open', { sessionId: 'session-a', directory: project });
   };
 
   const expectProviders = (response) => {
@@ -371,6 +398,54 @@ describe('default runtime after session deletion', () => {
     await daemon.stop();
     expect(winner.runtime.disposed).toBe(true);
     expect(duplicate.runtime.disposed).toBe(true);
+  });
+
+  it('keeps the lease while a losing runtime is undisposed after the winner went idle', async () => {
+    const { agentDir, project, runtimes, hold, providers, opened, startDefault, finishOpen, leaseOwner } = await raceForDormantSession();
+    finishOpen();
+    expect((await opened).ok).toBe(true);
+    hold.failDisposeOfNext = true;
+    startDefault();
+    expectProviders(await providers);
+    const [winner, duplicate] = runtimes.slice(1);
+    const peerOpen = await startPeer({ agentDir, project });
+    expect((await peerOpen()).error?.code).toBe('SESSION_IN_USE');
+
+    await waitFor(() => winner.runtime.disposed, { message: 'winner idle disposal did not run' });
+    // Nothing signals the end of idle disposal, so watch for a lease release
+    // for a while instead.
+    for (const deadline = Date.now() + 500; Date.now() < deadline && await leaseOwner();) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(duplicate.runtime.disposed).toBe(false);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+    expect((await peerOpen()).error?.code).toBe('SESSION_IN_USE');
+
+    // Stop disposes the losing runtime, and only then the lease goes.
+    await daemon.stop();
+    expect(duplicate.runtime.disposed).toBe(true);
+    expect(await leaseOwner()).toBeNull();
+    expect((await peerOpen()).ok).toBe(true);
+  });
+
+  it('keeps the lease after stop while a losing runtime still fails to dispose', async () => {
+    const { agentDir, project, runtimes, hold, providers, opened, startDefault, finishOpen, leaseOwner } = await raceForDormantSession();
+    finishOpen();
+    expect((await opened).ok).toBe(true);
+    hold.failDisposeOfNext = true;
+    startDefault();
+    expectProviders(await providers);
+    const [winner, duplicate] = runtimes.slice(1);
+    const peerOpen = await startPeer({ agentDir, project });
+    expect((await peerOpen()).error?.code).toBe('SESSION_IN_USE');
+
+    duplicate.runtime.failNextDispose = true;
+    await daemon.stop();
+    expect(winner.runtime.disposed).toBe(true);
+    expect(duplicate.runtime.disposed).toBe(false);
+    expect(duplicate.runtime.disposeAttempts).toBe(2);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+    expect((await peerOpen()).error?.code).toBe('SESSION_IN_USE');
   });
 
   it('starts a runtime when the worktree of an idle dormant session is gone', async () => {
