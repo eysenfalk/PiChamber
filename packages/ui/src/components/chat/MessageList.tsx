@@ -588,11 +588,16 @@ const StaticHistoryList = React.memo(({ entries, engine, contentRef, scrollRef, 
                         const entry = renderEntries[item.index];
                         if (!entry) return null;
                         return (
+                            // flow-root: measureElement reads the row's border box, so a
+                            // child margin collapsing out of the row would add layout
+                            // height the virtualizer never counts, and the live tail
+                            // below would be drawn over the last history rows.
                             <div
                                 key={entry.key}
                                 data-index={item.index}
                                 ref={tanstackVirtualizer.measureElement}
                                 data-turn-entry={entry.key}
+                                className="flow-root"
                             >
                                 {renderEntry(entry)}
                             </div>
