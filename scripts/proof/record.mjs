@@ -34,12 +34,16 @@ export const isStreamingResponse = event => event.type === 'EventSource' || even
 export function createPageNetworkGate(now = Date.now) {
   const pending = new Map();
   let changed = now();
+  let mainFrameId;
   const finished = event => { if (pending.delete(event.requestId)) changed = now(); };
   return {
     quiet: () => pending.size === 0 && now() - changed >= 500,
     handlers: {
       'Network.requestWillBeSent': event => {
-        if (tracksPageRequest(event)) { pending.set(event.requestId, event.loaderId); changed = now(); }
+        // A child frame's document may load in its own process (a sandboxed
+        // cross-origin iframe does), so its finish events never reach this target.
+        const childDocument = event.type === 'Document' && mainFrameId !== undefined && event.frameId !== mainFrameId;
+        if (tracksPageRequest(event) && !childDocument) { pending.set(event.requestId, event.loaderId); changed = now(); }
       },
       'Network.loadingFinished': finished,
       'Network.loadingFailed': finished,
@@ -48,6 +52,7 @@ export function createPageNetworkGate(now = Date.now) {
       // may never reach this target. Keep the new document's pending requests.
       'Page.frameNavigated': event => {
         if (event.frame.parentId) return;
+        mainFrameId = event.frame.id;
         for (const [id, loader] of pending) if (loader !== event.frame.loaderId) pending.delete(id);
         changed = now();
       },

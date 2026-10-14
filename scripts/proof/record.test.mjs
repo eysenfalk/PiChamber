@@ -17,6 +17,23 @@ test('record.mjs page idle tracks finite page requests, not worker-owned or live
   expect(isStreamingResponse({ type: 'Fetch', response: { mimeType: 'application/json' } })).toBe(false);
 });
 
+test('record.mjs idle ignores a child frame document, whose finish an out-of-process frame never reports here', () => {
+  let time = 0;
+  const gate = createPageNetworkGate(() => time);
+  const event = (name, args) => gate.handlers[name](args);
+  event('Page.frameNavigated', { frame: { id: 'main', loaderId: 'page' } });
+  event('Network.requestWillBeSent', { requestId: 'frame', type: 'Document', loaderId: 'frame-doc', frameId: 'child' });
+  time = 501;
+  expect(gate.quiet()).toBe(true);
+  event('Network.requestWillBeSent', { requestId: 'fetch', type: 'Fetch', loaderId: 'page', frameId: 'child' });
+  time = 1002;
+  expect(gate.quiet()).toBe(false);
+  event('Network.loadingFinished', { requestId: 'fetch' });
+  event('Network.requestWillBeSent', { requestId: 'reload', type: 'Document', loaderId: 'next', frameId: 'main' });
+  time = 1503;
+  expect(gate.quiet()).toBe(false);
+});
+
 test('record.mjs idle drops only the replaced document and keeps new finite fetches', () => {
   let time = 0;
   const gate = createPageNetworkGate(() => time);

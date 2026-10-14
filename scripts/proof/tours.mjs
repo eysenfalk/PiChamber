@@ -1,4 +1,4 @@
-import { LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
+import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -355,15 +355,21 @@ export function htmlRenderTour(manifest) {
     { caption: `"${session.title}" runs on the lab model. RENDER makes it call html_render, and the page "${LAB_HTML_RENDER_TITLE}" shows inline in the answer, in the app theme.`,
       viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label }, { type: 'wait', selector: item },
-        { type: 'click', selector: item }, { type: 'wait', selector: composer }, { type: 'type', selector: composer, value: 'RENDER' },
+        // Wait for the seeded answer: the first daemon request of a fresh lab may still be starting the session.
+        { type: 'click', selector: item }, { type: 'wait', text: LAB_HTML_RENDER_PROMPT }, { type: 'wait', selector: composer }, { type: 'wait', ms: 2000 },
+        { type: 'type', selector: composer, value: 'RENDER' },
         { type: 'press', key: 'Enter' }, { type: 'wait', text: reply.text }, ...settle],
       evidence: [{ selector: frame }, reply] },
     { caption: 'In dark theme the page follows the app colors.', viewport: 'desktop', theme: 'dark', actions: [{ type: 'wait', ms: 1500 }],
       evidence: [{ selector: `html.dark ${frame}` }, reply] },
-    { caption: 'Open full screen shows the page in a dialog; Zoom in sets 125 %.', viewport: 'desktop', theme: 'light',
+    { caption: 'Open full screen shows the page in a dialog, in the same sandbox.', viewport: 'desktop', theme: 'light',
       actions: [...settle, { type: 'hover', selector: '[data-html-render-id]' }, { type: 'click', selector: 'button[aria-label="Open full screen"]' },
-        { type: 'wait', selector: `[role="dialog"] ${sandbox}` }, { type: 'click', selector: 'button[aria-label="Zoom in"]' }, { type: 'wait', ms: 1500 }],
-      evidence: [{ selector: `[role="dialog"] ${sandbox}` }, { selector: 'button[aria-label="Reset zoom"]', text: '125%' }] },
+        { type: 'wait', selector: `[role="dialog"] ${sandbox}` }, { type: 'wait', ms: 1500 }],
+      evidence: [{ selector: `[role="dialog"] ${sandbox}` }, { selector: 'button[aria-label="Reset zoom"]', text: '100%' }] },
+    // At 125 % the page is larger than its scroll area, so the zoom label is the proof.
+    { caption: 'Zoom in enlarges the page to 125 %; the dialog scrolls it.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'button[aria-label="Zoom in"]' }, { type: 'wait', ms: 1500 }],
+      evidence: [{ selector: 'button[aria-label="Reset zoom"]', text: '125%' }] },
     { caption: 'After a reload the page comes back from the stored session.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: item }, { type: 'click', selector: item }, { type: 'wait', text: reply.text }, ...settle],
       evidence: [{ selector: frame }, reply] },

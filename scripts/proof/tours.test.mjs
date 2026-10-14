@@ -114,7 +114,7 @@ describe('tours.mjs format', () => {
     expect(evidence).toContainEqual({ selector: '[data-html-render-id] iframe[sandbox="allow-scripts allow-forms"]' });
     expect(evidence).toContainEqual({ selector: '[role="dialog"] iframe[sandbox="allow-scripts allow-forms"]' });
     expect(evidence).toContainEqual({ selector: 'button[aria-label="Reset zoom"]', text: '125%' });
-    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/dark', 'desktop/light', 'desktop/light', 'mobile/light']);
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/dark', 'desktop/light', 'desktop/light', 'desktop/light', 'mobile/light']);
     expect(() => htmlRenderTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
