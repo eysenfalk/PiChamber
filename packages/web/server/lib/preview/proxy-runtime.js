@@ -1379,6 +1379,9 @@ export const createPreviewProxyRuntime = ({
         }
 
         const ttlMs = typeof req.body?.ttlMs === 'number' ? req.body.ttlMs : DEFAULT_TARGET_TTL_MS;
+        // Only Preview screenshots use allowExternal, to inline cross origin images
+        // (ui lib/preview/domAssetInlining.ts). External pages are shown by the
+        // remote browser (lib/browser), never under this origin.
         const allowExternal = req.body?.allowExternal === true;
         const normalized = allowExternal
           ? normalizeProxyTargetUrl(rawUrl, { allowExternal: true })
