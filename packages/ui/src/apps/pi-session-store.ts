@@ -1258,6 +1258,11 @@ export class PiSessionStore {
     this.pendingPreferredSessionId = null;
     // No session is in flight here, so no prefetch may survive either.
     this.clearTranscriptPrefetch();
+    // A rebuild after an error report must not keep the stream that was
+    // attached before it (cluster or background recovery): its callbacks
+    // belong to the superseded generation and would drop every event while
+    // the socket stays healthy, and `attachClusterStream` would reuse it.
+    this.stream?.dispose(); this.stream = null;
     this.state = {
       ...this.state,
       directory: null,
