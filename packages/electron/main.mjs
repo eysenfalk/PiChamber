@@ -12,6 +12,12 @@ import { promisify } from 'node:util';
 import updaterPkg from 'electron-updater';
 import { createTrayController } from './tray.mjs';
 import {
+  BROWSER_PARTITION,
+  applyBrowserSessionPolicy,
+  guardWebviewAttach,
+  guardWebviewNavigation,
+} from './browser-profile-policy.mjs';
+import {
   resolveDesktopHostRuntimeConfig,
   resolveStartupUrlProbePlan,
   shouldIgnoreLoopbackConnectionLimit,
@@ -4737,8 +4743,11 @@ const loadUrlInsideWebContents = (contents, rawUrl) => {
 };
 
 app.on('web-contents-created', (_event, contents) => {
+  // Every embedder: a <webview> it attaches gets the browser profile policy.
+  guardWebviewAttach(contents, log);
   if (contents.getType() !== 'webview') return;
 
+  guardWebviewNavigation(contents, log);
   contents.setWindowOpenHandler(({ url }) => {
     loadUrlInsideWebContents(contents, url);
     return { action: 'deny' };
@@ -5170,6 +5179,7 @@ app.on('activate', async () => {
 
 app.whenReady().then(async () => {
   recordElectronStartupPerformance('electron.app.ready');
+  applyBrowserSessionPolicy(session.fromPartition(BROWSER_PARTITION));
   const loginItemSettings = readLoginItemSettings();
   const isBackgroundStart = shouldStartInBackground(loginItemSettings);
   log.info('[electron] app starting', {
