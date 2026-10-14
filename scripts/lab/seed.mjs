@@ -124,6 +124,29 @@ function seedShortSession({ cwd, sessionDir, title, createdAt }) {
   return manager;
 }
 
+// Issue #147: Pi custom messages as extensions append them. Two turns, nine intercom
+// messages between them, then subagent notices and an extension PiChamber does not know.
+function seedExtensionMessages({ cwd, sessionDir, title, createdAt }) {
+  const manager = SessionManager.create(cwd, sessionDir);
+  manager.appendModelChange('openai', 'gpt-4.1');
+  manager.appendSessionInfo(title);
+  manager.appendMessage({ role: 'user', content: 'Coordinate the lab workers and tell me when they report.', timestamp: createdAt });
+  manager.appendMessage(assistant('I am waiting for the workers to report over intercom.', createdAt + 1000));
+  const workers = ['#137 mobile composer (task-medium)', '#140 lab tours (task-easy)', '#141 docs index (task-easy)'];
+  for (let index = 0; index < 9; index++) {
+    const sender = workers[index % workers.length];
+    manager.appendCustomMessageEntry('intercom_message',
+      `**From ${sender}** (/lab/projects/lab-beta)\nReply with intercom to this session.\n\n_Delivered at 10:${String(index).padStart(2, '0')}_\n\nStatus ${index + 1}: the synthetic check **passed**. Next: \`bun run test\`.`, true);
+  }
+  manager.appendMessage({ role: 'user', content: 'Thanks. Start the background checks.', timestamp: createdAt + 60000 });
+  manager.appendMessage(assistant('The background checks are running.', createdAt + 61000));
+  for (let index = 0; index < 3; index++) {
+    manager.appendCustomMessageEntry('subagent-notify', `Background task completed: **check-${index + 1}**\n\nResult: all synthetic checks passed.`, true);
+  }
+  manager.appendCustomMessageEntry('lab-context-note', '## Context note\n\nOlder history was summarized for the lab.', true);
+  return manager;
+}
+
 // Every SDK operation gets an explicit volume-local session directory. Tests never use host Pi state.
 export async function seedLab(root, now = Date.now()) {
   if (!root || !resolve(root).endsWith('/lab')) throw new Error('Seed root must be an explicit directory named lab.');
@@ -289,6 +312,13 @@ async function seedTreeFixtures({ root, agentDir, now, projects, sessions }) {
       const cwd = spec.role === 'worktree' ? join(root, 'projects', `${spec.project}-worktrees`, spec.worktree)
         : spec.role === 'chat' ? root
           : spec.role === 'foreign' ? join(root, 'folders', spec.folder) : null;
+      if (spec.role === 'extensions') {
+        const directory = projects.find((candidate) => candidate.name === spec.project).path;
+        const manager = seedExtensionMessages({ cwd: directory, sessionDir: getPiSessionDirectory({ cwd: directory, agentDir }), title: spec.title, createdAt: at });
+        created.push({ path: manager.getSessionFile(), modified: at + 61000 });
+        sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory });
+        continue;
+      }
       if (!cwd) continue;
       const manager = seedShortSession({ cwd, sessionDir: getPiSessionDirectory({ cwd, agentDir }), title: spec.title, createdAt: at });
       created.push({ path: manager.getSessionFile(), modified: at + 61000 });

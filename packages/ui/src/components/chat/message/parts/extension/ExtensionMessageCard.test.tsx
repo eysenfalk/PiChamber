@@ -66,13 +66,13 @@ describe('ExtensionMessageCard', () => {
         expect(markup).toContain('Reindex');
     });
 
-    test('starts non-GUI extension content as one collapsed row with the custom type and first line', () => {
+    test('starts non-GUI extension content as one collapsed row with a readable kind and first line', () => {
         const markup = renderCard({
             customType: 'my-extension',
             text: '\n  Status update\nsecond line',
             details: { count: 3 },
         });
-        expect(markup).toContain('my-extension');
+        expect(markup).toContain('My extension');
         expect(markup).toContain('Status update');
         expect(markup).toContain('aria-expanded="false"');
         expect(markup).toContain('data-extension-disclosure="collapsed"');
@@ -80,14 +80,38 @@ describe('ExtensionMessageCard', () => {
         expect(markup).not.toContain('second line');
     });
 
-    test('expanding the fallback row shows the preformatted content', () => {
+    test('labels an intercom message by its sender without Markdown markers', () => {
+        const markup = renderCard({
+            customType: 'intercom_message',
+            text: '**From #137 mobile composer (task-medium)** (/home/u/wt)\n\nBody',
+        });
+        expect(markup).toContain('Intercom');
+        expect(markup).toContain('From #137 mobile composer (task-medium)');
+        expect(markup).not.toContain('**');
+        expect(markup).not.toContain('intercom_message:');
+        expect(markup).not.toContain('/home/u/wt');
+    });
+
+    test('expanding the fallback row renders its text as Markdown', () => {
         const markup = renderCard({
             customType: 'my-extension',
-            text: 'Status update',
+            text: 'Status **update**',
             details: { count: 3 },
             defaultExpanded: true,
         });
         expect(markup).toContain('aria-expanded="true"');
+        expect(markup).toContain('data-markdown-content="true"');
+        expect(markup).toContain('Status **update**');
+        expect(markup).not.toContain('<pre');
+    });
+
+    test('expanding a fallback row without text shows the preformatted payload', () => {
+        const markup = renderCard({
+            customType: 'my-extension',
+            details: { count: 3 },
+            defaultExpanded: true,
+        });
+        expect(markup).toContain('<pre');
         expect(markup).toContain('&quot;count&quot;: 3');
     });
 

@@ -326,7 +326,13 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
       touchDrag={hasTouchOnlyPointer}
       onDrop={applyTreeDrop}
     >
-      <div role="tree" aria-label="Workspaces" className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+      <div
+        role="tree"
+        aria-label="Workspaces"
+        // Dedicated mobile overlaps the list bottom 2.5rem (pb-10) with the
+        // button stack's fade (SessionSidebar), so Add folder scrolls clear of it.
+        className={`flex min-h-0 flex-1 flex-col overflow-y-auto px-2 ${mobileVariant ? 'pb-10' : 'pb-2'}`}
+      >
         {tree.sessionCount === 0 && emptyState ? emptyState : null}
         {rows.map((row) => {
           const container = row.node.kind === 'session' ? containerOf(row.key) : undefined;

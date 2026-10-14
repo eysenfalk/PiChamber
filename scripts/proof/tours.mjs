@@ -297,6 +297,47 @@ export function orchestrationTour(manifest) {
   ] });
 }
 
+/** Issue #147: Pi custom messages (intercom, subagent notices, an unknown extension) as compact rows in the chat column. */
+export function extensionMessagesTour(manifest) {
+  const session = manifest?.sessions?.find(candidate => candidate.role === 'extensions');
+  const project = manifest?.projects?.find(candidate => candidate.name === session?.project);
+  if (!session || !nonempty(session.title) || !project) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const item = `[role="treeitem"][aria-label="${session.title}"]`;
+  // The assistant's last answer: visible at the bottom of the session on every build.
+  const secondTurn = { text: 'The background checks are running.' };
+  // The project has one checkout, so its sessions sit directly under the project row.
+  const open = [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label }, { type: 'wait', selector: item },
+    { type: 'click', selector: item }, { type: 'wait', text: secondTurn.text }];
+  // Lab Beta stays expanded from the first step; clicking its row again would collapse it.
+  const reopen = [{ type: 'navigate', path: '' }, { type: 'wait', selector: item }, { type: 'click', selector: item }, { type: 'wait', text: secondTurn.text }];
+  // Hosted mobile opens the session the desktop steps selected.
+  const openMobile = [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', text: secondTurn.text }];
+  const run = '[data-extension-run="9"][data-extension-type="intercom_message"]';
+  const message = `${run} [data-extension-disclosure="expanded"]`;
+  const rows = [{ text: '9 Intercom messages' }, { text: '3 Subagent notify messages' }, { text: 'Lab context note' }];
+  // The first two steps hold on any build, so a build before #147 records the same view and fails only at step 3.
+  return validateTour({ name: 'extension-messages', steps: [
+    { caption: `"${session.title}": nine intercom messages, three subagent notices and one message of an unknown extension, between two turns.`,
+      viewport: 'desktop', theme: 'light', actions: open, evidence: [secondTurn] },
+    { caption: 'The same session in the hosted mobile layout.', viewport: 'mobile', theme: 'light',
+      actions: openMobile, evidence: [secondTurn] },
+    { caption: 'Each kind of custom message is one compact row in the chat column: the nine intercom messages, the three subagent notices and the unknown extension.',
+      viewport: 'desktop', theme: 'light', actions: reopen, evidence: [...rows, { selector: `.chat-message-column ${run}` }] },
+    { caption: 'Expanding the intercom row lists each message by sender. Expanding one renders its text as Markdown: bold, emphasis and code, no raw stars.',
+      viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: `${run} > button` }, { type: 'wait', selector: `${run} [data-extension-type="intercom_message"]` },
+        { type: 'click', selector: `${run} button[aria-label="Intercom message: From #137 mobile composer (task-medium)"]` },
+        { type: 'wait', selector: `${message} code` }, { type: 'scroll', selector: `${message} code` }],
+      evidence: [{ selector: `${message} strong`, index: 1, text: 'passed' }, { selector: `${message} code`, text: 'bun run test' },
+        { text: 'Intercom' }] },
+    { caption: 'The same expanded messages in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
+      evidence: [{ selector: `html.dark ${message} code`, text: 'bun run test' }] },
+    { caption: 'In the hosted mobile layout the rows stay inside the column.', viewport: 'mobile', theme: 'dark',
+      actions: openMobile, evidence: [rows[0], rows[1]] },
+  ] });
+}
+
 /** Issue #46: the create-device dialog on a server without Tailscale (the lab pod has none) keeps the home network as default. */
 export function addDeviceTour() {
   // Desktop opens Settings from the URL; hosted mobile ignores `?settings=` and goes through the drawer.

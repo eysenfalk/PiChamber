@@ -60,7 +60,10 @@ describe('MessageRow extension routing (ungrouped)', () => {
     const markup = renderUngrouped(makeExtensionEntry('ext-fallback-1'));
 
     expect(markup).toContain('data-extension-ui="ext-fallback-1"');
-    expect(markup).toContain('my-extension');
+    expect(markup).toContain('My extension');
+    // Extension rows sit in the chat message column with a message anchor.
+    expect(markup).toContain('data-message-id="ext-fallback-1"');
+    expect(markup).toContain('class="chat-message-column"');
     expect(markup).toContain('Status update');
     // Generic extension content starts as one collapsed row.
     expect(markup).toContain('data-extension-disclosure="collapsed"');
@@ -97,7 +100,7 @@ describe('MessageRow extension routing (ungrouped)', () => {
     );
 
     expect(markup).toContain('data-extension-ui="ext-direct-1"');
-    expect(markup).toContain('my-extension');
+    expect(markup).toContain('My extension');
     expect(chatMessageRenderCount).toBe(0);
     expect(chatMessageRenderedIds).toEqual([]);
   });

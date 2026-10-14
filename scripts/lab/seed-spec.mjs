@@ -20,6 +20,8 @@ export const SEED_MANIFEST = {
     { folder: 'scratch', title: 'Lab: scratch notes', role: 'foreign' },
     // Issue #107: an orchestrator on the scripted faux model (scripts/lab/faux-orchestration.mjs).
     { project: 'lab-alpha', title: 'Lab: orchestrator', role: 'orchestrator' },
+    // Issue #147: a session full of Pi custom messages (intercom, subagent notices, an unknown extension).
+    { project: 'lab-beta', title: 'Lab: extension messages', role: 'extensions' },
   ],
   // Linked worktrees of a project, checked out next to it as <project>-worktrees/<name>.
   // `git` is the state the git pills show (slice 5 of #95). Every worktree with a state

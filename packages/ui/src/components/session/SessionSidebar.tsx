@@ -900,13 +900,15 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         query={normalizedSessionSearchQuery}
       />
 
-      {/* Dedicated mobile: the new-session action floats above the session
-          list, docked to the sidebar bottom with a sidebar-toned fade so the
-          last rows stay readable underneath. Hidden while the bulk selection
+      {/* Dedicated mobile: the new-session action sits below the session list
+          (in flow, so its real height decides how much list is left) and
+          overlaps the list's last 2.5rem with a sidebar-toned fade: -mt-10
+          pulls it up by its own pt-10, and the tree scroller keeps pb-10, so
+          the last rows scroll clear of the buttons whatever is stacked here. Hidden while the bulk selection
           bar owns the bottom edge. The tablet sidebar keeps the SidebarNav
           control instead (mobileVariant is false there). */}
       {mobileVariant && !(selectionModeEnabled && hasSelection) ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex flex-col gap-2 bg-gradient-to-t from-sidebar via-sidebar/85 to-transparent px-4 pb-[calc(0.75rem+var(--oc-safe-area-bottom,0px))] pt-10">
+        <div className="pointer-events-none relative z-10 -mt-10 flex shrink-0 flex-col gap-2 bg-gradient-to-t from-sidebar via-sidebar/85 to-transparent px-4 pb-[calc(0.75rem+var(--oc-safe-area-bottom,0px))] pt-10">
           <BackgroundTasksMenu variant="mobile" />
           <Button
             type="button"
