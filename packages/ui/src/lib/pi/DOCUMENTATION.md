@@ -294,7 +294,10 @@ not `start` / `open`. Folder changes during that window do not bump
 `runtimeGeneration` and never dispose a soon-to-be-stream. The first-attach
 `open()` keeps `connection: 'loading'` while the cluster is genuinely
 uninitialized; it flips to `'ready'` once the list resolves, and the chat
-surfaces use that flag to gate the loader.
+surfaces use that flag to gate the loader. A rebuild that does bump
+`runtimeGeneration` (`open()`, or `connectWithoutProject()` after an error
+report) disposes the attached stream in the same step, because its callbacks
+are bound to the superseded generation.
 
 ### LRU eviction
 
