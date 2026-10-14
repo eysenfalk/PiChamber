@@ -11,6 +11,8 @@ import {
   type RemoteBrowserConnection,
   type RemoteBrowserPageState,
 } from '@/lib/browser/remoteBrowserClient';
+import { isCapacitorApp } from '@/lib/platform';
+import { subscribeRuntimeEndpointChanged, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
 import { cn } from '@/lib/utils';
 
 /** Pointer travel in CSS pixels before a touch becomes a scroll instead of a tap. */
@@ -31,10 +33,51 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 
 const EMPTY_STATE: RemoteBrowserPageState = { url: '', title: '', canGoBack: false, canGoForward: false, loading: false };
 
+const isDocumentVisible = (): boolean => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+
+/**
+ * Whether the app is in the foreground: the document visibility, and in the
+ * native shell also Capacitor's `appStateChange` (the same two signals the
+ * native chrome uses for pause and resume).
+ */
+const useAppForeground = (): boolean => {
+  const [documentVisible, setDocumentVisible] = React.useState(isDocumentVisible);
+  const [nativeActive, setNativeActive] = React.useState(true);
+
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const update = () => setDocumentVisible(isDocumentVisible());
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isCapacitorApp()) return;
+    let disposed = false;
+    let remove: (() => void) | null = null;
+    void import('@capacitor/app').then(async ({ App }) => {
+      if (disposed) return;
+      const handle = await App.addListener('appStateChange', ({ isActive }) => setNativeActive(isActive === true));
+      if (disposed) {
+        void handle.remove();
+        return;
+      }
+      remove = () => void handle.remove();
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      remove?.();
+    };
+  }, []);
+
+  return documentVisible && nativeActive;
+};
+
 type RemoteBrowserPaneProps = {
   /** Address to open once the remote page is connected. */
   initialUrl?: string;
-  /** The socket is open only while the pane is visible. */
+  /** The socket is open only while the pane is visible and the app is in the foreground. */
   visible: boolean;
   /** `touch` uses 36px toolbar targets (mobile drawer); `compact` matches the desktop context panel toolbar. */
   density?: 'touch' | 'compact';
@@ -53,6 +96,9 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
   const [addressDraft, setAddressDraft] = React.useState<string | null>(null);
   const [statusAttempt, setStatusAttempt] = React.useState(0);
   const [keyboardOpen, setKeyboardOpen] = React.useState(false);
+  const [endpointEpoch, setEndpointEpoch] = React.useState(0);
+  const foreground = useAppForeground();
+  const active = visible && foreground;
 
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
@@ -62,13 +108,31 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
   const hasFrameRef = React.useRef(false);
   const pendingUrlRef = React.useRef(initialUrl.trim());
   const pointerRef = React.useRef<PointerTrack | null>(null);
+  const backspaceSentRef = React.useRef(false);
   const scrollRef = React.useRef<{ x: number; y: number; deltaX: number; deltaY: number; frame: number | null }>({ x: 0, y: 0, deltaX: 0, deltaY: 0, frame: null });
 
   const isAvailable = availability.status === 'available';
 
-  // Status is read each time the pane becomes visible until the desktop app is found.
+  // A runtime endpoint switch (LAN/relay) releases the viewer before the switch;
+  // afterwards the status is read again at the new endpoint, which starts one new client.
   React.useEffect(() => {
-    if (!visible || isAvailable) return;
+    const unsubscribeWillChange = subscribeRuntimeEndpointWillChange(() => {
+      clientRef.current?.stop();
+      clientRef.current = null;
+    });
+    const unsubscribeChanged = subscribeRuntimeEndpointChanged(() => {
+      setAvailability({ status: 'checking' });
+      setEndpointEpoch((value) => value + 1);
+    });
+    return () => {
+      unsubscribeWillChange();
+      unsubscribeChanged();
+    };
+  }, []);
+
+  // Status is read each time the pane becomes active until the desktop app is found.
+  React.useEffect(() => {
+    if (!active || isAvailable) return;
     let cancelled = false;
     setAvailability({ status: 'checking' });
     fetchRemoteBrowserAvailability()
@@ -77,7 +141,7 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
         if (!cancelled) setAvailability({ status: 'error', message: error instanceof Error ? error.message : String(error) });
       });
     return () => { cancelled = true; };
-  }, [visible, isAvailable, statusAttempt]);
+  }, [active, isAvailable, statusAttempt, endpointEpoch]);
 
   const drawFrame = React.useCallback(async (jpeg: ArrayBuffer) => {
     const canvas = canvasRef.current;
@@ -97,7 +161,7 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
   }, []);
 
   React.useEffect(() => {
-    if (!visible || !isAvailable) return;
+    if (!active || !isAvailable) return;
     const client = new RemoteBrowserClient({
       onConnection: (next) => {
         setConnection(next);
@@ -117,11 +181,16 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
     clientRef.current = client;
     if (viewportRef.current) client.setViewport(viewportRef.current.width, viewportRef.current.height);
     client.start();
+    const pending = scrollRef.current;
     return () => {
       client.stop();
       if (clientRef.current === client) clientRef.current = null;
+      if (pending.frame !== null) cancelAnimationFrame(pending.frame);
+      pending.frame = null;
+      pending.deltaX = 0;
+      pending.deltaY = 0;
     };
-  }, [visible, isAvailable, drawFrame]);
+  }, [active, isAvailable, drawFrame, endpointEpoch]);
 
   // The page viewport follows the stage size in CSS pixels.
   React.useEffect(() => {
@@ -236,6 +305,7 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
     event.preventDefault();
     event.stopPropagation();
     flushInput();
+    backspaceSentRef.current = event.key === 'Backspace';
     clientRef.current?.send({ type: 'key', key: event.key });
   }, [flushInput]);
 
@@ -244,13 +314,24 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
     flushInput();
   }, [flushInput]);
 
-  const handleBeforeInput = React.useCallback((event: React.FormEvent<HTMLTextAreaElement>) => {
-    // Soft keyboards report Backspace on an empty field only as an input type.
-    const inputType = (event.nativeEvent as InputEvent).inputType;
-    if (inputType === 'deleteContentBackward' && !inputRef.current?.value) {
+  // Soft keyboards (IME) often report Backspace on the empty field only as a
+  // native `beforeinput` with `deleteContentBackward`, which React's
+  // `onBeforeInput` does not deliver, so the listener sits on the element.
+  React.useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const handleBeforeInput = (event: InputEvent) => {
+      if (event.inputType !== 'deleteContentBackward' || event.isComposing || input.value) return;
       event.preventDefault();
+      // The physical key path already sent this Backspace.
+      if (backspaceSentRef.current) {
+        backspaceSentRef.current = false;
+        return;
+      }
       clientRef.current?.send({ type: 'key', key: 'Backspace' });
-    }
+    };
+    input.addEventListener('beforeinput', handleBeforeInput);
+    return () => input.removeEventListener('beforeinput', handleBeforeInput);
   }, []);
 
   const toggleKeyboard = React.useCallback(() => {
@@ -392,7 +473,7 @@ export const RemoteBrowserPane: React.FC<RemoteBrowserPaneProps> = ({ initialUrl
           spellCheck={false}
           tabIndex={-1}
           onKeyDown={handleKeyDown}
-          onBeforeInput={handleBeforeInput}
+          onKeyUp={() => { backspaceSentRef.current = false; }}
           onInput={handleInput}
           onCompositionEnd={flushInput}
           onFocus={() => setKeyboardOpen(true)}
