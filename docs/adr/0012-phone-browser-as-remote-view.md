@@ -29,7 +29,7 @@ The owner approved the remote view on 2026-10-14 ("ja", quoted by the orchestrat
 - The phone reaches everything the laptop reaches, with the laptop's logins, and needs no new port or proxy.
 - Phone ergonomics are those of a remote view: tap, scroll, keyboard button, some latency, and frame bandwidth over the relay or Tailscale.
 - Sites that need camera, microphone, notifications or location do not get them in the PiChamber browser.
-- The iframe proxy browser is removed once the remote view ships (S4 of #163).
+- The iframe proxy browser is removed (#169). The preview proxy keeps its `allowExternal` path only to inline cross origin images into Preview screenshots; it no longer shows external pages.
 - A PiChamber UI session also reaches the owner's logged in sites; the remote browser routes therefore require UI auth like the terminal.
 
 ## Revisit when
