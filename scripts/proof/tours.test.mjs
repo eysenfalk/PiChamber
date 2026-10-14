@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
@@ -116,6 +116,17 @@ describe('tours.mjs format', () => {
     expect(evidence).toContainEqual({ selector: 'button[aria-label="Reset zoom"]', text: '125%' });
     expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/dark', 'desktop/light', 'desktop/light', 'desktop/light', 'mobile/light']);
     expect(() => htmlRenderTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('recreated-worktree closes a committed worktree, recreates it in the terminal and waits for its session without a reload', () => {
+    const manifest = { projects: [{ name: 'lab-one', path: '/one' }], worktrees: [{ project: 'lab-one', name: 'dirty-one', git: 'dirty' }, { project: 'lab-one', name: 'clean-one', git: 'ahead-behind' }],
+      sessions: [{ project: 'lab-one', worktree: 'dirty-one', title: 'Dirty', role: 'worktree' }, { project: 'lab-one', worktree: 'clean-one', title: 'Clean', role: 'worktree' }] };
+    const tour = recreatedWorktreeTour(manifest);
+    expect(tour.name).toBe('recreated-worktree');
+    const actions = tour.steps.flatMap(step => step.actions);
+    expect(actions.filter(action => action.type === 'navigate')).toHaveLength(1);
+    expect(actions).toContainEqual({ type: 'type', selector: '.xterm-screen', value: 'git -C /one worktree add /one-worktrees/clean-one clean-one' });
+    expect(tour.steps.at(-1).evidence).toEqual([{ selector: '[data-tree-node="w:/one-worktrees/clean-one"]' }, { selector: '[role="treeitem"][aria-label="Clean"]' }]);
+    expect(() => recreatedWorktreeTour({ ...manifest, worktrees: [] })).toThrow('Invalid lab seed manifest');
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
     const tour = addDeviceTour();
