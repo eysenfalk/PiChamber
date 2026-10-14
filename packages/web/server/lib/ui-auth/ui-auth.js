@@ -673,6 +673,12 @@ export const createUiAuth = ({
         if (clientAuth) return clientSessionToken(clientAuth);
         return ensureSessionToken(req, res);
       },
+      // Validated principal only: a URL token or client credential. Without a
+      // UI password nothing else counts; it never mints a session.
+      authenticateUpgradeRequest: async (req) => {
+        const clientAuth = await authenticateClientRequest(req);
+        return clientAuth ? clientSessionToken(clientAuth) : null;
+      },
       dispose: () => {
 
       },
@@ -1079,6 +1085,7 @@ export const createUiAuth = ({
     ensureSessionToken: async (req, _res) => {
       return resolveAuthenticatedSessionToken(req);
     },
+    authenticateUpgradeRequest: (req) => resolveAuthenticatedSessionToken(req),
     dispose,
   };
 };

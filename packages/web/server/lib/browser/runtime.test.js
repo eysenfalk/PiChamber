@@ -38,12 +38,12 @@ const createFakeHost = () => {
 };
 
 // Real ui-auth and origin gates on a real HTTP server, as in production.
-const startServer = async ({ remoteBrowserHost = null } = {}) => {
+const startServer = async ({ remoteBrowserHost = null, password = 'secret', timers } = {}) => {
   const { createUiAuth } = await import('../ui-auth/ui-auth.js');
   const { createRequestSecurityRuntime } = await import('../security/request-security.js');
   const { createBrowserRuntime } = await import('./runtime.js');
   const uiAuthController = createUiAuth({
-    password: 'secret',
+    password,
     clientAuthController: {
       authenticateBearerToken: async (token) => token === 'client-token' ? { ok: true, clientId: 'device-1' } : null,
     },
@@ -59,19 +59,22 @@ const startServer = async ({ remoteBrowserHost = null } = {}) => {
     remoteBrowserHost,
     isRequestOriginAllowed: security.isRequestOriginAllowed,
     rejectWebSocketUpgrade: security.rejectWebSocketUpgrade,
+    ...(timers ? { timers } : {}),
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const mintToken = async () => {
+  // Without `bearer` this mints like the desktop UI without a UI password:
+  // from the cookie session the server sets on that request.
+  const mintToken = async ({ bearer = true } = {}) => {
     const response = await fetch(`${base}/auth/url-token`, {
       method: 'POST',
-      headers: { authorization: 'Bearer client-token', accept: 'application/json' },
+      headers: { ...(bearer ? { authorization: 'Bearer client-token' } : {}), accept: 'application/json' },
     });
     return (await response.json()).token;
   };
-  const open = async ({ token, origin = base } = {}) => {
+  const open = async ({ token, origin = base, autoPong = true } = {}) => {
     const query = token ? `?oc_url_token=${encodeURIComponent(token)}` : '';
-    const socket = new WebSocket(`${base.replace('http', 'ws')}/api/browser/ws${query}`, { headers: { origin } });
+    const socket = new WebSocket(`${base.replace('http', 'ws')}/api/browser/ws${query}`, { headers: origin ? { origin } : {}, autoPong });
     socket.on('error', () => {});
     const messages = [];
     socket.on('message', (data, isBinary) => messages.push(isBinary ? { binary: Buffer.from(data) } : JSON.parse(String(data))));
@@ -111,6 +114,66 @@ describe('browser runtime', () => {
       expect((await harness.open({ token: 'oc_url_forged' })).status).toBe(401);
       expect((await harness.open({ token: await harness.mintToken(), origin: 'https://evil.example' })).status).toBe(403);
       expect(host.sessions).toHaveLength(0);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it('keeps auth and origin checks on a desktop without a UI password', async () => {
+    const host = createFakeHost();
+    const harness = await startServer({ remoteBrowserHost: host, password: '' });
+    try {
+      // No credential, even from the own UI origin.
+      expect((await harness.open()).status).toBe(401);
+      expect((await harness.open({ token: 'oc_url_forged' })).status).toBe(401);
+      // A page in any other browser tab on the laptop: valid token or not, its origin is foreign.
+      const token = await harness.mintToken({ bearer: false });
+      expect((await harness.open({ token, origin: 'https://evil.example' })).status).toBe(403);
+      expect((await harness.open({ token, origin: 'http://localhost:1' })).status).toBe(403);
+      expect((await harness.open({ token: await harness.mintToken({ bearer: false }), origin: null })).status).toBe(403);
+      expect(host.sessions).toHaveLength(0);
+
+      // The own UI: URL token minted from its session, and a paired client credential.
+      const own = await harness.open({ token: await harness.mintToken({ bearer: false }) });
+      expect(own.status).toBe(101);
+      const paired = await harness.open({ token: await harness.mintToken() });
+      expect(paired.status).toBe(101);
+      paired.socket.close();
+      await until(() => host.sessions.length === 2, 'attach');
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it('terminates a client that stops answering heartbeats and detaches it', async () => {
+    const ticks = [];
+    const timers = { setInterval: (callback) => { ticks.push(callback); return ticks.length; }, clearInterval: () => {} };
+    const host = createFakeHost();
+    const harness = await startServer({ remoteBrowserHost: host, timers });
+    try {
+      // A client that answers survives any number of beats.
+      const answering = await harness.open({ token: await harness.mintToken() });
+      await until(() => ticks.length === 1, 'heartbeat 1');
+      for (let i = 0; i < 3; i += 1) {
+        ticks[0]();
+        await wait(50);
+      }
+      expect(answering.socket.readyState).toBe(WebSocket.OPEN);
+      expect(host.sessions[0].detached).toBe(false);
+      answering.socket.close();
+      await until(() => host.sessions[0].detached, 'answering detach');
+
+      // A silent client: the first beat pings, the next one terminates it,
+      // and the normal close path detaches the viewer from the host.
+      const silent = await harness.open({ token: await harness.mintToken(), autoPong: false });
+      await until(() => ticks.length === 2 && host.sessions.length === 2, 'heartbeat 2');
+      const silentClosed = new Promise((resolve) => silent.socket.once('close', (code) => resolve(code)));
+      ticks[1]();
+      await wait(50);
+      expect(host.sessions[1].detached).toBe(false);
+      ticks[1]();
+      expect(await silentClosed).toBe(1006);
+      await until(() => host.sessions[1].detached, 'silent detach');
     } finally {
       await harness.stop();
     }

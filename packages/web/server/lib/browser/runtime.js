@@ -12,7 +12,7 @@ const BROWSER_REPLACED_CLOSE_CODE = 4001;
  * `remoteBrowserHost` is injected by the Electron shell and is null in every
  * other runtime, which then reports `desktop-app-required`.
  */
-export function createBrowserRuntime({ app, server, uiAuthController, isRequestOriginAllowed, rejectWebSocketUpgrade, remoteBrowserHost = null, liveRevocation = null }) {
+export function createBrowserRuntime({ app, server, uiAuthController, isRequestOriginAllowed, rejectWebSocketUpgrade, remoteBrowserHost = null, liveRevocation = null, timers = { setInterval, clearInterval } }) {
   app.get('/api/browser/status', (_req, res) => {
     res.json(remoteBrowserHost ? { available: true } : { available: false, reason: 'desktop-app-required' });
   });
@@ -32,8 +32,16 @@ export function createBrowserRuntime({ app, server, uiAuthController, isRequestO
       onState: (state) => emit({ type: 'state', ...state }),
       onNotice: (notice) => emit({ type: 'notice', notice }),
     });
-    const heartbeat = setInterval(() => { try { socket.ping(); } catch {} }, HEARTBEAT_MS);
-    heartbeat.unref?.();
+    // A client that misses one heartbeat is gone (phone switched networks);
+    // terminate() runs the normal close path, which detaches the viewer.
+    let alive = true;
+    socket.on('pong', () => { alive = true; });
+    const heartbeat = timers.setInterval(() => {
+      if (!alive) { socket.terminate(); return; }
+      alive = false;
+      try { socket.ping(); } catch {}
+    }, HEARTBEAT_MS);
+    heartbeat?.unref?.();
 
     socket.on('message', (raw, isBinary) => {
       try {
@@ -44,7 +52,7 @@ export function createBrowserRuntime({ app, server, uiAuthController, isRequestO
       }
     });
     socket.once('close', () => {
-      clearInterval(heartbeat);
+      timers.clearInterval(heartbeat);
       if (active === socket) active = null;
       session.detach();
     });
@@ -72,22 +80,21 @@ export function createBrowserRuntime({ app, server, uiAuthController, isRequestO
     if (parseRequestPathname(req.url) !== BROWSER_WS_PATH) return;
     void (async () => {
       try {
-        let principal = null;
         let generation;
         try {
           if (typeof liveRevocation?.getGeneration === 'function') generation = liveRevocation.getGeneration();
         } catch {
           generation = undefined;
         }
-        if (uiAuthController?.enabled) {
-          principal = await uiAuthController.ensureSessionToken(req, null);
-          if (!principal) { rejectWebSocketUpgrade(socket, 401, 'UI authentication required'); return; }
-          if (!await isRequestOriginAllowed(req)) { rejectWebSocketUpgrade(socket, 403, 'Invalid origin'); return; }
-        }
+        // Auth and origin hold in every mode, also on a desktop without a UI
+        // password: the page behind this socket is the owner's logged in browser.
+        const principal = await uiAuthController?.authenticateUpgradeRequest?.(req) ?? null;
+        if (!principal) { rejectWebSocketUpgrade(socket, 401, 'UI authentication required'); return; }
+        if (!await isRequestOriginAllowed(req)) { rejectWebSocketUpgrade(socket, 403, 'Invalid origin'); return; }
         if (!remoteBrowserHost) { rejectWebSocketUpgrade(socket, 503, 'The remote browser requires the desktop app'); return; }
         if (!wsServer) { rejectWebSocketUpgrade(socket, 503, 'Browser WebSocket unavailable'); return; }
         const tracked = trackUpgradePrincipal(socket, principal, generation);
-        if (principal && tracked && tracked.active === false) return;
+        if (tracked && tracked.active === false) return;
         wsServer.handleUpgrade(req, socket, head, (ws) => wsServer.emit('connection', ws, req));
       } catch { rejectWebSocketUpgrade(socket, 500, 'Upgrade failed'); }
     })();

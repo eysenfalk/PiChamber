@@ -39,6 +39,7 @@ Signing-secret topology: the JWT secret is read once at startup (env override or
   - `handlePasskeyRevoke(req, res)`
   - `handleResetAuth(req, res)` — global sign-out: rotates the signing secret AND closes all tracked live connections; 400 without side effects while `PICHAMBER_JWT_SECRET` is set
   - `ensureSessionToken(req, res)`
+  - `authenticateUpgradeRequest(req)` — validated principal or null, in both modes; without a UI password only a URL token or client credential counts and no session is minted. Used by the remote browser socket.
   - `dispose()`
 
 ## Public exports (ui-passkeys.js)
