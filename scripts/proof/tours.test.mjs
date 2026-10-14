@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
@@ -104,6 +104,18 @@ describe('tours.mjs format', () => {
     expect(evidence.some(item => item.selector?.startsWith('.chat-message-column '))).toBe(true);
     expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'mobile/light', 'desktop/light', 'desktop/light', 'desktop/dark', 'mobile/dark']);
     expect(() => extensionMessagesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('html-render sends RENDER in the seeded session and proves the sandboxed frame, the zoom dialog, a reload and mobile', () => {
+    const tour = htmlRenderTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Render', role: 'html-render' }] });
+    expect(tour.name).toBe('html-render');
+    expect(tour.steps[0].actions).toContainEqual({ type: 'type', selector: '[data-chat-input="true"] .cm-content', value: 'RENDER' });
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    // Never allow-same-origin: the evidence pins the exact sandbox of the inline and the maximized frame.
+    expect(evidence).toContainEqual({ selector: '[data-html-render-id] iframe[sandbox="allow-scripts allow-forms"]' });
+    expect(evidence).toContainEqual({ selector: '[role="dialog"] iframe[sandbox="allow-scripts allow-forms"]' });
+    expect(evidence).toContainEqual({ selector: 'button[aria-label="Reset zoom"]', text: '125%' });
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/dark', 'desktop/light', 'desktop/light', 'mobile/light']);
+    expect(() => htmlRenderTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
     const tour = addDeviceTour();

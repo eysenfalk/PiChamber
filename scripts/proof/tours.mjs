@@ -1,4 +1,4 @@
-import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
+import { LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -335,6 +335,41 @@ export function extensionMessagesTour(manifest) {
       evidence: [{ selector: `html.dark ${message} code`, text: 'bun run test' }] },
     { caption: 'In the hosted mobile layout the rows stay inside the column.', viewport: 'mobile', theme: 'dark',
       actions: openMobile, evidence: [rows[0], rows[1]] },
+  ] });
+}
+
+/** Issue #155: the faux model calls html_render; the page shows inline, maximized with zoom, after a reload and on mobile. */
+export function htmlRenderTour(manifest) {
+  const session = manifest?.sessions?.find(candidate => candidate.role === 'html-render');
+  const project = manifest?.projects?.find(candidate => candidate.name === session?.project);
+  if (!session || !nonempty(session.title) || !project) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const item = `[role="treeitem"][aria-label="${session.title}"]`;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const sandbox = 'iframe[sandbox="allow-scripts allow-forms"]';
+  const frame = `[data-html-render-id] ${sandbox}`;
+  const reply = { text: LAB_HTML_RENDER_REPLY };
+  // The page loads inside the frame after its URL is minted; give it time to paint before the screenshot.
+  const settle = [{ type: 'wait', selector: frame }, { type: 'scroll', selector: '[data-html-render-id]' }, { type: 'wait', ms: 1500 }];
+  return validateTour({ name: 'html-render', steps: [
+    { caption: `"${session.title}" runs on the lab model. RENDER makes it call html_render, and the page "${LAB_HTML_RENDER_TITLE}" shows inline in the answer, in the app theme.`,
+      viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label }, { type: 'wait', selector: item },
+        { type: 'click', selector: item }, { type: 'wait', selector: composer }, { type: 'type', selector: composer, value: 'RENDER' },
+        { type: 'press', key: 'Enter' }, { type: 'wait', text: reply.text }, ...settle],
+      evidence: [{ selector: frame }, reply] },
+    { caption: 'In dark theme the page follows the app colors.', viewport: 'desktop', theme: 'dark', actions: [{ type: 'wait', ms: 1500 }],
+      evidence: [{ selector: `html.dark ${frame}` }, reply] },
+    { caption: 'Open full screen shows the page in a dialog; Zoom in sets 125 %.', viewport: 'desktop', theme: 'light',
+      actions: [...settle, { type: 'hover', selector: '[data-html-render-id]' }, { type: 'click', selector: 'button[aria-label="Open full screen"]' },
+        { type: 'wait', selector: `[role="dialog"] ${sandbox}` }, { type: 'click', selector: 'button[aria-label="Zoom in"]' }, { type: 'wait', ms: 1500 }],
+      evidence: [{ selector: `[role="dialog"] ${sandbox}` }, { selector: 'button[aria-label="Reset zoom"]', text: '125%' }] },
+    { caption: 'After a reload the page comes back from the stored session.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: item }, { type: 'click', selector: item }, { type: 'wait', text: reply.text }, ...settle],
+      evidence: [{ selector: frame }, reply] },
+    { caption: 'The hosted mobile layout shows the same page inline.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', text: reply.text }, ...settle],
+      evidence: [{ selector: frame }] },
   ] });
 }
 

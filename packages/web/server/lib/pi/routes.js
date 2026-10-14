@@ -27,6 +27,8 @@ import { createPiUiSettingsStore } from './ui-settings-store.js';
 import { createPiSnippetsStore } from './snippets-store.js';
 import { createOrchestrationCredentialStore } from '../client-auth/orchestration-credentials.js';
 import { registerOrchestrationMcpRoute } from './mcp-route.js';
+import { createHtmlRenderStore, isHtmlRenderId } from './html-render/store.js';
+import { createHtmlRenderUrlSigner } from './html-render/signed-url.js';
 import { isValidSendOperationId, isValidStreamEpoch } from './session-daemon/send-operation-registry.js';
 import {
   DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
@@ -855,6 +857,8 @@ export const registerPiRuntimeRoutes = (app, {
   uiSettingsStore = createPiUiSettingsStore(),
   snippetsStore = createPiSnippetsStore(),
   orchestrationCredentialStore = createOrchestrationCredentialStore(),
+  htmlRenderStore = createHtmlRenderStore(),
+  htmlRenderUrlSigner = createHtmlRenderUrlSigner(),
   listCustomThemes = listPiCustomThemes,
   updateChecker = checkForUpdates,
   updateLauncher = launchUpdateCommand,
@@ -1724,6 +1728,54 @@ export const registerPiRuntimeRoutes = (app, {
       orchestrationCredentialStore.revokeSession(req.params.sessionId);
       res.status(204).end();
     }
+  });
+
+  // html_render pages (#155). An authenticated client mints a short-lived URL
+  // signed for one stored page; the sandboxed frame loads it without app
+  // credentials, and the response itself carries the sandbox CSP.
+  app.post('/api/pi/sessions/:sessionId/html-renders/:renderId/url', async (req, res) => {
+    const { sessionId, renderId } = req.params;
+    res.setHeader('Cache-Control', 'no-store');
+    if (!isHtmlRenderId(sessionId) || !isHtmlRenderId(renderId)) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      if (!await htmlRenderStore.read(sessionId, renderId)) {
+        res.status(404).json({ error: { code: 'HTML_RENDER_NOT_FOUND' } });
+        return;
+      }
+    } catch {
+      res.status(500).json({ error: { code: 'HTML_RENDER_UNREADABLE' } });
+      return;
+    }
+    res.json(htmlRenderUrlSigner.mint(sessionId, renderId));
+  });
+
+  app.get('/api/pi/html-renders/:sessionId/:renderId', async (req, res) => {
+    const { sessionId, renderId } = req.params;
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    if (!isHtmlRenderId(sessionId) || !isHtmlRenderId(renderId)
+      || !htmlRenderUrlSigner.verify(sessionId, renderId, req.query.expires, req.query.sig)) {
+      res.status(403).type('text/plain').send('This page link is invalid or has expired.');
+      return;
+    }
+    let page;
+    try {
+      page = await htmlRenderStore.read(sessionId, renderId);
+    } catch {
+      res.status(500).type('text/plain').send('The page could not be read.');
+      return;
+    }
+    if (!page) {
+      res.status(404).type('text/plain').send('The page no longer exists.');
+      return;
+    }
+    res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-downloads');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(page);
   });
 
   // Mints an MCP credential that acts as this one session (Adapter B). Only an

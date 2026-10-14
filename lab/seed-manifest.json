@@ -15,7 +15,8 @@
     { "title": "Lab: quick chat", "role": "chat" },
     { "folder": "scratch", "title": "Lab: scratch notes", "role": "foreign" },
     { "project": "lab-alpha", "title": "Lab: orchestrator", "role": "orchestrator" },
-    { "project": "lab-beta", "title": "Lab: extension messages", "role": "extensions" }
+    { "project": "lab-beta", "title": "Lab: extension messages", "role": "extensions" },
+    { "project": "lab-gamma", "title": "Lab: html render", "role": "html-render" }
   ],
   "worktrees": [
     { "project": "lab-alpha", "name": "sidebar-tree", "git": "dirty" },

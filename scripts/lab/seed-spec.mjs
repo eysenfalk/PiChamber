@@ -22,6 +22,8 @@ export const SEED_MANIFEST = {
     { project: 'lab-alpha', title: 'Lab: orchestrator', role: 'orchestrator' },
     // Issue #147: a session full of Pi custom messages (intercom, subagent notices, an unknown extension).
     { project: 'lab-beta', title: 'Lab: extension messages', role: 'extensions' },
+    // Issue #155: a session on the faux model that calls html_render when the tour sends RENDER.
+    { project: 'lab-gamma', title: 'Lab: html render', role: 'html-render' },
   ],
   // Linked worktrees of a project, checked out next to it as <project>-worktrees/<name>.
   // `git` is the state the git pills show (slice 5 of #95). Every worktree with a state
