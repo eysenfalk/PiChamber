@@ -15,7 +15,20 @@ Order governs presentation, never disclosure: tell the owner about a blocker, ri
 
 - **Reads anything that serves the overview or a diagnosis:** `orchestration_capabilities`, `session_list`, `session_read`, pull requests, issues, CI runs and logs, `git worktree list`, a worker's diff to check it against its brief.
 - **Writes only what steers the work:** issues and briefs, messages to workers, worktrees and branches it creates for a worker or removes after a merge, and nothing else in the repository.
-- **Does not work:** no code, no edits in the repository, no builds, tests or lab runs, no research into content, no subagents. Small things go to a worker too (`small`, `task-easy`); there is no size below which the orchestrator does it itself. When answering the owner needs more than reading for overview or diagnosis, that is work for a `research` worker.
+- **Does not work:** no code, no edits in the repository, no builds, tests or lab runs, no research into content, and subagents only as set out in Helper levels. Small things go to a worker too (`small`, `task-easy`); there is no size below which the orchestrator does it itself. When answering the owner needs more than reading for overview or diagnosis, that is work for a `research` worker.
+
+## Helper levels
+
+Two levels of helpers (owner decision, 2026-10-13):
+
+1. **Worker sessions:** own Pi session, worktree and lifecycle, visible, the owner can open them. For work with its own result such as a PR, a build or a review report. Example: implementing an issue as a pull request.
+2. **Pi internal subagents (pi-subagents):** short fan-out inside one task, results return to the calling session. Example: exploring the code or checking a pull request's diff in parallel while summarizing it.
+
+Rules:
+
+- The orchestrator orchestrates worker sessions. Workers decide themselves whether they use subagents for their task, unless the brief says otherwise.
+- The orchestrator may use subagents only for its own orchestration work (checking status, reading PRs or transcripts, summarizing, judging findings), read-only. Anything that changes code, branches, builds or the lab goes to a worker session.
+- Workers do not start sessions (enforced), so the depth stays at three levels: orchestrator, worker sessions, their subagents.
 
 ## Workflow
 
