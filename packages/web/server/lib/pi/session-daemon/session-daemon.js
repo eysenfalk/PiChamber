@@ -276,6 +276,15 @@ export function createSessionDaemon({
       return { released: false };
     }
   };
+  // Every runtime of this daemon holds a session under the same lease, so a
+  // start that failed releases it only while no other runtime owns the
+  // session and no open of it is in flight (#164).
+  const releaseUnownedLease = async (lease) => {
+    if (runtimeRegistry?.findBySessionId(lease.sessionId) || activateInflightBySessionId.has(lease.sessionId)) {
+      return { released: false };
+    }
+    return releaseResidentLease(lease);
+  };
   let runtimeRegistry;
   let runtimeStartPromise;
   let idleDisposeTimer;
@@ -734,11 +743,14 @@ export function createSessionDaemon({
   // resident lease is acquired and the dispose-first cleanup rejects,
   // ownership stays held. One entry per session,
   // `{ runtime, cwd, sessionId }`, retried by delete (per-session) or stop
-  // (all sessions). Disposal is attempted first and the lease is released
-  // only after successful disposal; a failed retry stays pending without
-  // releasing ownership. Entries are removed only when the drained object
-  // is still current, so a newer owner's record is never erased. The
-  // failed runtime is never registered and never installs dormant state.
+  // (all sessions). The default runtime start keeps a runtime that lost
+  // the race for its session here the same way. Disposal is attempted first
+  // and the lease is released only after successful disposal, and only when
+  // no other runtime of this daemon owns the session; a failed retry stays
+  // pending without releasing ownership. Entries are removed only when the
+  // drained object is still current, so a newer owner's record is never
+  // erased. The failed runtime is never registered and never installs
+  // dormant state.
   const pendingFailedCreateCleanups = new Map();
   const pendingFailedCreateDraining = new Set();
   const drainPendingFailedCreateCleanup = async (sessionId) => {
@@ -752,7 +764,7 @@ export function createSessionDaemon({
       } catch {
         return false;
       }
-      await releaseResidentLease({ cwd: pending.cwd, sessionId: pending.sessionId });
+      await releaseUnownedLease({ cwd: pending.cwd, sessionId: pending.sessionId });
       if (pendingFailedCreateCleanups.get(sessionId) === pending) {
         pendingFailedCreateCleanups.delete(sessionId);
       }
@@ -842,7 +854,7 @@ export function createSessionDaemon({
     try {
       newRuntime = await createRuntime({ cwd: runtimeCwd, agentDir, ...(reopen ? { sessionFile: reopen.sessionFile } : {}) });
     } catch (error) {
-      if (reopen) await releaseResidentLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
+      if (reopen) await releaseUnownedLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
       throw error;
     }
     if (!newRuntime.cwd) {
@@ -856,13 +868,22 @@ export function createSessionDaemon({
     try {
       runtimeRegistry.register(newRuntime, { cwd: runtimeCwd });
     } catch (error) {
-      // A failed start leaves no runtime behind. A runtime that won a race
-      // for the same session keeps its lease and becomes the default.
-      try { await newRuntime.dispose?.(); } catch { /* the registration error stays authoritative */ }
-      const winner = error?.code === 'SESSION_RUNTIME_CONFLICT'
-        && runtimeRegistry.findBySessionId(newRuntime.session?.sessionId);
+      // A runtime that won a race for the same session keeps its lease and
+      // becomes the default. This start's runtime is disposed; if that fails
+      // it stays pending, still holding the lease, for delete or stop to retry.
+      const sessionId = newRuntime.session?.sessionId;
+      let disposed = false;
+      try {
+        await newRuntime.dispose?.();
+        disposed = true;
+      } catch {
+        if (typeof sessionId === 'string' && sessionId.length > 0) {
+          pendingFailedCreateCleanups.set(sessionId, { runtime: newRuntime, cwd: runtimeCwd, sessionId });
+        }
+      }
+      const winner = error?.code === 'SESSION_RUNTIME_CONFLICT' && runtimeRegistry.findBySessionId(sessionId);
       if (winner) return setDefaultRuntime(winner);
-      if (reopen) await releaseResidentLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
+      if (reopen && disposed) await releaseUnownedLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
       throw error;
     }
     return setDefaultRuntime(newRuntime, runtimeCwd);

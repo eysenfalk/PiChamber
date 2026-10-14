@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { createSessionDaemon } from './session-daemon.js';
 import { getPiSessionDirectory } from './session-jsonl.js';
+import { readSessionLeaseOwner, resolveSessionLeaseFile } from './session-lease.js';
 
 /**
  * Regression coverage for the daemon's default runtime (#164, #171).
@@ -20,9 +21,11 @@ import { getPiSessionDirectory } from './session-jsonl.js';
  *
  * The fake runtime factory rejects a working directory that does not exist,
  * like the Pi SDK does ("Stored session working directory does not exist").
+ * The daemon has a real identity, so session leases are taken for real.
  */
 
 const credential = 'default-runtime-regression-secret';
+const daemonId = 'default-runtime-daemon';
 
 const testDaemonEndpoint = (root) => {
   if (process.platform === 'win32') return `\\\\.\\pipe\\pichamber-default-runtime-${process.pid}-${Math.random().toString(16).slice(2)}`;
@@ -142,6 +145,11 @@ class FakeRuntime {
   }
 
   async dispose() {
+    this.disposeAttempts = (this.disposeAttempts ?? 0) + 1;
+    if (this.failNextDispose) {
+      this.failNextDispose = false;
+      throw new Error('temporary shutdown failure');
+    }
     this.disposed = true;
   }
 }
@@ -181,13 +189,24 @@ describe('default runtime after session deletion', () => {
       cwd: home,
       agentDir,
       idleTimeoutMs,
+      profileKey: 'default-runtime-profile',
+      serverInstanceId: 'default-runtime-server',
+      daemonId,
       createRuntime: async ({ cwd: runtimeCwd, sessionFile }) => {
         if (hold.enabled) await new Promise((resolve) => hold.pending.push(resolve));
+        if (hold.failNextCreate) {
+          hold.failNextCreate = false;
+          throw new Error('Pi runtime start failed');
+        }
         if (!existsSync(runtimeCwd)) throw new Error(`Stored session working directory does not exist: ${runtimeCwd}`);
         const sessionId = sessionFile
           ? JSON.parse(readFileSync(sessionFile, 'utf8').split('\n')[0]).id
           : `fresh-${freshSessions += 1}`;
         const created = new FakeRuntime({ cwd: runtimeCwd, session: new FakeSession(sessionId, sessionFile, runtimeCwd) });
+        if (hold.failDisposeOfNext) {
+          hold.failDisposeOfNext = false;
+          created.failNextDispose = true;
+        }
         runtimes.push({ sessionId, sessionFile, runtime: created });
         return created;
       },
@@ -266,29 +285,91 @@ describe('default runtime after session deletion', () => {
     expectProviders(await request('providers.list', {}));
   });
 
-  it('adopts the runtime that wins the race for the dormant session and disposes its own (#164)', async () => {
-    const { agentDir, runtimes, hold, request } = await setup({ idleTimeoutMs: 300 });
+  // Opens session-a and lets it go idle, so it is the dormant session. Then the
+  // default runtime reopens it while the same session is opened directly. Both
+  // runtime creates wait until the test releases them.
+  const raceForDormantSession = async () => {
+    const harness = await setup({ idleTimeoutMs: 300 });
+    const { agentDir, runtimes, hold, request } = harness;
     const project = join(tempRoot, 'project');
     await mkdir(project, { recursive: true });
     await writeSessionFile({ agentDir, cwd: project, sessionId: 'session-a' });
     expect((await request('sessions.open', { sessionId: 'session-a', directory: project })).ok).toBe(true);
-    await waitFor(() => runtimes[0]?.runtime.disposed, { message: 'idle disposal did not run' });
+    // Idle disposal clears the default runtime only after it released the
+    // lease, so wait until the lease and its lock are gone.
+    const { file: leaseFile } = resolveSessionLeaseFile({ agentDir, cwd: project, sessionId: 'session-a' });
+    await waitFor(
+      () => runtimes[0]?.runtime.disposed && !existsSync(leaseFile) && !existsSync(`${leaseFile}.lock`),
+      { message: 'idle disposal did not finish' },
+    );
 
-    // The default runtime reopens session-a while the same session is opened
-    // directly. The direct open registers first.
     hold.enabled = true;
     const providers = request('providers.list', {});
     await waitFor(() => hold.pending.length === 1, { message: 'default runtime start did not begin' });
     const opened = request('sessions.open', { sessionId: 'session-a', directory: project });
     await waitFor(() => hold.pending.length === 2, { message: 'session open did not begin' });
-    hold.pending[1]();
+    const [startDefault, finishOpen] = hold.pending;
+    const leaseOwner = () => readSessionLeaseOwner({ agentDir, cwd: project, sessionId: 'session-a' });
+    return { ...harness, project, providers, opened, startDefault, finishOpen, leaseOwner };
+  };
+
+  it('adopts the runtime that wins the race for the dormant session and disposes its own (#164)', async () => {
+    const { runtimes, providers, opened, startDefault, finishOpen, leaseOwner } = await raceForDormantSession();
+    finishOpen();
     expect((await opened).ok).toBe(true);
-    hold.pending[0]();
+    startDefault();
 
     expectProviders(await providers);
     const [winner, duplicate] = runtimes.slice(1);
     expect(runtimes).toHaveLength(3);
     expect(winner.runtime.disposed).toBe(false);
+    expect(duplicate.runtime.disposed).toBe(true);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+  });
+
+  it('keeps the lease of the runtime that won the race when the competing default start fails (#164)', async () => {
+    const { runtimes, project, providers, opened, startDefault, finishOpen, leaseOwner } = await raceForDormantSession();
+    finishOpen();
+    expect((await opened).ok).toBe(true);
+    // The removed directory makes the default start fail like the Pi SDK does.
+    await rm(project, { recursive: true, force: true });
+    startDefault();
+
+    expect((await providers).ok).toBe(false);
+    const [winner] = runtimes.slice(1);
+    expect(runtimes).toHaveLength(2);
+    expect(winner.runtime.disposed).toBe(false);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+  });
+
+  it('keeps the lease while the same session is still opening when the default start fails', async () => {
+    const { hold, providers, opened, startDefault, finishOpen, leaseOwner } = await raceForDormantSession();
+    hold.failNextCreate = true;
+    startDefault();
+
+    expect((await providers).ok).toBe(false);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+    finishOpen();
+    expect((await opened).ok).toBe(true);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+  });
+
+  it('keeps a losing runtime whose disposal failed, so stop disposes it', async () => {
+    const { runtimes, hold, providers, opened, startDefault, finishOpen, leaseOwner } = await raceForDormantSession();
+    finishOpen();
+    expect((await opened).ok).toBe(true);
+    hold.failDisposeOfNext = true;
+    startDefault();
+
+    expectProviders(await providers);
+    const [winner, duplicate] = runtimes.slice(1);
+    expect(runtimes).toHaveLength(3);
+    expect(winner.runtime.disposed).toBe(false);
+    expect(duplicate.runtime.disposeAttempts).toBe(1);
+    expect(await leaseOwner()).toMatchObject({ daemonId });
+
+    await daemon.stop();
+    expect(winner.runtime.disposed).toBe(true);
     expect(duplicate.runtime.disposed).toBe(true);
   });
 
