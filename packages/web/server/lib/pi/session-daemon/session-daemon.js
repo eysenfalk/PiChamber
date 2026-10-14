@@ -654,6 +654,18 @@ export function createSessionDaemon({
     };
   };
 
+  // The default runtime serves calls without a session id (providers, models,
+  // settings). The daemon reopens the dormant session once the default runtime
+  // is gone, so every switch of the default also records it as dormant.
+  // Otherwise the dormant session names an older session that may be live
+  // again or deleted (#164, #171).
+  const setDefaultRuntime = (target, directory = target.cwd) => {
+    runtime = target;
+    if (directory) activeDirectory = directory;
+    rememberRuntimeSession();
+    return target;
+  };
+
   const publishSnapshot = (socket, requestedSessionId, { resync = false } = {}) => {
     const targetRuntime = requestedSessionId ? runtimeRegistry?.findBySessionId(requestedSessionId) : runtime;
     const session = targetRuntime?.session
@@ -799,42 +811,67 @@ export function createSessionDaemon({
     }
   };
 
-  const startRuntime = async ({ cwd: runtimeCwd = activeDirectory || cwd, sessionFile } = {}) => {
-    if (sessionFile) await validatePiSessionJsonlFile(sessionFile);
-    const canonicalRuntimeCwd = sessionFile && dormantSession?.cwd
-      ? dormantSession.cwd
-      : runtimeCwd;
-    if (sessionFile && dormantSession?.sessionId) {
-      await acquireResidentLease({ cwd: canonicalRuntimeCwd, sessionId: dormantSession.sessionId });
+  // Pi refuses to start in a working directory that no longer exists, which is
+  // what a removed worktree leaves behind. Only ENOENT proves absence.
+  const isMissingPath = async (path) => {
+    try {
+      await stat(path);
+      return false;
+    } catch (error) {
+      return error?.code === 'ENOENT';
     }
+  };
+
+  // Starts the default runtime by reopening the dormant session. A dormant
+  // session that is live again is adopted instead of opened a second time, and
+  // one whose JSONL or working directory is gone is forgotten, so the default
+  // runtime starts fresh instead of failing every call that needs it.
+  const startRuntime = async (requestedCwd = activeDirectory || cwd) => {
+    let reopen = dormantSession?.sessionFile ? dormantSession : undefined;
+    const live = reopen && runtimeRegistry?.findBySessionId(reopen.sessionId);
+    if (live) return setDefaultRuntime(live);
+    if (reopen && ((await isMissingPath(reopen.sessionFile)) || (await isMissingPath(reopen.cwd)))) {
+      if (dormantSession === reopen) dormantSession = undefined;
+      reopen = undefined;
+    }
+    if (reopen) await validatePiSessionJsonlFile(reopen.sessionFile);
+    const runtimeCwd = reopen?.cwd
+      ?? ((requestedCwd !== cwd && (await isMissingPath(requestedCwd))) ? cwd : requestedCwd);
+    if (reopen) await acquireResidentLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
     let newRuntime;
     try {
-      newRuntime = await createRuntime({ cwd: canonicalRuntimeCwd, agentDir, ...(sessionFile ? { sessionFile } : {}) });
+      newRuntime = await createRuntime({ cwd: runtimeCwd, agentDir, ...(reopen ? { sessionFile: reopen.sessionFile } : {}) });
     } catch (error) {
-      if (sessionFile && dormantSession?.sessionId) {
-        await releaseResidentLease({ cwd: canonicalRuntimeCwd, sessionId: dormantSession.sessionId });
-      }
+      if (reopen) await releaseResidentLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
       throw error;
     }
     if (!newRuntime.cwd) {
-      newRuntime.cwd = canonicalRuntimeCwd;
+      newRuntime.cwd = runtimeCwd;
     }
     if (!runtimeRegistry) {
       runtimeRegistry = createSessionRuntimeRegistry({
         onSessionEvent: ({ cwd: eventCwd, sessionId: eventSessionId }, event) => publishSessionEvent(eventSessionId, event, eventCwd),
       });
     }
-    runtimeRegistry.register(newRuntime, { cwd: canonicalRuntimeCwd });
-    runtime = newRuntime;
-    activeDirectory = canonicalRuntimeCwd;
-    rememberRuntimeSession();
-    return newRuntime;
+    try {
+      runtimeRegistry.register(newRuntime, { cwd: runtimeCwd });
+    } catch (error) {
+      // A failed start leaves no runtime behind. A runtime that won a race
+      // for the same session keeps its lease and becomes the default.
+      try { await newRuntime.dispose?.(); } catch { /* the registration error stays authoritative */ }
+      const winner = error?.code === 'SESSION_RUNTIME_CONFLICT'
+        && runtimeRegistry.findBySessionId(newRuntime.session?.sessionId);
+      if (winner) return setDefaultRuntime(winner);
+      if (reopen) await releaseResidentLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
+      throw error;
+    }
+    return setDefaultRuntime(newRuntime, runtimeCwd);
   };
 
   const ensureRuntime = (targetCwd = activeDirectory || cwd) => {
     if (runtime) return Promise.resolve(runtime);
     if (!runtimeStartPromise) {
-      runtimeStartPromise = startRuntime({ cwd: targetCwd, sessionFile: dormantSession?.sessionFile }).finally(() => {
+      runtimeStartPromise = startRuntime(targetCwd).finally(() => {
         runtimeStartPromise = undefined;
       });
     }
@@ -1464,16 +1501,14 @@ export function createSessionDaemon({
         const targetDir = await resolveDirectory(requestedDirectory);
         const existing = runtimeRegistry.get({ cwd: targetDir, sessionId });
         if (existing) {
-          runtime = existing;
-          activeDirectory = targetDir;
+          setDefaultRuntime(existing, targetDir);
           return existing;
         }
       } catch {}
     }
     const existingAnywhere = runtimeRegistry.findBySessionId(sessionId);
     if (existingAnywhere) {
-      runtime = existingAnywhere;
-      if (existingAnywhere.cwd) activeDirectory = existingAnywhere.cwd;
+      setDefaultRuntime(existingAnywhere);
       return existingAnywhere;
     }
     const { target, directory } = await findPersistedSession(sessionId, requestedDirectory);
@@ -1492,8 +1527,7 @@ export function createSessionDaemon({
     const raced = runtimeRegistry.findBySessionId(sessionId);
     if (raced) {
       try { await newRuntime.dispose?.(); } catch { /* keep the winner */ }
-      runtime = raced;
-      if (raced.cwd) activeDirectory = raced.cwd;
+      setDefaultRuntime(raced);
       return raced;
     }
     try {
@@ -1504,17 +1538,14 @@ export function createSessionDaemon({
         const winner = runtimeRegistry.findBySessionId(sessionId)
           || runtimeRegistry.get({ cwd: directory, sessionId });
         if (winner) {
-          runtime = winner;
-          if (winner.cwd) activeDirectory = winner.cwd;
+          setDefaultRuntime(winner);
           return winner;
         }
       }
       await releaseResidentLease({ cwd: directory, sessionId });
       throw error;
     }
-    runtime = newRuntime;
-    activeDirectory = directory;
-    rememberRuntimeSession();
+    setDefaultRuntime(newRuntime, directory);
     return newRuntime;
   };
 
@@ -1981,11 +2012,7 @@ export function createSessionDaemon({
       throw error;
     }
     runtimeRegistry.register(newRuntime, { cwd: targetCwd });
-    if (!worker) {
-      runtime = newRuntime;
-      activeDirectory = targetCwd;
-      rememberRuntimeSession();
-    }
+    if (!worker) setDefaultRuntime(newRuntime, targetCwd);
     const created = projectActiveSession(newRuntime, targetCwd);
     const createdTitle = created.session.title
       || (typeof payload.title === 'string' ? payload.title.trim() : '')
@@ -3517,6 +3544,7 @@ export function createSessionDaemon({
       }
       messageEntryAliases.clearSession({ cwd: active?.cwd || targetDir, sessionId });
       await releaseResidentLease({ cwd: active?.cwd || targetDir, sessionId });
+      if (dormantSession?.sessionId === sessionId) dormantSession = undefined;
       retryStateBySession.delete(sessionId);
       compactionStateBySession.delete(sessionId);
       activeRunStartedAt.delete(sessionId);
