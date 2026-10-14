@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
@@ -92,6 +92,18 @@ describe('tours.mjs format', () => {
     expect(evidence).toContainEqual({ selector: '[data-orchestration-result]', index: 1 });
     expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toContain('mobile/dark');
     expect(() => orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('extension-messages opens the seeded session and proves the grouped rows and their Markdown', () => {
+    const tour = extensionMessagesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Extensions', role: 'extensions' }] });
+    expect(tour.name).toBe('extension-messages');
+    expect(tour.steps[0].actions).toContainEqual({ type: 'click', selector: '[role="treeitem"][aria-label="Extensions"]' });
+    // The first two steps prove only the seeded turns, so a build before #147 records the same view.
+    expect(tour.steps.slice(0, 2).flatMap(step => step.evidence).every(item => item.text && !item.selector)).toBe(true);
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ text: '9 Intercom messages' });
+    expect(evidence.some(item => item.selector?.startsWith('.chat-message-column '))).toBe(true);
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'mobile/light', 'desktop/light', 'desktop/light', 'desktop/dark', 'mobile/dark']);
+    expect(() => extensionMessagesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
     const tour = addDeviceTour();
