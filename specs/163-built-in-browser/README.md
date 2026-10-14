@@ -22,9 +22,9 @@ Each slice is its own pull request into `dev`, started after the previous one is
 | Slice | Content | State |
 |---|---|---|
 | [S1](slices/s1-desktop.md) | Desktop webview hardened by the main process, persistent login proven | merged, PR #166 |
-| [S2](slices/s2-remote-host.md) | Remote browser host in Electron, `/api/browser/*` routes, no UI | PR #168 |
-| [S3](slices/s3-remote-ui.md) | Remote view UI for Capacitor, hosted mobile and web | open |
-| [S4](slices/s4-cleanup.md) | Remove the iframe proxy browser, move rules into docs, delete this folder | open |
+| [S2](slices/s2-remote-host.md) | Remote browser host in Electron, `/api/browser/*` routes, no UI | merged, PR #168 |
+| [S3](slices/s3-remote-ui.md) | Remote view UI for Capacitor, hosted mobile and web; removes the iframe proxy browser pane | PR #169 |
+| [S4](slices/s4-cleanup.md) | Remove the remaining iframe proxy paths, move rules into docs, delete this folder | open |
 
 ## Single owner rules
 

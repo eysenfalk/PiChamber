@@ -1,7 +1,6 @@
 import { invokeDesktop } from '@/lib/desktop';
 import {
   formatPreviewAnnotationMarkdown,
-  getBrowserProxyTargetKey,
   getCachedProxyTarget,
   isPreviewElementMetadata,
   previewProxyTargetCache,
@@ -30,7 +29,6 @@ export type {
 
 export {
   formatPreviewAnnotationMarkdown,
-  getBrowserProxyTargetKey,
   getCachedProxyTarget,
   isPreviewElementMetadata,
   previewProxyTargetCache,
