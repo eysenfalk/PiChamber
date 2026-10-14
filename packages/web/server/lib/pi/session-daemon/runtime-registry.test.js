@@ -77,8 +77,19 @@ describe('Pi session runtime registry', () => {
 
     await expect(secondRuntime.replace({ cwd: '/projects/one', sessionId: 'session-one' })).rejects.toMatchObject({
       code: 'SESSION_RUNTIME_CONFLICT',
+      message: 'A Pi runtime already owns session session-one in directory /projects/one.',
     });
     expect(registry.size).toBe(2);
+  });
+
+  it('names the session and directory when a second runtime registers the same identity', () => {
+    const registry = createSessionRuntimeRegistry();
+    registry.register(new FakeRuntime({ cwd: '/projects/one', sessionId: 'session-one' }));
+
+    expect(() => registry.register(new FakeRuntime({ cwd: '/projects/one', sessionId: 'session-one' }))).toThrow(
+      'A Pi runtime already owns session session-one in directory /projects/one.',
+    );
+    expect(registry.size).toBe(1);
   });
 
   it('keeps a failed runtime tracked while disposing unrelated runtimes', async () => {

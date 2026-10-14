@@ -9,6 +9,11 @@ class SessionRuntimeRegistryError extends Error {
 
 const identityKey = ({ cwd, sessionId }) => JSON.stringify([cwd, sessionId]);
 
+const conflictError = ({ cwd, sessionId }) => new SessionRuntimeRegistryError(
+  'SESSION_RUNTIME_CONFLICT',
+  `A Pi runtime already owns session ${sessionId} in directory ${cwd}.`,
+);
+
 const getIdentity = (runtime, session, fallbackCwd) => {
   const cwd = typeof runtime?.cwd === 'string' && runtime.cwd.length > 0 ? runtime.cwd : fallbackCwd;
   const sessionId = session?.sessionId;
@@ -41,7 +46,7 @@ export function createSessionRuntimeRegistry({ onSessionEvent = () => {} } = {})
     const nextIdentity = getIdentity(record.runtime, session, record.identity.cwd);
     const conflictingRecord = recordsByKey.get(nextIdentity.key);
     if (conflictingRecord && conflictingRecord !== record) {
-      throw new SessionRuntimeRegistryError('SESSION_RUNTIME_CONFLICT', 'A Pi runtime already owns this session and directory.');
+      throw conflictError(nextIdentity);
     }
 
     record.unsubscribe?.();
@@ -58,7 +63,7 @@ export function createSessionRuntimeRegistry({ onSessionEvent = () => {} } = {})
     const identity = getIdentity(runtime, runtime?.session, cwd);
     const conflictingRecord = recordsByKey.get(identity.key);
     if (conflictingRecord && conflictingRecord.runtime !== runtime) {
-      throw new SessionRuntimeRegistryError('SESSION_RUNTIME_CONFLICT', 'A Pi runtime already owns this session and directory.');
+      throw conflictError(identity);
     }
 
     const record = { runtime, identity, session: undefined, unsubscribe: undefined };
