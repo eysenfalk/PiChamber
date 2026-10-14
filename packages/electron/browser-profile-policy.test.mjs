@@ -104,6 +104,27 @@ test('pages inside the webview cannot navigate the main frame to other schemes',
   assert.equal(allowed.defaultPrevented, false);
 });
 
+test('server redirects of the main frame cannot leave http and https', () => {
+  const contents = makeGuest();
+  const warnings = [];
+  guardWebviewNavigation(contents, { warn: (message) => warnings.push(message) });
+
+  // Electron passes the details on the event and, deprecated, as arguments.
+  const redirect = (url, isMainFrame = true) => {
+    const event = Object.assign(makeEvent(), { url, isMainFrame });
+    contents.emit('will-redirect', event, url, false, isMainFrame);
+    return event.defaultPrevented;
+  };
+
+  for (const url of ['pichamber-ui://app/test', 'file:///etc/passwd', 'data:text/html,x', 'chrome://gpu']) {
+    assert.equal(redirect(url), true, url);
+  }
+  assert.equal(redirect('https://accounts.example.com/callback'), false);
+  assert.equal(redirect('http://127.0.0.1:8080/after-login'), false);
+  assert.equal(warnings.length, 4);
+  assert.doesNotMatch(warnings.join(' '), /passwd|pichamber-ui/, 'the blocked URL is not logged');
+});
+
 test('the browser profile denies every permission except fullscreen and clipboard writes', () => {
   const handlers = {};
   applyBrowserSessionPolicy({

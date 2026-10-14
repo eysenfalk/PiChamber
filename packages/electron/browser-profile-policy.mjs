@@ -55,7 +55,8 @@ export const guardWebviewAttach = (contents, log) => {
 
 /**
  * Guards a <webview> guest: its main frame only loads http(s) or about:blank.
- * `will-navigate` covers page-initiated navigations. Loads requested by the
+ * `will-navigate` covers page-initiated navigations, `will-redirect` the
+ * server redirects of any main frame load. Loads requested by the
  * embedder (`<webview>.loadURL()` and `src` changes) reach the guest as
  * `guest.loadURL()` in this process and fire no `will-navigate`, so that
  * entry point gets the same rule.
@@ -65,6 +66,13 @@ export const guardWebviewNavigation = (contents, log) => {
     if (isAllowedBrowserUrl(url)) return;
     event.preventDefault();
     log?.warn?.('[browser] blocked a navigation with a disallowed scheme');
+  });
+
+  contents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
+    if (!(event.isMainFrame ?? isMainFrame)) return;
+    if (isAllowedBrowserUrl(event.url ?? url)) return;
+    event.preventDefault();
+    log?.warn?.('[browser] blocked a redirect with a disallowed scheme');
   });
 
   const loadURL = contents.loadURL.bind(contents);
