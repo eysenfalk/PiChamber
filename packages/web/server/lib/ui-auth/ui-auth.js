@@ -302,6 +302,7 @@ const isEventStreamRequest = (req) => {
 const URL_AUTH_WEBSOCKET_PATHS = new Set([
   '/api/terminal/ws',
   '/api/stt/ws',
+  '/api/browser/ws',
 ]);
 
 const isUrlAuthWebSocketPath = (pathname) => URL_AUTH_WEBSOCKET_PATHS.has(pathname);
@@ -671,6 +672,12 @@ export const createUiAuth = ({
         const clientAuth = await authenticateClientRequest(req);
         if (clientAuth) return clientSessionToken(clientAuth);
         return ensureSessionToken(req, res);
+      },
+      // Validated principal only: a URL token or client credential. Without a
+      // UI password nothing else counts; it never mints a session.
+      authenticateUpgradeRequest: async (req) => {
+        const clientAuth = await authenticateClientRequest(req);
+        return clientAuth ? clientSessionToken(clientAuth) : null;
       },
       dispose: () => {
 
@@ -1078,6 +1085,7 @@ export const createUiAuth = ({
     ensureSessionToken: async (req, _res) => {
       return resolveAuthenticatedSessionToken(req);
     },
+    authenticateUpgradeRequest: (req) => resolveAuthenticatedSessionToken(req),
     dispose,
   };
 };

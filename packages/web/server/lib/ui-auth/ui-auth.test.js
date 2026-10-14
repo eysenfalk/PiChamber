@@ -245,7 +245,7 @@ describe('ui auth client credential seam', () => {
     beforeRestart.dispose();
 
     const afterRestart = createUiAuth({ password: 'secret', clientAuthController });
-    for (const path of ['/api/terminal/ws', '/api/stt/ws']) {
+    for (const path of ['/api/terminal/ws', '/api/stt/ws', '/api/browser/ws']) {
       const websocketReq = {
         method: 'GET',
         path,
@@ -365,7 +365,7 @@ describe('ui auth live revocation', () => {
 
       // Revoke, then try to open with the token minted moments earlier.
       await remoteClientAuthRuntime.revokeClient(created.client.id);
-      for (const path of ['/api/terminal/ws', '/api/stt/ws']) {
+      for (const path of ['/api/terminal/ws', '/api/stt/ws', '/api/browser/ws']) {
         const openReq = {
           method: 'GET',
           path,
