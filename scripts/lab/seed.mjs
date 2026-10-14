@@ -7,7 +7,7 @@ import { SessionManager } from '../../packages/web/node_modules/@earendil-works/
 import { getPiSessionDirectory } from '../../packages/web/server/lib/pi/session-daemon/session-jsonl.js';
 
 import { SEED_MANIFEST } from './seed-spec.mjs';
-import { fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
+import { LAB_HTML_RENDER_PROMPT, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 export { SessionManager, SEED_MANIFEST };
 
 const usage = { input: 80, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 120,
@@ -316,6 +316,17 @@ async function seedTreeFixtures({ root, agentDir, now, projects, sessions }) {
         const directory = projects.find((candidate) => candidate.name === spec.project).path;
         const manager = seedExtensionMessages({ cwd: directory, sessionDir: getPiSessionDirectory({ cwd: directory, agentDir }), title: spec.title, createdAt: at });
         created.push({ path: manager.getSessionFile(), modified: at + 61000 });
+        sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory });
+        continue;
+      }
+      if (spec.role === 'html-render') {
+        const directory = projects.find((candidate) => candidate.name === spec.project).path;
+        const manager = SessionManager.create(directory, getPiSessionDirectory({ cwd: directory, agentDir }));
+        manager.appendModelChange('faux', 'faux-1');
+        manager.appendSessionInfo(spec.title);
+        manager.appendMessage({ role: 'user', content: 'Show me the build report when I ask.', timestamp: at });
+        manager.appendMessage(assistant(LAB_HTML_RENDER_PROMPT, at + 1000));
+        created.push({ path: manager.getSessionFile(), modified: at + 1000 });
         sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory });
         continue;
       }

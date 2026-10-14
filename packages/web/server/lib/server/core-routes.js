@@ -1,5 +1,6 @@
 import { buildDirectPairingCandidates, normalizeCandidateUrl } from './pairing-candidates.js';
 import { isOrchestrationMcpRequest } from '../client-auth/orchestration-credentials.js';
+import { isSignedHtmlRenderRequest } from '../pi/html-render/signed-url.js';
 
 const parseLoopbackUrl = (rawUrl) => {
   if (typeof rawUrl !== 'string') {
@@ -654,6 +655,11 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     // scoped, hashed, expiring) and open `/api/pi/mcp` only. Local clients
     // only: a tunnel request still needs a tunnel session first.
     if (isOrchestrationMcpRequest(getRequestPathname(req), req)) {
+      return next();
+    }
+    // A sandboxed html_render frame loads its page from a URL signed for that
+    // one page; the route verifies the signature and expiry.
+    if (isSignedHtmlRenderRequest(getRequestPathname(req), req)) {
       return next();
     }
     return uiAuthController.requireAuth(req, res, next);

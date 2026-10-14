@@ -16,6 +16,26 @@ export function resolveFauxUrl() {
 }
 
 export const LAB_WORKER_TITLE = 'Lab: worker';
+// Issue #155: the html-render session answers RENDER with a real html_render call.
+export const LAB_HTML_RENDER_PROMPT = 'Scripted lab model: send RENDER for the build report page.';
+export const LAB_HTML_RENDER_TITLE = 'Lab: build report';
+export const LAB_HTML_RENDER_REPLY = 'All three checks passed; the slowest was the lab build.';
+// A self-contained page in the theme the client passes. Its script proves that it
+// runs and that the sandbox denies it the parent document.
+const LAB_HTML_RENDER_PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;padding:16px;font-family:var(--font-sans);background:var(--background);color:var(--foreground)}
+h1{margin:0 0 4px;font-size:18px}p{margin:0 0 12px;color:var(--muted-foreground);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;border-bottom:1px solid var(--border);text-align:left}
+.ok{color:var(--success)}.bar{height:8px;border-radius:4px;background:var(--primary)}
+#probe{margin-top:12px;padding:8px;border-radius:var(--radius);background:var(--muted);font-family:var(--font-mono);font-size:12px}
+</style></head><body><h1>Build report</h1><p>Rendered by the html_render tool on the lab model.</p>
+<table><tr><th>Check</th><th>Result</th><th>Time</th><th style="width:40%"></th></tr>
+<tr><td>Lint</td><td class="ok">passed</td><td>12 s</td><td><div class="bar" style="width:30%"></div></td></tr>
+<tr><td>Unit tests</td><td class="ok">passed</td><td>18 s</td><td><div class="bar" style="width:45%"></div></td></tr>
+<tr><td>Lab build</td><td class="ok">passed</td><td>40 s</td><td><div class="bar" style="width:100%"></div></td></tr></table>
+<div id="probe">Script: not run</div>
+<script>var t='Script: ran. Parent document: ';try{t+=parent.document?'readable':'readable'}catch(e){t+='blocked'}document.getElementById('probe').textContent=t;</script>
+</body></html>`;
 // Long enough for the owner to ask the orchestrator something while the worker runs.
 const WORKER_THINK_MS = 10000;
 
@@ -31,6 +51,10 @@ const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 const respond = async (context) => {
   const last = (context.messages ?? []).filter((message) => message.role !== 'system').at(-1);
   const text = textOf(last).trim();
+  if (last?.role === 'toolResult' && last.toolName === 'html_render') return fauxAssistantMessage(last.isError ? 'The page failed: ' + textOf(last) : ${JSON.stringify(LAB_HTML_RENDER_REPLY)});
+  if (text === 'RENDER') {
+    return fauxAssistantMessage([fauxToolCall('html_render', { title: ${JSON.stringify(LAB_HTML_RENDER_TITLE)}, html: ${JSON.stringify(LAB_HTML_RENDER_PAGE)} })], { stopReason: 'toolUse' });
+  }
   if (last?.role === 'toolResult') return fauxAssistantMessage('The worker "${LAB_WORKER_TITLE}" is running. I stay available while it works.');
   if (text.startsWith('Worker "')) {
     return fauxAssistantMessage(text.includes('WORKER DONE')
@@ -52,7 +76,7 @@ const respond = async (context) => {
       clientRequestId: 'lab-spawn-' + Date.now(),
     })], { stopReason: 'toolUse' });
   }
-  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS or GO.');
+  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO or RENDER.');
 };
 
 export default function (pi) {

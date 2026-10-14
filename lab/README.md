@@ -13,6 +13,7 @@ lab/run record add-device    # Add a device dialog without Tailscale, in .proof/
 lab/run record sidebar-tree  # Workspace tree: Chats, worktrees, fork chain, other folders, in .proof/sidebar-tree/
 lab/run record orchestration # Orchestrator spawns a worker on the faux model (#107), in .proof/orchestration/
 lab/run record extension-messages # Custom messages as compact grouped rows (#147), in .proof/extension-messages/
+lab/run record html-render  # The faux model calls html_render; page inline, maximized, reloaded, mobile (#155), in .proof/html-render/
 lab/run down                # removes pod, internal network and lab state volume
 ```
 
