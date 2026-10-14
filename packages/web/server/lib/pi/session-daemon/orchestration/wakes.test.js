@@ -199,6 +199,42 @@ describe('orchestration wakes', () => {
     expect(orch.orch.sent).toHaveLength(0);
   });
 
+  describe('quiet workers (#156)', () => {
+    it('lets only done, blockers, ready, CI results and pull request ends through', async () => {
+      const { wakes, orch, advance } = createHarness({ settings: { quietWorkers: ['worker-1'] } });
+      for (const kind of ['run_finished', 'run_failed', 'question', 'stalled', 'review_activity']) wakes.emit('worker-1', kind, `${kind} text`);
+      wakes.emit('worker-2', 'run_finished', 'follows');
+      for (const kind of ['done', 'blocked', 'ready', 'ci_passed', 'ci_failed', 'pr_merged', 'pr_closed']) wakes.emit('worker-1', kind, `${kind} text`);
+      await advance(3_000);
+      expect(orch.sent).toHaveLength(1);
+      const kinds = orch.sent[0].message.details.events.map((event) => `${event.sessionId}:${event.kind}`);
+      expect(kinds.filter((entry) => entry.startsWith('worker-1:'))).toEqual([
+        'worker-1:done', 'worker-1:blocked', 'worker-1:ready', 'worker-1:ci_passed', 'worker-1:ci_failed', 'worker-1:pr_merged', 'worker-1:pr_closed',
+      ]);
+      expect(kinds).toContain('worker-2:run_finished');
+    });
+
+    it('sends nothing when a quiet worker has only quiet events', async () => {
+      const { wakes, orch, advance } = createHarness({ settings: { quietWorkers: ['worker-1'] } });
+      wakes.emit('worker-1', 'run_finished', 'one');
+      wakes.emit('worker-1', 'stalled', 'two');
+      await advance(60_000);
+      expect(orch.sent).toHaveLength(0);
+    });
+
+    it('follows the setting at delivery time and the events are gone once dropped', async () => {
+      const settings = { quietWorkers: [] };
+      const { wakes, orch, advance } = createHarness({ settings });
+      wakes.emit('worker-1', 'run_finished', 'one');
+      settings.quietWorkers = ['worker-1'];
+      await advance(3_000);
+      expect(orch.sent).toHaveLength(0);
+      settings.quietWorkers = [];
+      await advance(60_000);
+      expect(orch.sent).toHaveLength(0);
+    });
+  });
+
   it('reports a worker busy without progress as stalled once per episode', async () => {
     const { wakes, orch, advance, states } = createHarness();
     states.set('worker-1', 'busy');

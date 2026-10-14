@@ -141,9 +141,13 @@ const normalizeGroup = (value, fields) => {
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
-// Sessions marked as orchestrator: `{ "<sessionId>": true }`. Only these get
-// the orchestration instructions, the tools and the wakes of their workers.
-const normalizeOrchestrators = (value) => {
+// Per session marks: `{ "<sessionId>": true }`. `orchestrators`: only these
+// get the orchestration instructions, the tools and the wakes of their
+// workers. `quietWorkers`: the orchestrator gets only the important events of
+// these workers (#156).
+const SESSION_MARKS = ['orchestrators', 'quietWorkers'];
+
+const normalizeSessionMarks = (value) => {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== 'object' || Array.isArray(value)) throw invalidSettings();
   const result = {};
@@ -200,8 +204,10 @@ const normalizeOrchestration = (value) => {
     if (typeof value.worktreeRoot !== 'string' || !isAbsolute(value.worktreeRoot) || value.worktreeRoot.length > 4096) throw invalidSettings();
     result.worktreeRoot = value.worktreeRoot;
   }
-  const orchestrators = normalizeOrchestrators(value.orchestrators);
-  if (orchestrators) result.orchestrators = orchestrators;
+  for (const field of SESSION_MARKS) {
+    const marks = normalizeSessionMarks(value[field]);
+    if (marks) result[field] = marks;
+  }
   return Object.keys(result).length > 0 ? result : undefined;
 };
 
@@ -229,12 +235,13 @@ const mergeOrchestration = (current, incoming) => {
   }
   if (Object.hasOwn(incoming, 'worktreeRoot')) next.worktreeRoot = incoming.worktreeRoot;
   // Per session: `true` marks it, `null` removes the mark.
-  if (Object.hasOwn(incoming, 'orchestrators')) {
-    if (incoming.orchestrators === null) {
-      delete next.orchestrators;
+  for (const field of SESSION_MARKS) {
+    if (!Object.hasOwn(incoming, field)) continue;
+    if (incoming[field] === null) {
+      delete next[field];
     } else {
-      if (!incoming.orchestrators || typeof incoming.orchestrators !== 'object' || Array.isArray(incoming.orchestrators)) throw invalidSettings();
-      next.orchestrators = { ...(current?.orchestrators ?? {}), ...incoming.orchestrators };
+      if (!incoming[field] || typeof incoming[field] !== 'object' || Array.isArray(incoming[field])) throw invalidSettings();
+      next[field] = { ...(current?.[field] ?? {}), ...incoming[field] };
     }
   }
   if (Object.hasOwn(incoming, 'roles')) {
@@ -264,6 +271,8 @@ export const resolveOrchestrationSettings = (stored) => {
     roles,
     // Session ids marked as orchestrator; empty unless someone marked one.
     orchestrators: Object.keys(overrides.orchestrators ?? {}),
+    // Session ids of workers whose orchestrator follows only the important events.
+    quietWorkers: Object.keys(overrides.quietWorkers ?? {}),
     // Where `worker_start` adds worktrees; unset means next to the caller's worktree.
     ...(overrides.worktreeRoot ? { worktreeRoot: overrides.worktreeRoot } : {}),
   };

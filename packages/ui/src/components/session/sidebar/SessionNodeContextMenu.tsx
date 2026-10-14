@@ -20,6 +20,7 @@ import { Icon } from '@/components/icon/Icon';
 import { toast } from '@/components/ui';
 import { piClient } from '@/lib/pi/client';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { ensureQuietWorkersLoaded, useQuietWorkersStore } from '@/stores/useQuietWorkersStore';
 
 export interface SessionNodeMenuItemsProps {
   session: Session;
@@ -76,6 +77,35 @@ function OrchestratorMarkItem({ sessionId, Item }: { sessionId: string; Item: Re
     <Item onClick={toggle} className="[&>svg]:mr-1">
       <Icon name="node-tree" className="mr-1 h-4 w-4" />
       {marked ? 'Remove orchestrator mark' : 'Mark as orchestrator'}
+    </Item>
+  );
+}
+
+/**
+ * The per-worker switch "Orchestrator: follows / quiet" (#156). Quiet sends
+ * the worker's orchestrator only its done, blocker, ready, CI result and
+ * merged or closed events; the daemon enforces it. Hidden until the stored
+ * state is known.
+ */
+function OrchestratorQuietItem({ sessionId, Item }: { sessionId: string; Item: React.ElementType }) {
+  const quietIds = useQuietWorkersStore((state) => state.quiet);
+  React.useEffect(ensureQuietWorkersLoaded, []);
+
+  if (quietIds === null) return null;
+  const quiet = quietIds.has(sessionId);
+
+  const toggle = () => {
+    useQuietWorkersStore.getState().setQuiet(sessionId, !quiet).then(() => {
+      toast.success(quiet ? 'Orchestrator follows this worker again' : 'Orchestrator hears only done, blockers, ready and CI results');
+    }).catch(() => {
+      toast.error('Failed to change what the orchestrator hears from this worker');
+    });
+  };
+
+  return (
+    <Item onClick={toggle} className="[&>svg]:mr-1">
+      <Icon name={quiet ? 'eye' : 'eye-off'} className="mr-1 h-4 w-4" />
+      {quiet ? 'Orchestrator: quiet (follow)' : 'Orchestrator: follows (quiet)'}
     </Item>
   );
 }
@@ -145,6 +175,9 @@ function renderSessionMenuItems(
 
       {!session.parentID && !archivedBucket ? (
         <OrchestratorMarkItem sessionId={session.id} Item={Item} />
+      ) : null}
+      {session.parentID && !archivedBucket ? (
+        <OrchestratorQuietItem sessionId={session.id} Item={Item} />
       ) : null}
 
       <Item
