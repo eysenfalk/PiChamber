@@ -12,6 +12,7 @@ import { createRequestSecurityRuntime } from '../security/request-security.js';
 import { mergePathValues } from '../server/path-utils.js';
 import { createTerminalRuntime } from '../terminal/runtime.js';
 import { createSttRuntime } from '../stt/runtime.js';
+import { createBrowserRuntime } from '../browser/runtime.js';
 import { getExecutableSearchDirectories } from '../tunnels/executable-search.js';
 
 export const normalizeDirectoryPath = (value) => {
@@ -54,7 +55,7 @@ const resolveProjectDirectory = async (req) => {
   }
 };
 
-export const registerWorkspaceIntegrations = ({ app, server, express, uiAuthController, dataDir, liveRevocation = null }) => {
+export const registerWorkspaceIntegrations = ({ app, server, express, uiAuthController, dataDir, liveRevocation = null, remoteBrowserHost = null }) => {
   const security = createRequestSecurityRuntime({ readSettingsFromDiskMigrated: async () => ({}) });
   registerGitRoutes(app);
   const github = registerGitHubRoutes(app);
@@ -95,6 +96,15 @@ export const registerWorkspaceIntegrations = ({ app, server, express, uiAuthCont
     modelsDir: path.join(dataDir, 'speech-models'),
     configFile: path.join(dataDir, 'stt', 'config.json'),
   });
+  const browserRuntime = createBrowserRuntime({
+    app,
+    server,
+    uiAuthController,
+    liveRevocation,
+    remoteBrowserHost,
+    isRequestOriginAllowed: security.isRequestOriginAllowed,
+    rejectWebSocketUpgrade: security.rejectWebSocketUpgrade,
+  });
   createPreviewProxyRuntime({
     crypto,
     URL,
@@ -110,7 +120,7 @@ export const registerWorkspaceIntegrations = ({ app, server, express, uiAuthCont
   return {
     readPullWatch: github.readPullWatch,
     shutdown: async () => {
-      await Promise.allSettled([terminalRuntime.shutdown(), sttRuntime.shutdown()]);
+      await Promise.allSettled([terminalRuntime.shutdown(), sttRuntime.shutdown(), browserRuntime.shutdown()]);
     },
   };
 };

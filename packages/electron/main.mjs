@@ -17,6 +17,7 @@ import {
   guardWebviewAttach,
   guardWebviewNavigation,
 } from './browser-profile-policy.mjs';
+import { createRemoteBrowserHost } from './remote-browser-host.mjs';
 import {
   resolveDesktopHostRuntimeConfig,
   resolveStartupUrlProbePlan,
@@ -480,7 +481,7 @@ const requestQuitWithConfirmation = async () => {
   }
   state.quitConfirmationPending = true;
 
-  const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+  const windows = getAppWindows().filter((window) => !window.isDestroyed());
   const visible = windows.find((window) => window.isVisible());
   if (!visible) {
     const hidden = windows.find((window) => !window.isVisible());
@@ -1240,13 +1241,30 @@ const normalizeNotificationInput = (raw) => {
   return raw;
 };
 
+// Renders the browser page for phone and web clients (#163). Its hidden page
+// window is not an app window: it must not keep the app alive, count for
+// quit or focus logic, or receive app events.
+const remoteBrowserHost = createRemoteBrowserHost({
+  BrowserWindow,
+  getBrowserSession: () => session.fromPartition(BROWSER_PARTITION),
+  log,
+});
+
+const getAppWindows = () =>
+  BrowserWindow.getAllWindows().filter((window) => !remoteBrowserHost.ownsWindow(window));
+
+const getFocusedAppWindow = () => {
+  const focused = BrowserWindow.getFocusedWindow();
+  return focused && !remoteBrowserHost.ownsWindow(focused) ? focused : null;
+};
+
 const isAnyWindowFocused = () =>
-  BrowserWindow.getAllWindows().some(
+  getAppWindows().some(
     (window) => !window.isDestroyed() && window.isFocused(),
   );
 
 const focusForegroundWindow = () => {
-  const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+  const windows = getAppWindows().filter((window) => !window.isDestroyed());
   if (windows.length === 0) return;
   const target = state.mainWindow && !state.mainWindow.isDestroyed()
     ? state.mainWindow
@@ -1548,6 +1566,7 @@ const spawnLocalServer = async () => {
     apiOnly: false,
     onDesktopNotification: (payload) => maybeShowNativeNotification(payload),
     getIsWindowFocused: isAnyWindowFocused,
+    remoteBrowserHost,
     getDesktopRuntimeConfig: () => ({
       apiBaseUrl: state.apiBaseUrl || '',
       requestHeaders: sanitizeRuntimeRequestHeaders(state.requestHeaders || {}),
@@ -1571,6 +1590,7 @@ const spawnLocalServer = async () => {
 };
 
 const killSidecar = () => {
+  remoteBrowserHost.shutdown();
   const handle = state.serverHandle;
   state.serverHandle = null;
   state.sidecarUrl = null;
@@ -1880,14 +1900,14 @@ const emitToWindow = (browserWindow, event, detail) => {
 };
 
 const emitToAllWindows = (event, detail) => {
-  for (const browserWindow of BrowserWindow.getAllWindows()) {
+  for (const browserWindow of getAppWindows()) {
     emitToWindow(browserWindow, event, detail);
   }
 };
 
 const setTaskbarProgress = (value) => {
   if (process.platform !== 'win32') return;
-  for (const browserWindow of BrowserWindow.getAllWindows()) {
+  for (const browserWindow of getAppWindows()) {
     if (!browserWindow.isDestroyed()) {
       browserWindow.setProgressBar(value);
     }
@@ -2084,7 +2104,7 @@ const confirmConnectDeepLink = async (payload) => {
   // in-app interaction. Importing it stores a client token and points all of
   // this app's API traffic at the given server, so require explicit consent
   // BEFORE writing anything to the hosts config. Never surface the token.
-  const visible = BrowserWindow.getAllWindows().find((window) => !window.isDestroyed() && window.isVisible());
+  const visible = getAppWindows().find((window) => !window.isDestroyed() && window.isVisible());
   if (visible) {
     visible.show();
     visible.focus();
@@ -2155,7 +2175,7 @@ const dispatchDeepLink = (link) => {
   if (link.type === 'focus') {
     const target = state.mainWindow && !state.mainWindow.isDestroyed()
       ? state.mainWindow
-      : BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+      : getAppWindows().find((window) => !window.isDestroyed());
     if (target) {
       if (target.isMinimized()) target.restore();
       target.show();
@@ -2214,10 +2234,10 @@ const dispatchDomEventToWindow = (browserWindow, event, detail) => {
 };
 
 const getMenuTargetWindow = () => {
-  const focused = BrowserWindow.getFocusedWindow();
+  const focused = getFocusedAppWindow();
   if (focused && !focused.isDestroyed()) return focused;
   if (state.mainWindow && !state.mainWindow.isDestroyed()) return state.mainWindow;
-  const [firstWindow] = BrowserWindow.getAllWindows();
+  const [firstWindow] = getAppWindows();
   return firstWindow && !firstWindow.isDestroyed() ? firstWindow : null;
 };
 
@@ -2244,7 +2264,7 @@ const dispatchOpenMiniChat = (browserWindow) => {
 
 const dispatchCheckForUpdates = () => {
   emitToAllWindows('pichamber:check-for-updates');
-  for (const browserWindow of BrowserWindow.getAllWindows()) {
+  for (const browserWindow of getAppWindows()) {
     dispatchDomEventToWindow(browserWindow, 'pichamber:check-for-updates');
   }
 };
@@ -2447,7 +2467,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
     }
 
     if (process.platform === 'darwin' && !state.quitRequested) {
-      const remainingVisible = BrowserWindow.getAllWindows().filter(
+      const remainingVisible = getAppWindows().filter(
         (window) => !window.isDestroyed() && window.isVisible(),
       ).length;
 
@@ -2466,7 +2486,7 @@ const createBrowserWindow = ({ label, restoreGeometry, url, runtimeConfig = {} }
     if (state.mainWindow && browserWindow.id === state.mainWindow.id) {
       state.mainWindow = null;
     }
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (getAppWindows().length === 0) {
       if (process.platform !== 'darwin') {
         if (state.installingUpdate) {
           app.quit();
@@ -3899,7 +3919,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
 
     case 'desktop_clear_cache':
       await session.defaultSession.clearStorageData();
-      for (const browserWindow of BrowserWindow.getAllWindows()) {
+      for (const browserWindow of getAppWindows()) {
         browserWindow.webContents.reload();
       }
       return null;
@@ -4905,7 +4925,7 @@ const TRAY_BREATH_FRAME_COUNT = 16;
 // The window the user is "on" for tray routing: the focused one, else the last
 // focused that is still alive.
 const resolveTraySurface = () => {
-  const focused = BrowserWindow.getFocusedWindow();
+  const focused = getFocusedAppWindow();
   if (focused && !focused.isDestroyed()) return focused;
   if (state.lastFocusedWindowId != null) {
     const remembered = BrowserWindow.fromId(state.lastFocusedWindowId);
@@ -5028,7 +5048,7 @@ const dispatchTrayAction = async (action) => {
   if (action.type === 'hide-main-window') {
     const target = (state.mainWindow && !state.mainWindow.isDestroyed())
       ? state.mainWindow
-      : BrowserWindow.getFocusedWindow();
+      : getFocusedAppWindow();
     if (target && !target.isDestroyed() && target.isVisible()) {
       debounceWindowStatePersist(target, true);
       target.hide();
@@ -5141,7 +5161,7 @@ app.on('second-instance', (_event, argv) => {
     ? argv.filter((arg) => typeof arg === 'string' && arg.startsWith(`${DEEP_LINK_PROTOCOL}://`))
     : [];
   if (urls.length > 0) handleDeepLinks(urls);
-  if (BrowserWindow.getAllWindows().length > 0) {
+  if (getAppWindows().length > 0) {
     focusForegroundWindow();
   } else {
     void openMainWindow();
@@ -5151,13 +5171,13 @@ app.on('second-instance', (_event, argv) => {
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleDeepLinks([url]);
-  if (BrowserWindow.getAllWindows().length === 0) {
+  if (getAppWindows().length === 0) {
     void openMainWindow();
   }
 });
 
 app.on('activate', async () => {
-  const windows = BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed());
+  const windows = getAppWindows().filter((window) => !window.isDestroyed());
   // Only spawn a main window when there is genuinely nothing to come back to.
   if (windows.length === 0) {
     await openMainWindow();

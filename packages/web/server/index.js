@@ -261,7 +261,7 @@ export async function startWebUiServer(options = {}) {
   app.get('/api/pichamber/tunnel/doctor', requireTunnelAuth, async (req, res) => {
     try { const status = await tunnelService.getStatus(); const checkResult = await tunnelService.check(); res.json({ ok: true, status, check: checkResult, query: req.query }); } catch (error) { res.status(500).json({ ok: false, error: error?.message || 'Doctor failed' }); }
   });
-  const workspaceRuntime = registerWorkspaceIntegrations({ app, server, express, uiAuthController, dataDir: PICHAMBER_DATA_DIR, liveRevocation });
+  const workspaceRuntime = registerWorkspaceIntegrations({ app, server, express, uiAuthController, dataDir: PICHAMBER_DATA_DIR, liveRevocation, remoteBrowserHost: options.remoteBrowserHost ?? null });
   registerStaticRoutes(app, { apiOnly });
 
   await listen(server, port, host);

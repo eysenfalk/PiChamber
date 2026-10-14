@@ -302,6 +302,7 @@ const isEventStreamRequest = (req) => {
 const URL_AUTH_WEBSOCKET_PATHS = new Set([
   '/api/terminal/ws',
   '/api/stt/ws',
+  '/api/browser/ws',
 ]);
 
 const isUrlAuthWebSocketPath = (pathname) => URL_AUTH_WEBSOCKET_PATHS.has(pathname);
