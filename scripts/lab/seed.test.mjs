@@ -49,6 +49,11 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     expect(Buffer.byteLength(forkText) - renameAt).toBeGreaterThan(FORK_WORK_AFTER_RENAME_BYTES);
     expect(Buffer.byteLength(forkText)).toBeGreaterThan(512 * 1024);
     expect((await stat(long.path)).mtimeMs).toBeGreaterThan((await stat(seed.sessions.find((s) => s.project === 'lab-beta').path)).mtimeMs);
+    // Issue #147: custom messages of three kinds, nine adjacent intercom messages between two turns.
+    const extensionSession = seed.sessions.find((s) => s.role === 'extensions');
+    const custom = SessionManager.open(extensionSession.path).getEntries().filter((e) => e.type === 'custom_message');
+    expect(custom.map((e) => e.customType)).toEqual([...Array(9).fill('intercom_message'), ...Array(3).fill('subagent-notify'), 'lab-context-note']);
+    expect(custom.every((e) => e.display === true)).toBe(true);
     // Orchestration (#107): the orchestrator runs on the faux model the seeded extension registers.
     const orchestrator = seed.sessions.find((s) => s.role === 'orchestrator');
     const orchestratorModel = SessionManager.open(orchestrator.path).getEntries().find((e) => e.type === 'model_change');
