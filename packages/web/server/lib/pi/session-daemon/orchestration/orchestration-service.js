@@ -1298,6 +1298,7 @@ export function createOrchestrationService(deps) {
       ? await sessionFileState(sessionId, document.workers[sessionId].sessionFile)
       : undefined;
     const snapshot = runtime ? settleSnapshot(runtime, now()) : undefined;
+    const outcome = outcomeOf(result.assistant);
     let settled;
     try {
       settled = await registry.update((current) => {
@@ -1316,7 +1317,8 @@ export function createOrchestrationService(deps) {
         }
         const wasDone = current.workers[sessionId]?.state === 'done';
         const state = applySettle(current, sessionId, presence, now(), { generation, hold: hold || foreign });
-        if (hold && !foreign) deferredSettles.set(sessionId, { generation });
+        // The text of the done news travels with a settle that waits for an input.
+        if (hold && !foreign) deferredSettles.set(sessionId, { generation, news: outcome === 'interrupted' ? 'interrupted' : textOf(result.assistant?.content) });
         const worker = current.workers[sessionId];
         if (worker && snapshot) worker.snapshot = snapshot;
         return { state, becameDone: state === 'done' && !wasDone, worker: worker ? { ...worker } : undefined };
@@ -1328,7 +1330,6 @@ export function createOrchestrationService(deps) {
     }
     if (!settled.worker || settled.worker.stopping || settled.state === 'stopped') return;
     const { assistant } = result;
-    const outcome = outcomeOf(assistant);
     // A worker that reported done is done news whoever started the run; any
     // other end of a run the owner started is the owner's business.
     if (settled.becameDone) wakes.emit(sessionId, 'done', outcome === 'interrupted' ? 'interrupted' : textOf(assistant?.content));
@@ -1489,15 +1490,22 @@ export function createOrchestrationService(deps) {
     // until it settles.
     const run = liveRuns.get(sessionId);
     const occupied = run !== undefined && run.admission === admission && run.generation === null;
+    let becameDone = false;
     try {
       await registry.update((document) => {
         if (!occupied) releaseAdmission(document, sessionId, now(), admission);
-        if (deferredSettle) applySettle(document, sessionId, undefined, now(), deferredSettle);
+        if (deferredSettle) {
+          const wasDone = document.workers[sessionId]?.state === 'done';
+          const state = applySettle(document, sessionId, undefined, now(), { generation: deferredSettle.generation });
+          becameDone = state === 'done' && !wasDone && document.workers[sessionId]?.stopping !== true;
+        }
       });
     } catch (error) {
       reportUnresolved(sessionId, error);
     }
     if (deferredSettle) notifyWaiters();
+    // The done news the settle held back, once, whoever started the run.
+    if (becameDone) wakes.emit(sessionId, 'done', deferredSettle.news);
   };
 
   // Whether a run's prompt proved its end (`finished` resolves true).

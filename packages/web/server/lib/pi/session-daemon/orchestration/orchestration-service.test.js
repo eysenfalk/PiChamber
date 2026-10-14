@@ -765,6 +765,28 @@ describe('orchestration service', () => {
       expect(wakeReasons(orchestrator)).not.toContain('run_finished: all finished');
     });
 
+    it('reports the done a settle held back for an open input once, when that input closes', async () => {
+      const harness = createHarness({ overrides: { readSettings: async () => ({ workerLimit: 4, gate: { enabled: false }, roles: ROLES, wakes: { coalesceMs: 0 }, orchestrators: MARKED, quietWorkers: ['worker-1'] }) } });
+      const { service, orchestrator, settle, input, workers } = harness;
+      await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+      await settle('worker-1', 'spawn run');
+      await input('worker-1', { source: 'owner' });
+      await service.call('worker-1', 'worker_report', { kind: 'done', summary: 'complete', evidence: ['tests pass'], pullRequest: 12 });
+      // Another input waits for its verdict when the run ends: the settle is held.
+      const open = await service.admitInput('worker-1', 'owner');
+      await settle('worker-1', 'all finished');
+      expect((await workers())['worker-1'].state).not.toBe('done');
+      await new Promise((done) => { setTimeout(done, 20); });
+      expect(wakeReasons(orchestrator)).not.toContain('done: all finished');
+
+      // The input is rejected by the preflight: the held settle applies now.
+      await service.resolveInput(open, 'rejected');
+      await vi.waitFor(() => expect(wakeReasons(orchestrator)).toContain('done: all finished'));
+      expect((await workers())['worker-1'].state).toBe('done');
+      await new Promise((done) => { setTimeout(done, 20); });
+      expect(wakeReasons(orchestrator).filter((reason) => reason.startsWith('done:'))).toEqual(['done: all finished']);
+    });
+
     it('does not wake for a report to the owner, and wakes for blocker and ready with their own kinds', async () => {
       const { service, orchestrator } = createHarness();
       await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });

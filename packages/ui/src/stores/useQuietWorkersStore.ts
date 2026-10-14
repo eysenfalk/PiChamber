@@ -15,19 +15,39 @@ interface QuietWorkersState {
   setQuiet: (sessionId: string, quiet: boolean) => Promise<void>;
 }
 
+// Reads are numbered by start. A response is dropped when a newer read was
+// applied or a change finished after the read started, so an old answer never
+// hides a newer state. Rows that load at the same time share one read.
+let lastStarted = 0;
+let lastApplied = 0;
+let floor = 0;
+let shared: { promise: Promise<void>; floor: number } | null = null;
+
 export const useQuietWorkersStore = create<QuietWorkersState>((set, get) => ({
   quiet: null,
   runtimeKey: null,
-  load: async () => {
+  load: () => {
+    if (shared && shared.floor === floor) return shared.promise;
+    const seq = ++lastStarted;
     const runtimeKey = getRuntimeKey();
-    const settings = await piClient.getSettings({ runtimeKey });
-    set({ quiet: new Set(settings.orchestration.quietWorkers), runtimeKey });
+    const read = piClient.getSettings({ runtimeKey }).then((settings) => {
+      if (seq < lastApplied || seq < floor) return;
+      lastApplied = seq;
+      set({ quiet: new Set(settings.orchestration.quietWorkers), runtimeKey });
+    });
+    const entry = { promise: read, floor };
+    shared = entry;
+    const release = () => { if (shared === entry) shared = null; };
+    read.then(release, release);
+    return read;
   },
   setQuiet: async (sessionId, quiet) => {
     await piClient.setPiChamberDefaults(
       { orchestration: { quietWorkers: { [sessionId]: quiet ? true : null } } },
       { runtimeKey: getRuntimeKey() },
     );
+    // Reads that started before this change are stale from now on.
+    floor = lastStarted + 1;
     // The file is the authority: read the list back instead of patching it.
     await get().load();
   },
