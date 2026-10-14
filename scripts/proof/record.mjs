@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { KEYS, addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, labTour, orchestrationTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { KEYS, addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, sidebarTreeTour, validateTour, VIEWPORTS } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -23,7 +23,7 @@ export function recordingUrl(value) {
 }
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename|add-device|sidebar-tree|orchestration|extension-messages> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
+const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename|add-device|sidebar-tree|orchestration|extension-messages|html-render> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
 const idleProbe = 'window.__proofLastMutation = performance.now(); new MutationObserver(() => { window.__proofLastMutation = performance.now(); }).observe(document, {subtree:true, childList:true, attributes:true, characterData:true});';
 
 // CDP defines an empty loaderId as a request fetched from a worker. Its finish
@@ -34,12 +34,16 @@ export const isStreamingResponse = event => event.type === 'EventSource' || even
 export function createPageNetworkGate(now = Date.now) {
   const pending = new Map();
   let changed = now();
+  let mainFrameId;
   const finished = event => { if (pending.delete(event.requestId)) changed = now(); };
   return {
     quiet: () => pending.size === 0 && now() - changed >= 500,
     handlers: {
       'Network.requestWillBeSent': event => {
-        if (tracksPageRequest(event)) { pending.set(event.requestId, event.loaderId); changed = now(); }
+        // A child frame's document may load in its own process (a sandboxed
+        // cross-origin iframe does), so its finish events never reach this target.
+        const childDocument = event.type === 'Document' && mainFrameId !== undefined && event.frameId !== mainFrameId;
+        if (tracksPageRequest(event) && !childDocument) { pending.set(event.requestId, event.loaderId); changed = now(); }
       },
       'Network.loadingFinished': finished,
       'Network.loadingFailed': finished,
@@ -48,6 +52,7 @@ export function createPageNetworkGate(now = Date.now) {
       // may never reach this target. Keep the new document's pending requests.
       'Page.frameNavigated': event => {
         if (event.frame.parentId) return;
+        mainFrameId = event.frame.id;
         for (const [id, loader] of pending) if (loader !== event.frame.loaderId) pending.delete(id);
         changed = now();
       },
@@ -289,9 +294,9 @@ async function main() {
   } });
   if (values.help) { console.log(usage); return; }
   const [name] = positionals;
-  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour, 'extension-messages': extensionMessagesTour };
+  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour, 'extension-messages': extensionMessagesTour, 'html-render': htmlRenderTour };
   const fixtureTours = { fixture, 'fixture-broken': brokenFixture };
-  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device, sidebar-tree, orchestration or extension-messages; see --help');
+  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device, sidebar-tree, orchestration, extension-messages or html-render; see --help');
   const isLab = Object.hasOwn(labTours, name);
   const tour = isLab ? labTours[name](JSON.parse(await readFile(resolve(values.manifest || join(root, 'lab/seed-manifest.json')), 'utf8'))) : fixtureTours[name];
   let server;

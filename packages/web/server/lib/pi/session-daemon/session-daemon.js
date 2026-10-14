@@ -65,6 +65,7 @@ import { createMergeLookup } from '../../github/merge-lookup.js';
 import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
+import { createHtmlRenderExtension } from '../html-render/pi-extension.js';
 
 const textFromContent = (content) => (
   Array.isArray(content)
@@ -612,7 +613,7 @@ export function createSessionDaemon({
     ?? ((runtimeOptions, runtimeHooks) => createPiSessionRuntime(runtimeOptions, runtimeHooks));
   const createRuntime = (runtimeOptions) => baseCreateRuntime(runtimeOptions, {
     createExtensionBindings: buildExtensionBindings,
-    extensionFactories: [orchestrationExtension],
+    extensionFactories: [orchestrationExtension, htmlRenderExtension],
   });
 
   const getSessionState = () => runtime
@@ -4022,6 +4023,7 @@ export function createSessionDaemon({
     },
   });
   const orchestrationExtension = createOrchestrationExtension(orchestration);
+  const htmlRenderExtension = createHtmlRenderExtension();
 
   // Bounded below the 60s tool-call timeout of MCP clients; the in-process
   // extension path waits as long as the tool call asks.

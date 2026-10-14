@@ -19,6 +19,8 @@ import { AssistantMessageActionButtons } from './AssistantMessageActionButtons';
 import type { StreamPhase } from './types';
 import type { AssistantMessageBodyProps } from './assistantMessageTypes';
 import { shareMessageAsImage } from './shareMessageAsImage';
+import { HtmlRenderFrame } from './parts/HtmlRenderFrame';
+import { readHtmlRenderReference } from './parts/htmlRenderModel';
 import { useAssistantMessageLifecycle } from './useAssistantMessageLifecycle';
 
 const CONTAIN_LAYOUT_STYLE = { contain: 'layout' as const, transform: 'translateZ(0)' };
@@ -147,11 +149,23 @@ export const AssistantMessageBody = React.memo(
 
       // The response body renders final text only. ChatMessage already
       // removed tool, reasoning, and rail-projected justification parts via
-      // filterAssistantFinalParts; this loop only skips any remaining
-      // non-text part kinds (for example step-start markers).
+      // filterAssistantFinalParts; this loop renders the pages of completed
+      // html_render calls and skips any remaining non-text part kinds (for
+      // example step-start markers).
       let i = 0;
       while (i < visibleParts.length) {
         const part = visibleParts[i];
+
+        const htmlRender = readHtmlRenderReference(part);
+        if (htmlRender && sessionId) {
+          rendered.push(
+            <div key={`assistant-html-render-${messageId}-${i}`} className="my-2">
+              <HtmlRenderFrame sessionId={sessionId} reference={htmlRender} />
+            </div>,
+          );
+          i++;
+          continue;
+        }
 
         if (part.type !== 'text') {
           i++;
