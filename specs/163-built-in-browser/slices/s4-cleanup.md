@@ -9,5 +9,7 @@ Skills: `pichamber-change-discipline`, `ui-api-decoupling`.
 
 ## Notes
 
+- S3 already removed `IframeBrowserPane` and its unused helpers: the remote pane replaced it on every non-Electron runtime, which left it without a caller. S4 checks what remains of the external proxy path.
+
 - Keep the server's `allowExternal` path only if `lib/preview/domAssetInlining.ts` still needs it.
 - Lasting rules to move: the single owner rules of the spec README and the remote browser wire format (into `packages/web/server/lib/browser/DOCUMENTATION.md`).
