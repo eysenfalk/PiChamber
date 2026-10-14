@@ -240,6 +240,11 @@ export function createOrchestrationService(deps) {
   let startSeq = 0;
   // The `seq` of the latest start per worker.
   const latestStart = new Map();
+  // Who wrote the last accepted input of a worker, 'owner' (the UI) or
+  // 'orchestrator' (a session_send): the last writer decides whether the
+  // orchestrator hears the end of the run (#156). Memory only; a worker
+  // without an entry (daemon restart) wakes as before.
+  const lastWriter = new Map();
   // Inputs per worker whose end this service cannot prove yet (a stop could
   // not settle them, or their run started without a slot), and the registry
   // hold that keeps the worker's slot and directory until each is settled.
@@ -968,7 +973,14 @@ export function createOrchestrationService(deps) {
       at: now(), questionId: `q-${randomUUID().slice(0, 8)}`, repository,
     }));
     wakes.touch(callerSessionId);
-    if ((args.kind === 'question' || args.kind === 'blocked') && !value.deduplicated) wakes.emit(callerSessionId, 'question', args.summary);
+    if (!value.deduplicated) {
+      // A report for the owner is not the orchestrator's business (#156).
+      if ((args.kind === 'question' || args.kind === 'blocked') && args.audience !== 'owner') {
+        wakes.emit(callerSessionId, args.kind === 'blocked' ? 'blocked' : 'question', args.summary);
+      } else if (args.kind === 'ready') {
+        wakes.emit(callerSessionId, 'ready', args.summary);
+      }
+    }
     return {
       sessionId: callerSessionId,
       kind: args.kind,
@@ -1302,11 +1314,12 @@ export function createOrchestrationService(deps) {
           generation = completed.generation ?? null;
           foreign = completed.stale === true;
         }
+        const wasDone = current.workers[sessionId]?.state === 'done';
         const state = applySettle(current, sessionId, presence, now(), { generation, hold: hold || foreign });
         if (hold && !foreign) deferredSettles.set(sessionId, { generation });
         const worker = current.workers[sessionId];
         if (worker && snapshot) worker.snapshot = snapshot;
-        return { state, worker: worker ? { ...worker } : undefined };
+        return { state, becameDone: state === 'done' && !wasDone, worker: worker ? { ...worker } : undefined };
       });
     } catch (error) {
       // The worker keeps its slot; better held than freed under a run.
@@ -1316,8 +1329,11 @@ export function createOrchestrationService(deps) {
     if (!settled.worker || settled.worker.stopping || settled.state === 'stopped') return;
     const { assistant } = result;
     const outcome = outcomeOf(assistant);
-    if (outcome === 'error') wakes.emit(sessionId, 'run_failed', assistant.errorMessage ?? 'the run failed');
-    else wakes.emit(sessionId, 'run_finished', outcome === 'interrupted' ? 'interrupted' : textOf(assistant?.content));
+    // A worker that reported done is done news whoever started the run; any
+    // other end of a run the owner started is the owner's business.
+    if (settled.becameDone) wakes.emit(sessionId, 'done', outcome === 'interrupted' ? 'interrupted' : textOf(assistant?.content));
+    else if (outcome === 'error') wakes.emit(sessionId, 'run_failed', assistant.errorMessage ?? 'the run failed');
+    else if (lastWriter.get(sessionId) !== 'owner') wakes.emit(sessionId, 'run_finished', outcome === 'interrupted' ? 'interrupted' : textOf(assistant?.content));
   };
 
   /*
@@ -1425,10 +1441,10 @@ export function createOrchestrationService(deps) {
    * session's lease, right before the prompt; returns the ticket for
    * `resolveInput`, or null for a session that is no worker.
    */
-  const admitInput = async (sessionId) => {
+  const admitInput = async (sessionId, source = 'owner') => {
     if (!await readForInput(sessionId)) return null;
     const { workerLimit } = await readSettings();
-    const ticket = { sessionId, token: randomUUID(), state: 'open' };
+    const ticket = { sessionId, token: randomUUID(), state: 'open', source };
     ticket.decided = new Promise((resolve) => { ticket.decide = resolve; });
     // Registered before the registry write, so a settle meanwhile waits.
     if (!tickets.has(sessionId)) tickets.set(sessionId, new Map());
@@ -1563,6 +1579,7 @@ export function createOrchestrationService(deps) {
   const resolveInput = async (ticket, outcome, { run: handle, finished } = {}) => {
     if (!ticket || ticket.state === 'closed') return undefined;
     const { sessionId, admission } = ticket;
+    if (outcome === 'started' || outcome === 'queued' || outcome === 'unresolved') lastWriter.set(sessionId, ticket.source);
     if (ticket.state === 'stale') {
       // A stop ended this input's admission: a run it starts has no slot.
       if (outcome === 'unresolved') return undefined;

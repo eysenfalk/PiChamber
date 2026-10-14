@@ -157,6 +157,7 @@ describe('Pi settings sidecar', () => {
       gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
       roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
       orchestrators: [],
+      quietWorkers: [],
     });
 
     await store.update({ orchestration: { workerLimit: 2, roles: { review: { providerId: 'openai', modelId: ' gpt-6.1-sol ', thinking: 'xhigh' } } } });
@@ -227,6 +228,19 @@ describe('Pi settings sidecar', () => {
     expect(resolveOrchestrationSettings(await restarted.read()).orchestrators).toEqual(['session-b']);
   });
 
+  it('keeps quiet workers per session and survives a restart (#156)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const file = join(root, 'pi', 'settings.json');
+    const store = createPiSettingsStore({ file });
+    expect(resolveOrchestrationSettings(await store.read()).quietWorkers).toEqual([]);
+    await store.update({ orchestration: { quietWorkers: { 'worker-a': true } } });
+    await store.update({ orchestration: { quietWorkers: { 'worker-b': true }, orchestrators: { 'orch-a': true } } });
+    await store.update({ orchestration: { quietWorkers: { 'worker-a': null } } });
+    const resolved = resolveOrchestrationSettings(await createPiSettingsStore({ file }).read());
+    expect(resolved.quietWorkers).toEqual(['worker-b']);
+    expect(resolved.orchestrators).toEqual(['orch-a']);
+  });
+
   it('stores an absolute worktree root and clears it with null', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
     const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
@@ -293,6 +307,8 @@ describe('Pi settings sidecar', () => {
       { orchestrators: { 'session-a': false } },
       { orchestrators: { 'session-a': 'yes' } },
       { orchestrators: { ' ': true } },
+      { quietWorkers: ['worker-a'] },
+      { quietWorkers: { 'worker-a': false } },
       'four',
     ]) {
       await expect(store.update({ orchestration })).rejects.toMatchObject({ code: 'PI_SETTINGS_INVALID' });

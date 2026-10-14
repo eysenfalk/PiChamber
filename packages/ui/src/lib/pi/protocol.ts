@@ -529,6 +529,7 @@ export interface PiSettingsSnapshot {
       gate?: Partial<PiOrchestrationGate>;
       roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel>>;
       orchestrators?: Record<string, true>;
+      quietWorkers?: Record<string, true>;
     };
   };
   /** Orchestration roles and worker limit with defaults applied. */
@@ -558,6 +559,8 @@ export interface PiOrchestrationSettings {
   roles: Record<PiOrchestrationRole, PiOrchestrationRoleModel>;
   /** Ids of the sessions marked as orchestrator; only these get the orchestration tools and instructions. */
   orchestrators: string[];
+  /** Ids of the workers set to "Orchestrator: quiet": their orchestrator hears only done, blocker, ready, CI result and merged or closed. */
+  quietWorkers: string[];
 }
 
 export interface PiSettingsUpdateInput {
@@ -587,6 +590,8 @@ export interface PiChamberDefaultsUpdateInput {
     roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel | null>> | null;
     /** `true` marks a session as orchestrator, `null` removes its mark; other sessions keep theirs. */
     orchestrators?: Record<string, true | null>;
+    /** `true` sets a worker quiet for its orchestrator, `null` makes it follow again; other workers keep theirs. */
+    quietWorkers?: Record<string, true | null>;
   } | null;
 }
 

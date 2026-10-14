@@ -3110,7 +3110,10 @@ export function createSessionDaemon({
       : null,
   });
 
-  const sessionInput = async (payload, delivery) => {
+  // `source` names who writes: the UI and CLI default to the owner; only
+  // the orchestration service's own sends pass 'orchestrator'. It is not part
+  // of the payload, so no client can claim it.
+  const sessionInput = async (payload, delivery, source = 'owner') => {
     if (!payload || typeof payload !== 'object' || typeof payload.sessionId !== 'string'
       || typeof payload.text !== 'string' || payload.text.length === 0 || Buffer.byteLength(payload.text) > 64 * 1024) {
       throw new SessionDaemonProtocolError('INVALID_PROMPT', 'The session prompt is invalid.');
@@ -3173,7 +3176,7 @@ export function createSessionDaemon({
     try {
       await orchestration.beforeSessionInput(payload.sessionId).catch(toProtocolError);
       const result = await runSessionInput(payload, delivery, {
-        admit: () => orchestration.admitInput(payload.sessionId).catch(toProtocolError),
+        admit: () => orchestration.admitInput(payload.sessionId, source).catch(toProtocolError),
       });
       claimEntry?.settle({ accepted: true, receipt: { accepted: true, messageId: result.messageId } });
       return result;
@@ -3993,6 +3996,7 @@ export function createSessionDaemon({
     sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
       { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },
       delivery === 'prompt' ? undefined : delivery,
+      'orchestrator',
     ),
     abortSession: (sessionId) => abortSession(sessionId),
     abortRun: (sessionId, run) => abortBoundRun(runtimeRegistry?.findBySessionId(sessionId)?.session, run),
