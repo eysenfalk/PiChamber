@@ -36,10 +36,60 @@ STATUS: DONE | READY | BLOCKED | QUESTION
 Changed: <files, commits, pull request>
 Evidence: <commands run and their result, CI run, proof links>
 Not proven or not run: <list, or "none">
-For the owner: <numbered questions, each answerable on its own, or "none">
+For the owner: <the id of the open owner question or blocker, or "none">
 ```
 
 `DONE` means the brief's stop step is reached. `READY` means waiting for a decision, `BLOCKED` names what blocks, `QUESTION` needs an answer before work continues.
+
+## Owner questions and blockers
+
+A question or blocker for the owner reaches the decision inbox of the control center, where the owner reads it without the worker's chat and answers by tapping an option or by typing. It is one decision, in the owner's language, understandable on its own: no internal shorthand (slice or step codes, abbreviations from the chat) the owner has not seen. Workers send it through `worker_report` with `audience: owner` and a full `brief`, and the daemon refuses an incomplete one; the orchestrator asks its own owner questions in the same form in its chat.
+
+- `summary`: the decision or the blocker, one line.
+- `context`: what the work is, where it stands, why the decision is needed now; for a blocker its cause.
+- `options`: at least two answers, each with its `consequence`, exactly one `recommended`. Optional for a blocker.
+- `recommendation`: which option and why. `counterargument` and `revisit` when they help.
+- `meanwhile`: what the worker does, or what stays blocked, until the answer.
+- Blocker only: `tried` (what was tried) and `needed` (what the worker needs from whoever answers).
+
+The next decision is asked after this one is answered, not in the same report.
+
+Question:
+
+```json
+{
+  "kind": "question",
+  "audience": "owner",
+  "summary": "Soll der README Check rot werden, wenn der Lizenzabschnitt fehlt?",
+  "brief": {
+    "context": "Ich baue den README Check für das Release (Issue #42). Er prüft heute Titel und Installationsabschnitt; drei alte Branches haben keinen Lizenzabschnitt. Wie streng er ist, entscheidet, welche Tests ich jetzt schreibe.",
+    "options": [
+      { "label": "Rot werden", "consequence": "Ein Release ohne Lizenz ist blockiert; die drei alten Branches werden sofort rot.", "recommended": true },
+      { "label": "Nur warnen", "consequence": "Alles bleibt grün; eine fehlende Lizenz fällt erst im Review auf." }
+    ],
+    "recommendation": "Rot werden: eine fehlende Lizenz blockiert das Release ohnehin, der Check sagt es nur früher.",
+    "counterargument": "Die drei alten Branches brauchen dann sofort einen Lizenzabschnitt.",
+    "meanwhile": "Ich schreibe die Tests für Titel und Installation weiter; der Lizenzteil wartet."
+  }
+}
+```
+
+Blocker:
+
+```json
+{
+  "kind": "blocked",
+  "audience": "owner",
+  "summary": "Der Lab Nachweis für PR #211 ist blockiert: das Lab gehört einem anderen Worktree.",
+  "brief": {
+    "context": "Für den Nachweis brauche ich das Lab (eins pro Rechner). lab/run status zeigt, dass der Worktree 194-control-center es hält.",
+    "tried": "Eine Stunde gewartet und den Integrator von #194 per Intercom gefragt; keine Antwort.",
+    "needed": "Gib das Lab frei oder sag mir, wann ich es nehmen darf.",
+    "recommendation": "Den Integrator fragen, ob er bis 18 Uhr fertig ist; sonst das Lab nach seinem Lauf übernehmen.",
+    "meanwhile": "Ich mache die Unit Tests fertig; Aufnahme und Veröffentlichung warten."
+  }
+}
+```
 
 ## Review round
 

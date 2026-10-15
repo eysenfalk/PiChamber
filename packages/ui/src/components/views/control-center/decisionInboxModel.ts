@@ -3,6 +3,8 @@ import type {
   PiOrchestrationOverview,
   PiOrchestrationPendingDialog,
   PiOrchestrationQuestion,
+  PiOrchestrationQuestionBrief,
+  PiOrchestrationWorker,
 } from '@/lib/pi/protocol';
 import { PiRequestError, piClient } from '@/lib/pi/client';
 import { answerExtensionDialog, type DialogAnswer } from '@/components/chat/extensionDialogResponse';
@@ -24,8 +26,14 @@ export type InboxQuestion = {
   sessionId: string;
   title: string;
   worktree: string | null;
+  /** The worker's issue and pull request, so the owner sees what the question belongs to. */
+  links: InboxLink[];
   question: PiOrchestrationQuestion;
 };
+
+export type InboxLink = { label: string; url: string | null };
+
+type InboxOption = { label: string; consequence: string | null; recommended: boolean };
 
 export type InboxDialog = {
   kind: 'dialog';
@@ -49,6 +57,34 @@ const dialogItem = (pending: PiOrchestrationPendingDialog): InboxDialog => ({
   dialog: pending.dialog,
 });
 
+const GITHUB = 'https://github.com';
+
+/** Issue and pull request of a worker as links; a pull request without a known repository has no URL. */
+export const workLinks = (worker: Pick<PiOrchestrationWorker, 'issue' | 'pullRequest' | 'pullRequestStatus'>): InboxLink[] => {
+  const links: InboxLink[] = [];
+  if (worker.issue) {
+    links.push({ label: `Issue #${worker.issue.number}`, url: `${GITHUB}/${worker.issue.repo}/issues/${worker.issue.number}` });
+  }
+  if (worker.pullRequest) {
+    const { number, repository } = worker.pullRequest;
+    const url = worker.pullRequestStatus?.url ?? (repository ? `${GITHUB}/${repository}/pull/${number}` : null);
+    links.push({ label: `PR #${number}`, url });
+  }
+  return links;
+};
+
+/** The options of a brief in one shape; questions stored before #210 carry plain strings. */
+export const briefOptions = (brief: PiOrchestrationQuestionBrief | undefined): InboxOption[] =>
+  (brief?.options ?? []).map((option) => (typeof option === 'string'
+    ? { label: option, consequence: null, recommended: false }
+    : { label: option.label, consequence: option.consequence ?? null, recommended: option.recommended === true }));
+
+/** The answer an option button sends: the option's label, and the typed note as its own paragraph. */
+export const optionAnswerText = (label: string, note: string): string => {
+  const trimmed = note.trim();
+  return trimmed ? `${label}\n\n${trimmed}` : label;
+};
+
 export const collectInboxItems = (overview: PiOrchestrationOverview): InboxItem[] => {
   const owner: InboxQuestion[] = [];
   const orchestrator: InboxQuestion[] = [];
@@ -62,6 +98,7 @@ export const collectInboxItems = (overview: PiOrchestrationOverview): InboxItem[
         sessionId: worker.sessionId,
         title: worker.title?.trim() || worker.sessionId,
         worktree: worker.worktree,
+        links: workLinks(worker),
         question,
       };
       (question.audience === 'owner' ? owner : orchestrator).push(item);
@@ -131,20 +168,28 @@ export const markQuestionAnswered = async (target: QuestionTarget, runtimeKey: s
 
 type AnswerAction = 'answer' | 'resolve';
 
+/** One answer sent under one request id; the daemon refuses an id reused with other text. */
+type AnswerAttempt = { id: string; text: string };
+
 type AnswerDraft = {
   text: string;
-  /** One id per answer attempt, kept across retries until the answer went through or the question closed. */
-  requestId: string | null;
+  /** The last answer attempt, kept until the answer went through or the question closed. */
+  attempt: AnswerAttempt | null;
   pending: AnswerAction | null;
   notice: { tone: 'info' | 'error'; text: string } | null;
 };
 
 type AnswerDraftEvent =
   | { type: 'edit'; text: string }
-  | { type: 'start'; action: AnswerAction; requestId: string | null }
+  | { type: 'start'; action: 'answer'; attempt: AnswerAttempt }
+  | { type: 'start'; action: 'resolve' }
   | { type: 'settled'; action: AnswerAction; outcome: QuestionOutcome };
 
-export const EMPTY_ANSWER_DRAFT: AnswerDraft = { text: '', requestId: null, pending: null, notice: null };
+export const EMPTY_ANSWER_DRAFT: AnswerDraft = { text: '', attempt: null, pending: null, notice: null };
+
+/** A retry of the same text keeps its id, so it cannot prompt twice; other text, such as another option, gets a new one. */
+export const answerAttempt = (last: AnswerAttempt | null, text: string, newId: () => string): AnswerAttempt =>
+  (last?.text === text ? last : { id: newId(), text });
 
 export const answerDraftReducer = (draft: AnswerDraft, event: AnswerDraftEvent): AnswerDraft => {
   switch (event.type) {
@@ -155,7 +200,7 @@ export const answerDraftReducer = (draft: AnswerDraft, event: AnswerDraftEvent):
       return {
         ...draft,
         pending: event.action,
-        requestId: event.action === 'answer' ? (draft.requestId ?? event.requestId) : draft.requestId,
+        attempt: event.action === 'answer' ? event.attempt : draft.attempt,
         notice: null,
       };
     case 'settled': {
@@ -165,14 +210,14 @@ export const answerDraftReducer = (draft: AnswerDraft, event: AnswerDraftEvent):
         return { ...draft, pending: null, notice: { tone: 'error', text: `${what} ${outcome.message}` } };
       }
       if (outcome.status === 'closed') {
-        return { ...draft, pending: null, requestId: null, notice: { tone: 'info', text: 'This question is no longer open.' } };
+        return { ...draft, pending: null, attempt: null, notice: { tone: 'info', text: 'This question is no longer open.' } };
       }
       if (action === 'resolve') {
         return { ...draft, pending: null, notice: { tone: 'info', text: 'Marked answered.' } };
       }
       return {
         text: '',
-        requestId: null,
+        attempt: null,
         pending: null,
         notice: {
           tone: 'info',

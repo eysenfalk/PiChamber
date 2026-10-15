@@ -50,6 +50,23 @@ const model = {
   },
 };
 
+// The owner question the worker_report description shows;
+// report-rules.test.js checks that it passes the contract and the owner rules.
+export const OWNER_QUESTION_EXAMPLE = {
+  kind: 'question',
+  audience: 'owner',
+  summary: 'Should the README check fail when the license section is missing?',
+  brief: {
+    context: 'I am building the README check for the release (issue #42). It checks the title and the install section; three old branches have no license section. How strict it is decides which tests I write now.',
+    options: [
+      { label: 'Fail', consequence: 'A release without a license is blocked; the three old branches turn red at once.', recommended: true },
+      { label: 'Warn only', consequence: 'Everything stays green; a missing license shows up only in review.' },
+    ],
+    recommendation: 'Fail: a missing license blocks the release anyway, the check only says so earlier.',
+    meanwhile: 'I keep writing the title and install tests; the license part waits.',
+  },
+};
+
 export const ORCHESTRATION_TOOLS = [
   {
     name: 'orchestration_capabilities',
@@ -237,7 +254,9 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'worker_report',
     label: 'Report to orchestrator',
-    description: 'Report your status to your orchestrator. progress: a step done. question or blocked (with audience): you need an answer; it stays open until a report or message names it in resolves; a brief lays out the decision for whoever answers. ready: a pull request is ready for review. done: the task is finished, with evidence and pullRequest or noPullRequest.',
+    description: 'Report your status to your orchestrator. progress: a step done. question or blocked (with audience): you need an answer; it stays open until a report or message names it in resolves; a brief lays out the decision for whoever answers. ready: a pull request is ready for review. done: the task is finished, with evidence and pullRequest or noPullRequest. '
+      + 'A question or blocked for the owner (audience owner) must be answerable from the decision inbox alone, where the owner answers by tapping an option, and is refused otherwise. Write it in the owner\'s language, one decision per report: summary is that decision or the blocker in one line; brief.context says what you do, where it stands and why the decision is needed now, with no internal shorthand the owner has not seen; brief.options has at least two answers, each with its consequence, exactly one recommended; brief.recommendation says which and why; brief.meanwhile says what you do or what stays blocked until the answer. A blocked also needs brief.tried and brief.needed; its options are optional. '
+      + `Example: ${JSON.stringify(OWNER_QUESTION_EXAMPLE)}`,
     orchestratorAllowed: false,
     parameters: {
       type: 'object',
@@ -251,13 +270,32 @@ export const ORCHESTRATION_TOOLS = [
         brief: {
           type: 'object',
           additionalProperties: false,
-          required: ['recommendation'],
+          // Which fields a brief needs (recommendation always, more for the owner) is checked by
+          // report-rules.js, so one refusal names all of them; this schema checks types and bounds.
           description: 'Only for question and blocked: the decision laid out for whoever answers.',
           properties: {
-            options: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 200 }, description: 'The choices.' },
-            recommendation: { type: 'string', minLength: 1, maxLength: 500, description: 'What you recommend and why.' },
+            context: { type: 'string', minLength: 1, maxLength: 2000, description: 'What you are doing, where it stands and why the decision is needed now, understandable without anything else; for a blocker, its cause.' },
+            options: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 6,
+              description: 'The choices, each one an answer the owner can pick.',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  label: { type: 'string', minLength: 1, maxLength: 120, description: 'Required: the answer as a short phrase.' },
+                  consequence: { type: 'string', minLength: 1, maxLength: 500, description: 'What happens if this option is chosen.' },
+                  recommended: { type: 'boolean', description: 'True for the one option you recommend.' },
+                },
+              },
+            },
+            recommendation: { type: 'string', minLength: 1, maxLength: 500, description: 'Required: what you recommend and why.' },
             counterargument: { type: 'string', minLength: 1, maxLength: 500, description: 'The strongest argument against your recommendation.' },
             revisit: { type: 'string', minLength: 1, maxLength: 300, description: 'When the decision should be looked at again.' },
+            meanwhile: { type: 'string', minLength: 1, maxLength: 500, description: 'What you do, or what stays blocked, until the answer comes.' },
+            tried: { type: 'string', minLength: 1, maxLength: 1000, description: 'Only for blocked: what you already tried.' },
+            needed: { type: 'string', minLength: 1, maxLength: 500, description: 'Only for blocked: what you need from whoever answers.' },
           },
         },
         pullRequest: { type: 'integer', minimum: 1, description: 'Pull request number; required for ready.' },

@@ -22,6 +22,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0014](0014-worker-tool-profiles.md) | Worker tool profiles: a recorded tool limit per worker, enforced by the daemon, not a sandbox | Proposed |
 | [0015](0015-phone-surface-by-screen-not-viewport.md) | A phone is decided by its physical screen, not by the viewport width | Accepted |
 | [0016](0016-owner-reads-and-answers-orchestration-through-private-daemon-commands.md) | The owner reads and answers orchestration through private daemon commands | Proposed |
+| [0017](0017-owner-questions-carry-a-complete-brief.md) | Owner questions and blockers carry a complete brief, enforced by the daemon | Proposed |
 
 ## Rules
 
