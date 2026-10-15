@@ -1,4 +1,4 @@
-<!-- The description is the plan (docs/workflow.md). Open the pull request as a draft and wait for approval before implementing. The pull-request check requires every section below. -->
+<!-- The description is the plan (docs/workflow.md). Open the pull request as a draft at the first plan, after exploring. Slices go into Acceptance criteria (the checklist) and Approach (ordered steps, one commit each); name the lane (fast or slow) in Approach. In the slow lane wait for the go before implementing; the fast lane builds right away. The pull-request check requires every section below. -->
 
 ## Issue
 

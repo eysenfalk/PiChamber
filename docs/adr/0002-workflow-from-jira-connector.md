@@ -1,6 +1,7 @@
 # 0002. Workflow from jira-connector: plans in draft pull requests, proof before merge
 
 - Status: Accepted
+- Partly superseded by [0013](0013-one-pull-request-with-slices.md): the Decision rule that implementing a plan needs approval, and the Consequence that every change starts with a draft pull request. The rest stays in force. ([0008](0008-dev-integration-branch.md) replaced the passages on `main`.)
 - Date: 2026-10-02
 
 ## Context
