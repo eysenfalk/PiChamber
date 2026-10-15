@@ -1902,3 +1902,133 @@ describe('Pi runtime route', () => {
     expect(commandsAfterDelete.commands.map((c) => c.name)).not.toContain('second');
   });
 });
+
+describe('orchestration overview route (#20)', () => {
+  let server;
+  afterEach(async () => {
+    await close(server);
+    server = undefined;
+  });
+
+  const start = async (getPiSessionDaemonRuntime) => {
+    const app = express();
+    app.use(express.json());
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime });
+    server = await listen(app);
+    return `http://127.0.0.1:${server.address().port}/api/pi/orchestration/overview`;
+  };
+
+  it('returns the daemon overview uncached', async () => {
+    const overview = { at: 1, limit: { workerLimit: 4, used: 0 }, host: {}, orchestrators: [], dialogs: [] };
+    const request = vi.fn(async () => ({ value: overview }));
+    const response = await fetch(await start(() => ({ request })));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual(overview);
+    expect(request).toHaveBeenCalledWith('orchestration.overview', {});
+  });
+
+  it('turns a failed daemon read into an error, never an empty overview', async () => {
+    const failed = await fetch(await start(() => ({ request: async () => ({ error: { code: 'ORCHESTRATION_REGISTRY_INVALID' } }) })));
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toEqual({ error: { code: 'ORCHESTRATION_REGISTRY_INVALID' } });
+  });
+
+  it('refuses a malformed daemon answer and reports a missing daemon', async () => {
+    const malformed = await fetch(await start(() => ({ request: async () => ({ value: { orchestrators: 'x' } }) })));
+    expect(malformed.status).toBe(502);
+    expect(await malformed.json()).toEqual({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+    await close(server);
+    const missing = await fetch(await start(() => null));
+    expect(missing.status).toBe(503);
+    expect(await missing.json()).toEqual({ error: { code: 'DAEMON_UNAVAILABLE' } });
+  });
+});
+
+describe('orchestration answer route (#20)', () => {
+  let server;
+  afterEach(async () => {
+    await close(server);
+    server = undefined;
+  });
+
+  const start = async (getPiSessionDaemonRuntime) => {
+    const app = express();
+    app.use(express.json());
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime });
+    server = await listen(app);
+    return `http://127.0.0.1:${server.address().port}/api/pi/orchestration/questions/worker-1/q-1/answer`;
+  };
+  const post = (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  it('forwards the answer to the daemon and returns its receipt', async () => {
+    const receipt = { sessionId: 'worker-1', questionId: 'q-1', accepted: true, resolved: true };
+    const request = vi.fn(async () => ({ value: receipt }));
+    const response = await post(await start(() => ({ request })), { text: 'use v2', clientRequestId: 'answer-1' });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual(receipt);
+    expect(request).toHaveBeenCalledWith('orchestration.answer', { sessionId: 'worker-1', questionId: 'q-1', text: 'use v2', clientRequestId: 'answer-1' });
+  });
+
+  it('refuses an empty answer without asking the daemon', async () => {
+    const request = vi.fn();
+    const url = await start(() => ({ request }));
+    for (const body of [{}, { text: '  ' }, { text: 'x', clientRequestId: 7 }]) {
+      const response = await post(url, body);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: { code: 'INVALID_ARGUMENT' } });
+    }
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('maps a question that is not open to a conflict and other refusals to their status', async () => {
+    const answer = async (result) => {
+      const response = await post(await start(() => ({ request: async () => result })), { text: 'x' });
+      await close(server);
+      server = undefined;
+      return [response.status, await response.json()];
+    };
+    expect(await answer({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } })).toEqual([409, { error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } }]);
+    expect(await answer({ error: { code: 'SESSION_NOT_FOUND' } })).toEqual([404, { error: { code: 'SESSION_NOT_FOUND' } }]);
+    expect(await answer({ error: { code: 'ORCHESTRATION_REGISTRY_INVALID' } })).toEqual([503, { error: { code: 'ORCHESTRATION_REGISTRY_INVALID' } }]);
+    expect(await answer({ value: { accepted: true } })).toEqual([502, { error: { code: 'MALFORMED_DAEMON_RESPONSE' } }]);
+  });
+});
+
+describe('orchestration resolve route (#20)', () => {
+  let server;
+  afterEach(async () => {
+    await close(server);
+    server = undefined;
+  });
+
+  const start = async (getPiSessionDaemonRuntime) => {
+    const app = express();
+    app.use(express.json());
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime });
+    server = await listen(app);
+    return `http://127.0.0.1:${server.address().port}/api/pi/orchestration/questions/worker-1/q-1/resolve`;
+  };
+
+  it('closes the question through the daemon without a prompt', async () => {
+    const receipt = { sessionId: 'worker-1', questionId: 'q-1', resolved: true };
+    const request = vi.fn(async () => ({ value: receipt }));
+    const response = await fetch(await start(() => ({ request })), { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual(receipt);
+    expect(request).toHaveBeenCalledWith('orchestration.resolve', { sessionId: 'worker-1', questionId: 'q-1' });
+  });
+
+  it('maps a question that is not open to a conflict and refuses a malformed answer', async () => {
+    const resolve = async (result) => {
+      const response = await fetch(await start(() => ({ request: async () => result })), { method: 'POST' });
+      await close(server);
+      server = undefined;
+      return [response.status, await response.json()];
+    };
+    expect(await resolve({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } })).toEqual([409, { error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } }]);
+    expect(await resolve({ value: { resolved: false } })).toEqual([502, { error: { code: 'MALFORMED_DAEMON_RESPONSE' } }]);
+  });
+});

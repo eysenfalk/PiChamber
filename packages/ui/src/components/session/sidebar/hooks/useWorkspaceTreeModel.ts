@@ -11,6 +11,8 @@ import {
   type NodeKey,
   type SessionActivity,
   type TreeNode,
+  resolveWorkerFilter,
+  type WorkerFilterMode,
   type WorkspaceTree,
 } from '../workspaceTree';
 
@@ -24,6 +26,11 @@ type Args = {
   pinnedSessionIds: Set<string>;
   /** Sessions whose catalog lifecycle is busy or retry. */
   runningSessionIds: ReadonlySet<string>;
+  /** Workers with an open question in the orchestration registry. */
+  waitingSessionIds: ReadonlySet<string>;
+  workerFilter: WorkerFilterMode;
+  /** Worker session ids from the registry; null until it was read, and then the filter shows everything. */
+  workerIds: ReadonlySet<string> | null;
   unseenSessionIds: ReadonlySet<string>;
   discoveryComplete: boolean;
   /** Project ids, plus `chats`, the owner hid. */
@@ -85,6 +92,9 @@ export const useWorkspaceTreeModel = ({
   foldersByScope,
   pinnedSessionIds,
   runningSessionIds,
+  waitingSessionIds,
+  workerFilter,
+  workerIds,
   unseenSessionIds,
   discoveryComplete,
   hidden,
@@ -116,9 +126,13 @@ export const useWorkspaceTreeModel = ({
 
   const activity = React.useMemo(() => {
     const map = new Map<string, SessionActivity>();
+    waitingSessionIds.forEach((id) => map.set(id, 'waiting'));
+    // A running session is not waiting for an answer, whatever the registry still says.
     runningSessionIds.forEach((id) => map.set(id, 'running'));
     return map;
-  }, [runningSessionIds]);
+  }, [runningSessionIds, waitingSessionIds]);
+
+  const treeWorkerFilter = React.useMemo(() => resolveWorkerFilter(workerFilter, workerIds), [workerFilter, workerIds]);
 
   return React.useMemo(() => {
     const tree = buildWorkspaceTree({
@@ -135,6 +149,7 @@ export const useWorkspaceTreeModel = ({
       hidden,
       query,
       mergedWorktrees,
+      workerFilter: treeWorkerFilter,
     });
     previousRef.current = tree;
     return { tree, nodesByKey: indexNodes(tree.roots) };
@@ -149,6 +164,7 @@ export const useWorkspaceTreeModel = ({
     pinnedSessionIds,
     sessions,
     treeProjects,
+    treeWorkerFilter,
     unseenSessionIds,
     worktreesByProject,
   ]);

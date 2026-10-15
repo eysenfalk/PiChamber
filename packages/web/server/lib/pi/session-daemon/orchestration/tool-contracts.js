@@ -237,7 +237,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'worker_report',
     label: 'Report to orchestrator',
-    description: 'Report your status to your orchestrator. progress: a step done. question or blocked (with audience): you need an answer; it stays open until a report or message names it in resolves. ready: a pull request is ready for review. done: the task is finished, with evidence and pullRequest or noPullRequest.',
+    description: 'Report your status to your orchestrator. progress: a step done. question or blocked (with audience): you need an answer; it stays open until a report or message names it in resolves; a brief lays out the decision for whoever answers. ready: a pull request is ready for review. done: the task is finished, with evidence and pullRequest or noPullRequest.',
     orchestratorAllowed: false,
     parameters: {
       type: 'object',
@@ -248,6 +248,18 @@ export const ORCHESTRATION_TOOLS = [
         summary: { type: 'string', minLength: 1, maxLength: 300, description: 'One line.' },
         audience: { type: 'string', enum: ['orchestrator', 'owner'], description: 'Who must answer; required for question and blocked.' },
         resolves: { ...questionId, description: 'Id of your open question this report settles.' },
+        brief: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['recommendation'],
+          description: 'Only for question and blocked: the decision laid out for whoever answers.',
+          properties: {
+            options: { type: 'array', minItems: 1, maxItems: 6, items: { type: 'string', minLength: 1, maxLength: 200 }, description: 'The choices.' },
+            recommendation: { type: 'string', minLength: 1, maxLength: 500, description: 'What you recommend and why.' },
+            counterargument: { type: 'string', minLength: 1, maxLength: 500, description: 'The strongest argument against your recommendation.' },
+            revisit: { type: 'string', minLength: 1, maxLength: 300, description: 'When the decision should be looked at again.' },
+          },
+        },
         pullRequest: { type: 'integer', minimum: 1, description: 'Pull request number; required for ready.' },
         noPullRequest: { type: 'string', minLength: 1, maxLength: 300, description: 'Why done has no pull request.' },
         evidence: {

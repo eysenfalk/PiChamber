@@ -22,7 +22,7 @@ export const diffPullRequest = (previous, read) => {
   if (read.state !== 'open') {
     const kind = read.state === 'merged' ? 'pr_merged' : 'pr_closed';
     const events = previous?.status === read.state ? [] : [{ kind, reason: `${label} ${read.state}: ${read.url}` }];
-    return { state: { ...previous, status: read.state }, events };
+    return { state: { ...previous, status: read.state, url: read.url }, events };
   }
   const events = [];
   const sameHead = previous?.head === read.headSha;
@@ -38,7 +38,8 @@ export const diffPullRequest = (previous, read) => {
   if (previous && read.comments > previous.comments) {
     events.push({ kind: 'review_activity', reason: `${plural(read.comments - previous.comments, 'new comment')} on ${label}: ${read.url}` });
   }
-  return { state: { status: 'open', head: read.headSha, ciReported, comments: read.comments }, events };
+  const checks = read.checks ? { state: read.checks.state, total: read.checks.total, pending: read.checks.pending } : null;
+  return { state: { status: 'open', head: read.headSha, ciReported, comments: read.comments, url: read.url, checks }, events };
 };
 
 const samePullRequest = (worker, { repository, number }) => worker?.pullRequest?.number === number
@@ -77,5 +78,14 @@ export const createPrWatch = ({ registry, emit, readSettings }) => {
     }
   };
 
-  return { targets, apply };
+  // What the last read said about the pull request the worker reports now,
+  // or null before the first read since the daemon started.
+  const statusOf = (sessionId, pullRequest) => {
+    const known = states.get(sessionId);
+    if (!pullRequest || known?.key !== `${pullRequest.repository}#${pullRequest.number}`) return null;
+    const { status, url = null, head = null, checks = null } = known.state;
+    return { status, url, head, checks };
+  };
+
+  return { targets, apply, statusOf };
 };

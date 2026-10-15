@@ -24,6 +24,8 @@ export type HeaderIconActionButtonProps = {
   Icon: IconName;
   iconClassName?: string;
   pressed?: boolean;
+  /** A count shown on the icon; hidden when absent or zero. */
+  badge?: number | null;
 };
 
 export const HeaderIconActionButton = React.memo(function HeaderIconActionButton({
@@ -35,6 +37,7 @@ export const HeaderIconActionButton = React.memo(function HeaderIconActionButton
   Icon: iconName,
   iconClassName,
   pressed = false,
+  badge = null,
 }: HeaderIconActionButtonProps) {
   if (!visible) {
     return null;
@@ -50,10 +53,16 @@ export const HeaderIconActionButton = React.memo(function HeaderIconActionButton
           aria-pressed={pressed}
           className={cn(
             className ?? DESKTOP_HEADER_ICON_BUTTON_CLASS,
+            badge ? 'relative' : null,
             pressed && 'bg-interactive-selection text-interactive-selection-foreground'
           )}
         >
           <Icon name={iconName} className={iconClassName ?? 'h-[18px] w-[18px]'} />
+          {badge ? (
+            <span aria-hidden="true" className="pointer-events-none absolute -top-1 -right-1 text-[10px] font-semibold text-primary">
+              {badge}
+            </span>
+          ) : null}
         </button>
       </TooltipTrigger>
       <TooltipContent>
