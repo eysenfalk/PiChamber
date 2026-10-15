@@ -11,7 +11,8 @@ import { Button } from '@/components/ui/button';
 /**
  * Blocking pi extension dialogs (ctx.ui.select / confirm / input / editor).
  * The extension runtime stays suspended until the user answers, so pending
- * dialogs render as a modal overlay for the selected session.
+ * dialogs render as a modal overlay for the open session only. Dialogs of
+ * other sessions stay pending in the store and show in their own chat.
  */
 
 type DialogAnswer = {
@@ -324,24 +325,18 @@ const ExtensionFormBody: React.FC<{
 };
 
 interface ExtensionDialogOverlayProps {
-  /** Defaults to the store's selected session when omitted. */
+  /** Defaults to the store's selected session when omitted; null shows nothing. */
   sessionId?: string | null;
 }
 
 export const ExtensionDialogOverlay: React.FC<ExtensionDialogOverlayProps> = ({ sessionId }) => {
   const target = usePiSessionSnapshot(
     (state) => {
-      const preferredSessionId = sessionId ?? state.selectedSessionId;
-      const preferred = preferredSessionId
-        ? state.reducer.bySession.get(preferredSessionId)?.extensionDialogs[0]
+      const openSessionId = sessionId === undefined ? state.selectedSessionId : sessionId;
+      const request = openSessionId
+        ? state.reducer.bySession.get(openSessionId)?.extensionDialogs[0]
         : undefined;
-      if (preferred && preferredSessionId) return { sessionId: preferredSessionId, request: preferred };
-      if (sessionId !== undefined) return null;
-      for (const [candidateSessionId, candidate] of state.reducer.bySession) {
-        const request = candidate.extensionDialogs[0];
-        if (request) return { sessionId: candidateSessionId, request };
-      }
-      return null;
+      return openSessionId && request ? { sessionId: openSessionId, request } : null;
     },
     (a, b) => a?.sessionId === b?.sessionId && a?.request.requestId === b?.request.requestId,
     'dialogs',
