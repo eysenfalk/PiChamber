@@ -6,12 +6,12 @@
  * here unchanged in behavior. Lower score is a better match.
  */
 
-export interface PiFuzzyMatch {
+interface PiFuzzyMatch {
   matches: boolean;
   score: number;
 }
 
-export function piFuzzyMatch(query: string, text: string): PiFuzzyMatch {
+function piFuzzyMatch(query: string, text: string): PiFuzzyMatch {
   const queryLower = query.toLowerCase();
   const textLower = text.toLowerCase();
 
