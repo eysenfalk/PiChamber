@@ -615,6 +615,8 @@ export interface PiOrchestrationWorker {
   lastInputAt: number | null;
   report: PiOrchestrationReport | null;
   question: PiOrchestrationQuestion | null;
+  /** The first pending blocking dialog in the worker's session. */
+  dialog: { requestId: string; method: string; title: string | null } | null;
   /** The error of the worker's last settled turn. */
   lastError: { message: string; at: number } | null;
   /** Token use and cost as of the last settled run. */

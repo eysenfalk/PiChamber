@@ -1023,6 +1023,12 @@ export function createOrchestrationService(deps) {
     return { live: null, liveSince: null };
   };
 
+  // The first pending blocking dialog of a session, in short.
+  const dialogOf = (sessionId) => {
+    const pending = listPendingDialogs().find((entry) => entry.sessionId === sessionId)?.dialog;
+    return pending ? { requestId: pending.requestId, method: pending.method, title: pending.title ?? null } : null;
+  };
+
   const digestWorker = async (sessionId, worker) => {
     const runtime = getLiveRuntime(sessionId);
     const settled = worker.snapshot;
@@ -1043,6 +1049,7 @@ export function createOrchestrationService(deps) {
       lastInputAt: worker.lastInputAt ?? null,
       report: worker.report ? report : null,
       question: worker.question ?? null,
+      dialog: dialogOf(sessionId),
       lastError: settled?.lastError ?? null,
       usage: settled?.usage ? { settled: settled.usage, settledAt: settled.at } : null,
     };

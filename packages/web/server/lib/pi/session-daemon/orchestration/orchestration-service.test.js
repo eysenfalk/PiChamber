@@ -17,6 +17,7 @@ import { createOrchestrationRegistryStore } from './registry-store.js';
 import { EVENTS_MESSAGE } from './wakes.js';
 import { findPersistedSessionByOperation } from './session-lookup.js';
 import { readGitBranch } from './host-info.js';
+import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
 
 const ROLES = {
   'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
@@ -2342,6 +2343,22 @@ describe('owner overview (#20)', () => {
       { sessionId: 'worker-2', title: 'title worker-2', directory: '/work/b', orchestratorSessionId: 'orch-2', dialog: dialog('d-1') },
       { sessionId: 'loose', title: null, directory: null, orchestratorSessionId: null, dialog: dialog('d-2', 'Trust?') },
     ]);
+  });
+
+  it('names a pending dialog of a worker in the digest (S8)', async () => {
+    const pending = [];
+    const harness = createHarness({ overrides: { listPendingDialogs: () => pending } });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const digest = () => harness.service.call('orch', 'orchestration_digest', {});
+    expect((await digest()).workers[0].dialog).toBeNull();
+    pending.push({ sessionId: 'other-session', dialog: dialog('d-0') }, { sessionId: 'worker-1', dialog: { requestId: 'd-1', method: 'confirm', title: 'Allow push?', message: 'long text' } });
+    expect((await digest()).workers[0].dialog).toEqual({ requestId: 'd-1', method: 'confirm', title: 'Allow push?' });
+  });
+
+  it('tells the orchestrator to answer with resolves and to leave owner questions and dialogs to the owner (S8)', () => {
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('`resolves` set to its id');
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('Questions with `audience: owner` and pending dialogs belong to the owner');
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('a pending dialog');
   });
 
   it('keeps an orchestrator whose mark was removed while it still owns workers', async () => {
