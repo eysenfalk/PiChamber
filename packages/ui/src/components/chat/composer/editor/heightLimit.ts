@@ -40,21 +40,37 @@ function visibleHeightOf(bound: Element, visualViewportHeight: number | undefine
 }
 
 /**
- * Below this visible height the composer cannot show the branch row and keep
- * the model row and send button in view. Measured on a 200px viewport: the
- * container is 144px, the composer 186px with the row (34px) and 152px
- * without, whose controls end inside the container.
+ * The smallest the composer ever gets, with the informational branch row
+ * above it: the card with its two line floor, the handle and the bottom
+ * padding (152px) plus the row (34px). The branch row is dropped only when the
+ * space the user can see cannot hold this. Measured on a 200px viewport in the
+ * proof lab, where the container is 144px and the whole stack is 186px with the
+ * row and 152px without.
  */
-const TARGET_ROW_MIN_VISIBLE_HEIGHT = 300;
+const COMPOSER_MIN_HEIGHT = 152;
+const TARGET_ROW_HEIGHT = 34;
 
 /**
- * Whether the informational branch row above the composer fits. Unmeasured
- * (no bound, or not laid out) keeps it.
+ * The part of the screen container the user can see: what is left of the
+ * container (a Capacitor shell shrinks the element itself for the keyboard)
+ * and of the visual viewport below the container's top edge (a mobile browser
+ * only shrinks the viewport, and the header keeps its share of it).
+ */
+function visibleContainerHeight(bound: Element, visualViewportHeight: number | undefined): number {
+    const rect = bound.getBoundingClientRect();
+    const top = Number.isFinite(rect.top) ? Math.max(0, rect.top) : 0;
+    return Math.min(bound.clientHeight, (visualViewportHeight ?? Number.POSITIVE_INFINITY) - top);
+}
+
+/**
+ * Whether the informational branch row above the composer fits: the visible
+ * container holds the smallest composer stack with the row. A taller visible
+ * area keeps the row, with its copy button. Unmeasured (no bound, or not laid
+ * out) keeps it.
  */
 export function composerAffordsTargetRow(bound: Element | null, visualViewportHeight: number | undefined): boolean {
-    if (!bound) return true;
-    const visibleHeight = visibleHeightOf(bound, visualViewportHeight);
-    return !(visibleHeight > 0) || visibleHeight >= TARGET_ROW_MIN_VISIBLE_HEIGHT;
+    if (!bound || !(bound.clientHeight > 0)) return true;
+    return visibleContainerHeight(bound, visualViewportHeight) >= COMPOSER_MIN_HEIGHT + TARGET_ROW_HEIGHT;
 }
 
 /**

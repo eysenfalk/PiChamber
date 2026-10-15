@@ -94,21 +94,45 @@ describe('composerScrollerLimit', () => {
 });
 
 describe('composerAffordsTargetRow', () => {
-    // The composer without the branch row is 152px (handle, card with its two
-    // line floor, bottom padding); the row adds 34 more. On a 200px viewport
-    // the screen container is 144px, so with the row the model row and the
+    // The smallest composer is 152px (handle, card with its two line floor,
+    // bottom padding); the branch row adds 34. On a 200px viewport the screen
+    // container is 144px (56px header), so with the row the model row and the
     // send button fall below the visible area (#204).
-    test('a 200px viewport leaves the container too short for the row, portrait and landscape', () => {
-        expect(composerAffordsTargetRow(el({ clientHeight: 144 }), 200)).toBe(false);
+    const container = (clientHeight: number, top = 56) =>
+        ({ clientHeight, getBoundingClientRect: () => ({ top, height: clientHeight }) }) as unknown as Element;
+
+    test('a 200px viewport leaves the container too short for the row', () => {
+        expect(composerAffordsTargetRow(container(144), 200)).toBe(false);
+    });
+
+    test('the row stays until the container really cannot hold the smallest stack with it', () => {
+        expect(composerAffordsTargetRow(container(185), undefined)).toBe(false);
+        expect(composerAffordsTargetRow(container(186), undefined)).toBe(true);
+    });
+
+    test('the same boundary holds in viewport terms, through the header', () => {
+        // Container as tall as the viewport minus the 56px header.
+        expect(composerAffordsTargetRow(container(241 - 56), 241)).toBe(false);
+        expect(composerAffordsTargetRow(container(242 - 56), 242)).toBe(true);
+    });
+
+    test('a 300px viewport keeps the row it has room for', () => {
+        expect(composerAffordsTargetRow(container(244), 300)).toBe(true);
     });
 
     test('the shrunken visual viewport counts when the browser pans instead of resizing', () => {
-        expect(composerAffordsTargetRow(el({ clientHeight: 800 }), 200)).toBe(false);
+        expect(composerAffordsTargetRow(container(800), 200)).toBe(false);
+        expect(composerAffordsTargetRow(container(800), 300)).toBe(true);
     });
 
     test('a landscape phone without the keyboard and a portrait phone with it keep the row', () => {
-        expect(composerAffordsTargetRow(el({ clientHeight: 334 }), 390)).toBe(true);
-        expect(composerAffordsTargetRow(el({ clientHeight: 444 }), 500)).toBe(true);
+        expect(composerAffordsTargetRow(container(334), 390)).toBe(true);
+        expect(composerAffordsTargetRow(container(444), 500)).toBe(true);
+    });
+
+    test('a container without a top edge reading is judged by its height and the viewport alone', () => {
+        expect(composerAffordsTargetRow(el({ clientHeight: 144 }), 200)).toBe(false);
+        expect(composerAffordsTargetRow(el({ clientHeight: 244 }), 300)).toBe(true);
     });
 
     test('an unmeasured container keeps the row', () => {
