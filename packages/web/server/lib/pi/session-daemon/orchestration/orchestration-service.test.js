@@ -2299,6 +2299,72 @@ describe('worker reports and digest', () => {
   });
 });
 
+describe('owner overview (#20)', () => {
+  const dialog = (id, title = 'Pick one') => ({ id, method: 'select', title, options: ['a', 'b'] });
+
+  it('groups every worker under its orchestrator with slots, host, pull request status and pending dialogs, activating nothing', async () => {
+    const pending = [];
+    const harness = createHarness({ overrides: { listPendingDialogs: () => pending } });
+    const { service, deps } = harness;
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await service.call('orch-2', 'session_spawn', { cwd: '/work/b', task: 'two' });
+    await harness.settle('worker-1', 'first');
+    await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'Which API?', audience: 'owner' });
+    await service.call('worker-2', 'worker_report', { kind: 'ready', summary: 'PR up', pullRequest: 12 });
+    await service.prWatch.apply([{ sessionId: 'worker-2', repository: 'acme/app', number: 12, read: {
+      state: 'open', headSha: 'abc1234def', url: 'https://github.com/acme/app/pull/12', comments: 0, checks: { total: 2, pending: 1, state: 'pending' },
+    } }]);
+    pending.push({ sessionId: 'worker-2', dialog: dialog('d-1') }, { sessionId: 'loose', dialog: dialog('d-2', 'Trust?') });
+    deps.activateSession.mockClear();
+
+    const overview = await service.overview();
+
+    expect(deps.activateSession).not.toHaveBeenCalled();
+    expect(overview.limit).toEqual({ workerLimit: 4, used: 2 });
+    expect(overview.host).toEqual({ load1: 1, cores: 8, availableBytes: 16 * GIB, workers: 2, limit: 4 });
+    const byId = Object.fromEntries(overview.orchestrators.map((group) => [group.sessionId, group]));
+    // Every marked session is listed, with or without workers.
+    expect(Object.keys(byId).sort()).toEqual([...MARKED].sort());
+    expect(byId.orch).toMatchObject({ marked: true, title: 'title orch' });
+    expect(byId.other).toMatchObject({ marked: true, title: null, workers: [] });
+    expect(byId.orch.workers).toEqual([expect.objectContaining({
+      sessionId: 'worker-1',
+      question: expect.objectContaining({ kind: 'question', audience: 'owner', summary: 'Which API?' }),
+      pullRequestStatus: null,
+    })]);
+    expect(byId['orch-2'].workers).toEqual([expect.objectContaining({
+      sessionId: 'worker-2',
+      pullRequest: { number: 12, repository: 'acme/app' },
+      pullRequestStatus: { status: 'open', url: 'https://github.com/acme/app/pull/12', head: 'abc1234def', checks: { state: 'pending', total: 2, pending: 1 } },
+    })]);
+    expect(overview.dialogs).toEqual([
+      { sessionId: 'worker-2', title: 'title worker-2', directory: '/work/b', orchestratorSessionId: 'orch-2', dialog: dialog('d-1') },
+      { sessionId: 'loose', title: null, directory: null, orchestratorSessionId: null, dialog: dialog('d-2', 'Trust?') },
+    ]);
+  });
+
+  it('keeps an orchestrator whose mark was removed while it still owns workers', async () => {
+    let orchestrators = ['orch'];
+    const harness = createHarness();
+    const readSettings = harness.deps.readSettings;
+    const unmarked = createHarness({ file: harness.file, overrides: { readSettings: async () => ({ ...await readSettings(), orchestrators }) } });
+    await unmarked.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    orchestrators = [];
+    const overview = await unmarked.service.overview();
+    expect(overview.orchestrators).toEqual([expect.objectContaining({ sessionId: 'orch', marked: false, workers: [expect.objectContaining({ sessionId: 'worker-1' })] })]);
+  });
+
+  it('rejects when the registry or the settings cannot be read, never an empty overview', async () => {
+    const broken = Object.assign(new Error('unreadable'), { code: 'ORCHESTRATION_REGISTRY_INVALID' });
+    const registryFails = createHarness();
+    registryFails.registry.read = async () => { throw broken; };
+    await expectCode(registryFails.service.overview(), 'ORCHESTRATION_REGISTRY_INVALID');
+    const settingsFail = createHarness({ overrides: { readSettings: async () => { throw broken; } } });
+    await expectCode(settingsFail.service.overview(), 'ORCHESTRATION_REGISTRY_INVALID');
+  });
+});
+
 describe('host gate', () => {
   const spawn = (harness, cwd = '/work/a') => harness.service.call('orch', 'session_spawn', { cwd, task: 'one' });
 

@@ -4056,6 +4056,7 @@ export function createSessionDaemon({
       // is still deciding) is no streaming state, but it will start a run.
       inputActive: activeSessionInputs.has(runtimeRegistry?.findBySessionId(sessionId)),
     }),
+    listPendingDialogs: () => extensionBridge.listPendingDialogs(),
     createWorkerSession: async ({ cwd: workerCwd, title, model, thinking, parentSessionPath, lineage }) => {
       const created = await createSession(
         { cwd: workerCwd, title, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) },
@@ -4500,6 +4501,13 @@ export function createSessionDaemon({
       }
       case 'orchestration.prWatch': {
         const result = await watchPullRequests(message.payload);
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.overview': {
+        // A failed read is an error result, never an empty overview.
+        const result = await orchestration.overview()
+          .then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
         return;
       }

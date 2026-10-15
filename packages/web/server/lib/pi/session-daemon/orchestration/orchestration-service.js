@@ -199,6 +199,8 @@ export function createOrchestrationService(deps) {
     // The daemon's session deletion, the last cleanup step.
     deleteSession,
     getSessionActivity = () => ({}),
+    // Pending blocking dialogs of resident sessions: [{ sessionId, dialog }].
+    listPendingDialogs = () => [],
     holdSession = () => () => {},
     // 'present' | 'absent' | 'unknown' for the worker's JSONL.
     sessionFileState = async () => 'unknown',
@@ -1064,8 +1066,47 @@ export function createOrchestrationService(deps) {
     const workers = await Promise.all(workersOf(document, callerSessionId)
       .filter(([sessionId]) => !wanted || wanted.has(sessionId))
       .map(([sessionId, worker]) => digestWorker(sessionId, worker)));
+    return { at: now(), ...capacity(document, workerLimit), operations, workers };
+  };
+
+  const capacity = (document, workerLimit) => {
     const used = slotsInUse(document);
-    return { at: now(), limit: { workerLimit, used }, host: { ...hostGateNumbers(hostStatus()), workers: used, limit: workerLimit }, operations, workers };
+    return { limit: { workerLimit, used }, host: { ...hostGateNumbers(hostStatus()), workers: used, limit: workerLimit } };
+  };
+
+  /**
+   * The owner's view (#20): every orchestrator, marked or still owning
+   * workers, with its workers, the slot use, the host and the pending
+   * dialogs of resident sessions. Reads the registry and the live channels
+   * only and activates nothing; a failed registry or settings read rejects.
+   */
+  const overview = async () => {
+    const [document, { workerLimit, orchestrators: marked = [] }] = await Promise.all([registry.read(), readSettings()]);
+    const owners = new Set(marked);
+    for (const worker of Object.values(document.workers)) {
+      if (worker.state !== 'removed' && worker.orchestratorSessionId) owners.add(worker.orchestratorSessionId);
+    }
+    const titleOf = (runtime) => runtime?.session?.sessionManager?.getSessionName?.() ?? null;
+    const orchestrators = await Promise.all([...owners].map(async (sessionId) => ({
+      sessionId,
+      marked: marked.includes(sessionId),
+      title: titleOf(getLiveRuntime(sessionId)),
+      workers: await Promise.all(workersOf(document, sessionId).map(async ([workerId, worker]) => ({
+        ...await digestWorker(workerId, worker),
+        pullRequestStatus: prWatch.statusOf(workerId, worker.pullRequest),
+      }))),
+    })));
+    const dialogs = listPendingDialogs().map(({ sessionId, dialog }) => {
+      const runtime = getLiveRuntime(sessionId);
+      return {
+        sessionId,
+        title: titleOf(runtime),
+        directory: runtime?.cwd ?? null,
+        orchestratorSessionId: document.workers[sessionId]?.orchestratorSessionId ?? null,
+        dialog,
+      };
+    });
+    return { at: now(), ...capacity(document, workerLimit), orchestrators, dialogs };
   };
 
   // Removes a worker after the proven merge of its pull request (#118):
@@ -1803,6 +1844,7 @@ export function createOrchestrationService(deps) {
     // An extension dialog opened in a session; in a worker it is a question.
     onDialogOpened: (sessionId, title) => wakes.emit(sessionId, 'question', `dialog: ${title ?? 'input requested'}`),
     prWatch,
+    overview,
     startWakes: wakes.start,
     stopWakes: wakes.stop,
     verifyCaller,

@@ -1902,3 +1902,45 @@ describe('Pi runtime route', () => {
     expect(commandsAfterDelete.commands.map((c) => c.name)).not.toContain('second');
   });
 });
+
+describe('orchestration overview route (#20)', () => {
+  let server;
+  afterEach(async () => {
+    await close(server);
+    server = undefined;
+  });
+
+  const start = async (getPiSessionDaemonRuntime) => {
+    const app = express();
+    app.use(express.json());
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime });
+    server = await listen(app);
+    return `http://127.0.0.1:${server.address().port}/api/pi/orchestration/overview`;
+  };
+
+  it('returns the daemon overview uncached', async () => {
+    const overview = { at: 1, limit: { workerLimit: 4, used: 0 }, host: {}, orchestrators: [], dialogs: [] };
+    const request = vi.fn(async () => ({ value: overview }));
+    const response = await fetch(await start(() => ({ request })));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual(overview);
+    expect(request).toHaveBeenCalledWith('orchestration.overview', {});
+  });
+
+  it('turns a failed daemon read into an error, never an empty overview', async () => {
+    const failed = await fetch(await start(() => ({ request: async () => ({ error: { code: 'ORCHESTRATION_REGISTRY_INVALID' } }) })));
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toEqual({ error: { code: 'ORCHESTRATION_REGISTRY_INVALID' } });
+  });
+
+  it('refuses a malformed daemon answer and reports a missing daemon', async () => {
+    const malformed = await fetch(await start(() => ({ request: async () => ({ value: { orchestrators: 'x' } }) })));
+    expect(malformed.status).toBe(502);
+    expect(await malformed.json()).toEqual({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+    await close(server);
+    const missing = await fetch(await start(() => null));
+    expect(missing.status).toBe(503);
+    expect(await missing.json()).toEqual({ error: { code: 'DAEMON_UNAVAILABLE' } });
+  });
+});

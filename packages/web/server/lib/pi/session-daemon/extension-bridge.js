@@ -497,11 +497,16 @@ export const createExtensionBridge = ({
     };
   };
 
+  /** Every pending blocking dialog of every resident session, oldest first. */
+  const listPendingDialogs = () => [...pendingExtensionDialogs.values()]
+    .map((pending) => ({ sessionId: pending.sessionId, dialog: pending.payload }));
+
   return {
     buildExtensionBindings,
     clearExtensionState,
     getSnapshotState,
     hasLiveSubagentRunsForSession,
+    listPendingDialogs,
     mirrorExtensionApp,
     mirrorExtensionPanel,
     publishExtensionCustomMessage,

@@ -1806,6 +1806,28 @@ export const registerPiRuntimeRoutes = (app, {
     res.status(201).json({ token, sessionId, expiresAt, idleTimeoutMs, url: '/api/pi/mcp', server: 'pichamber' });
   });
 
+  // The owner's control center (#20): all orchestrators with their workers,
+  // slots, host and pending dialogs. A failed daemon read is an error, never
+  // an empty overview.
+  app.get('/api/pi/orchestration/overview', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.overview', {});
+      if (result?.error) {
+        res.status(503).json({ error: { code: typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED' } });
+        return;
+      }
+      const value = result?.value;
+      if (!value || typeof value !== 'object' || !Array.isArray(value.orchestrators) || !Array.isArray(value.dialogs)) {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {
     const { sessionId } = req.params;
     const { archived } = req.body || {};
