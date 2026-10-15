@@ -1092,7 +1092,7 @@ export class PiSessionStore {
       }
       const listedSessions = this.filterDeletedListItems(result.sessions);
       const liveGate = this.createListLiveGate(result);
-      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, normalized, listedSessions, Date.now(), this.deletedSessionIds, liveGate.options);
+      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, normalized, listedSessions, Date.now(), this.deletedSessionIds, { ...liveGate.options, incomplete: result.incomplete === true });
       if (nextCatalog !== this.state.catalog) {
         this.state = { ...this.state, catalog: nextCatalog };
         liveGate.commit(listedSessions);
@@ -1494,7 +1494,7 @@ export class PiSessionStore {
         ));
       this.pendingPreferredSessionId = null;
       const liveGate = this.createListLiveGate(result.payload);
-      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, resolvedDirectory, listPayload.sessions, Date.now(), this.deletedSessionIds, liveGate.options);
+      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, resolvedDirectory, listPayload.sessions, Date.now(), this.deletedSessionIds, { ...liveGate.options, incomplete: result.payload.incomplete === true });
       const catalogChanged = nextCatalog !== this.state.catalog;
       this.state = {
         ...this.state,
@@ -1583,7 +1583,7 @@ export class PiSessionStore {
   ): Promise<
     | { kind: 'stale' }
     | { kind: 'failed'; error: PiRequestError }
-    | { kind: 'ok'; payload: { sessions: PiSessionListItem[]; streamEpoch?: string } }
+    | { kind: 'ok'; payload: { sessions: PiSessionListItem[]; streamEpoch?: string; incomplete?: true } }
   > {
     try {
       const result = await piClient.listSessions({ directory: resolvedDirectory, runtimeKey });
@@ -1849,7 +1849,7 @@ export class PiSessionStore {
       // `connection` untouched; we flip to `'ready'` here so the cluster
       // is considered attached before SSE is plugged.
       const liveGate = this.createListLiveGate(result, { streamAttaching: true });
-      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, selected.directory, listedSessions, Date.now(), this.deletedSessionIds, liveGate.options);
+      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, selected.directory, listedSessions, Date.now(), this.deletedSessionIds, { ...liveGate.options, incomplete: result.incomplete === true });
       const catalogChanged = nextCatalog !== this.state.catalog;
       this.state = {
         ...this.state,

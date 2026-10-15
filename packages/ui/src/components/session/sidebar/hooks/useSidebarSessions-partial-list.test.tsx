@@ -128,7 +128,8 @@ describe('useSidebarSessions with an incomplete session list', () => {
       await refresh({ sessions: [listItem('healthy')], incomplete: true });
       expect(store.isDeleted('victim')).toBe(false);
       expect(store.getState().catalog.byId.has('victim')).toBe(true);
-      expect(store.getState().catalog.listStatusByDirectory.get(PROJECT)).not.toBe('ready');
+      expect(store.getState().catalog.listStatusByDirectory.get(PROJECT)).toBe('ready');
+      expect(visibleIds()).toEqual(['healthy', 'victim']);
 
       // The file is repaired: the complete list shows the session again.
       await refresh({ sessions: [listItem('healthy'), listItem('victim')] });

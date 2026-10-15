@@ -170,6 +170,9 @@ export interface PiSessionListResponse {
    *  A value different from the client's established epoch means the
    *  response predates a daemon restart and must not be committed. */
   streamEpoch?: string;
+  /** Set when the server skipped a session file it could not read. The list
+   *  proves the sessions it contains, not that an omitted one is gone. */
+  incomplete?: true;
 }
 
 export interface PiSessionCreateInput {
