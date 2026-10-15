@@ -79,17 +79,27 @@ const PiSessionBootstrapBridge: React.FC = () => {
   const { selectedSessionId, directory, connection, focusPending } = snapshot;
 
   React.useEffect(() => {
-    // Write back the focus as it is now, not as rendered: a folder effect may
-    // already have moved it in this commit, and echoing the rendered folder
-    // would make the two swap folders forever (#108).
-    const focusedDirectory = store.getState().directory;
-    if (!focusedDirectory) return;
-    const currentDirectory = useDirectoryStore.getState().currentDirectory;
-    if (normalizePath(currentDirectory) !== normalizePath(focusedDirectory)) {
-      useDirectoryStore.getState().setDirectory(focusedDirectory, { showOverlay: false });
-    }
-    void useConfigStore.getState().activateDirectory(focusedDirectory);
-  }, [directory, store]);
+    // Mirror a Pi focus change when the store publishes it, not in a later
+    // effect. Folder writes then reach the other store in the order they
+    // happened, so a folder chosen after the focus moved in the same commit
+    // wins instead of being overwritten, and neither side echoes a value the
+    // other has already left (#108). Only a change of the focus is mirrored,
+    // never a mere difference to the directory store.
+    let mirroredDirectory: string | null = null;
+    const mirrorFocus = () => {
+      const focusedDirectory = store.getState().directory;
+      if (normalizePath(focusedDirectory) === normalizePath(mirroredDirectory)) return;
+      mirroredDirectory = focusedDirectory;
+      if (!focusedDirectory) return;
+      const currentDirectory = useDirectoryStore.getState().currentDirectory;
+      if (normalizePath(currentDirectory) !== normalizePath(focusedDirectory)) {
+        useDirectoryStore.getState().setDirectory(focusedDirectory, { showOverlay: false });
+      }
+      void useConfigStore.getState().activateDirectory(focusedDirectory);
+    };
+    mirrorFocus();
+    return store.subscribe(mirrorFocus, 'chrome');
+  }, [store]);
 
   // The composer still reads the restored session UI store. Keep its complete
   // identity synchronized, including project switches and the no-project state.

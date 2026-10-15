@@ -163,6 +163,7 @@ mock.module('@/apps/useNativePushRegistration', () => ({ useNativePushRegistrati
 const { MobileApp } = await import('../MobileApp');
 const { getPiSessionStore } = await import('@/apps/pi-session-store');
 const { piClient } = await import('@/lib/pi/client');
+const { useProjectsStore } = await import('@/stores/useProjectsStore');
 
 // ---------------------------------------------------------------------------
 // Pi RPC stubs and harness
@@ -332,6 +333,7 @@ afterEach(async () => {
     setDirectory: (directory: string) => directoryStore.setState({ currentDirectory: directory }),
   });
   sessionUIStore.reset(initialSessionUI());
+  useProjectsStore.setState({ projects: [], activeProjectId: null });
 });
 
 /** Folder switch as the drawer/project picker performs it after mount. */
@@ -398,34 +400,102 @@ describe('MobileApp directory focus keeps the user-owned selection (mounted)', (
     expect(sessionUIStore.getState().currentSessionId).toBe('y');
   });
 
-  test('a folder change and a Pi focus change in the same commit converge instead of looping', async () => {
+  /** Record every directory store write, including the bridge's write backs. */
+  const recordDirectoryWrites = () => {
+    const writes: string[] = [];
+    const setDirectory = directoryStore.getState().setDirectory;
+    directoryStore.setState({
+      setDirectory: (directory: string) => {
+        writes.push(directory);
+        setDirectory(directory);
+      },
+    });
+    return writes;
+  };
+
+  // Two folder writers can land in one React commit (#108). Whichever wrote
+  // last is the newer intent and must win in both stores; the effects' order
+  // in the tree must not decide it, and the two must not swap folders.
+  test('a folder choice after a Pi focus change in the same commit wins', async () => {
     installPiStubs();
     const store = attachStoreAt('/other');
     listHandler = async (directory) => listed(directory, []);
     await mountMobileApp();
+    const directoryWrites = recordDirectoryWrites();
 
-    const directoryWrites: string[] = [];
-    const setDirectory = directoryStore.getState().setDirectory;
-    directoryStore.setState({
-      setDirectory: (directory: string) => {
-        directoryWrites.push(directory);
-        setDirectory(directory);
-      },
+    await act(async () => {
+      void store.focusProject('/b', null);
+      directoryStore.getState().setDirectory('/a');
     });
+    await flush();
 
-    // Two writers landing in one commit (#108): the directory store names one
-    // folder while the Pi focus moves to another. The focus effect and the
-    // bootstrap bridge must settle on one folder, not swap them every render.
+    expect(store.getState().directory).toBe('/a');
+    expect(directoryStore.getState().currentDirectory).toBe('/a');
+    expect(directoryWrites.length).toBeLessThan(4);
+  });
+
+  test('a Pi focus change after a folder choice in the same commit wins', async () => {
+    installPiStubs();
+    const store = attachStoreAt('/other');
+    listHandler = async (directory) => listed(directory, []);
+    await mountMobileApp();
+    const directoryWrites = recordDirectoryWrites();
+
     await act(async () => {
       directoryStore.getState().setDirectory('/a');
       void store.focusProject('/b', null);
     });
     await flush();
 
-    // The test's own write plus at most one write back; the loop made dozens.
-    expect(directoryWrites.length).toBeLessThan(3);
-    expect(['/a', '/b']).toContain(store.getState().directory);
-    expect(directoryStore.getState().currentDirectory).toBe(store.getState().directory);
+    expect(store.getState().directory).toBe('/b');
+    expect(directoryStore.getState().currentDirectory).toBe('/b');
+    expect(directoryWrites.length).toBeLessThan(4);
+  });
+
+  test('a project switch after a Pi focus change in the same commit moves project, folder and focus', async () => {
+    installPiStubs();
+    const store = attachStoreAt('/other');
+    listHandler = async (directory) => listed(directory, []);
+    useProjectsStore.setState({
+      projects: [{ id: 'a', path: '/a' }, { id: 'b', path: '/b' }] as never,
+      activeProjectId: 'b',
+    });
+    await mountMobileApp();
+
+    await act(async () => {
+      void store.focusProject('/b', null);
+      useProjectsStore.getState().setActiveProject('a');
+    });
+    await flush();
+
+    expect(useProjectsStore.getState().activeProjectId).toBe('a');
+    expect(directoryStore.getState().currentDirectory).toBe('/a');
+    expect(store.getState().directory).toBe('/a');
+  });
+
+  test('control: the same two writes in separate commits keep the later one', async () => {
+    installPiStubs();
+    const store = attachStoreAt('/other');
+    listHandler = async (directory) => listed(directory, []);
+    await mountMobileApp();
+
+    await act(async () => {
+      void store.focusProject('/b', null);
+    });
+    await flush();
+    await switchDirectory('/a');
+    await flush();
+    expect(store.getState().directory).toBe('/a');
+    expect(directoryStore.getState().currentDirectory).toBe('/a');
+
+    await switchDirectory('/c');
+    await flush();
+    await act(async () => {
+      void store.focusProject('/b', null);
+    });
+    await flush();
+    expect(store.getState().directory).toBe('/b');
+    expect(directoryStore.getState().currentDirectory).toBe('/b');
   });
 
   test('an open draft keeps its blank-chat intent across the folder focus', async () => {

@@ -161,7 +161,7 @@ describe('SyncAppEffects directory bridge', () => {
     expect(setDirectoryCalls).toBe(0);
   });
 
-  test('writes back the focus current when its effect runs, not one superseded since render', async () => {
+  test('mirrors the current focus, not one superseded since render', async () => {
     const { SyncAppEffects } = await import('./AppEffects');
     const dom = installMinimalDom();
     restoreDom.push(dom.restore);
