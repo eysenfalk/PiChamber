@@ -61,7 +61,6 @@ export function MobileApp({ apis }: MobileAppProps) {
   const connectionPhase = useConfigStore((state) => state.connectionPhase);
   const providersCount = useConfigStore((state) => state.providers.length);
   const loadProviders = useConfigStore((state) => state.loadProviders);
-  const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
   const error = useSessionUIStore((state) => state.error);
   const clearError = useSessionUIStore((state) => state.clearError);
   const setIsMobile = useUIStore((state) => state.setIsMobile);
@@ -618,14 +617,28 @@ export function MobileApp({ apis }: MobileAppProps) {
 
   React.useEffect(() => {
     if (!isConnected) return;
-    // Focus the folder as it is now, not as rendered: the bootstrap bridge
-    // may already have written the Pi focus back in this commit. Acting on
-    // the rendered folder would make the two swap folders forever (#108).
-    const directory = useDirectoryStore.getState().currentDirectory;
-    // A null preference would let a list that is still in flight pick its
-    // first row; carry only a selection that already belongs to this folder.
-    void getPiSessionStore().focusProject(directory, focusPreferenceForDirectory(directory));
-  }, [currentDirectory, isConnected]);
+    // Focus Pi on a folder change when the directory store publishes it, not
+    // after a render. The bootstrap bridge mirrors Pi focus changes the same
+    // way, so each write reaches the other store in the order it happened and
+    // the later one wins, even when it returns to the folder of the last
+    // render and so changes no effect dependency (#108). A folder that already
+    // is the Pi focus is the bridge's echo, not a new choice.
+    const focusFolder = (directory: string | null) => {
+      const store = getPiSessionStore();
+      if (normalizePath(directory) === normalizePath(store.getState().directory)) return;
+      // A null preference would let a list that is still in flight pick its
+      // first row; carry only a selection that already belongs to this folder.
+      void store.focusProject(directory, focusPreferenceForDirectory(directory));
+    };
+    focusFolder(useDirectoryStore.getState().currentDirectory);
+    return useDirectoryStore.subscribe((state, previous) => {
+      if (normalizePath(state.currentDirectory) === normalizePath(previous.currentDirectory)) return;
+      // A runtime switch resets and restores the folder after the connection
+      // dropped but before this effect is cleaned up; reconnect focuses again.
+      if (!useConfigStore.getState().isConnected) return;
+      focusFolder(state.currentDirectory);
+    });
+  }, [isConnected]);
 
   React.useEffect(() => {
     if (!error) return;

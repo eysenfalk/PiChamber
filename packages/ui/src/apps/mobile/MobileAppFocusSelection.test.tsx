@@ -10,26 +10,28 @@ import { createRoot, type Root } from 'react-dom/client';
 // keeps the module mocks below self-contained.
 // ---------------------------------------------------------------------------
 
-type Listener = () => void;
+type Listener<T> = (state: T, previous: T) => void;
 
+/** Minimal zustand stand-in: `subscribe` listeners get `(state, previous)`. */
 const createMutableStore = <T extends object>(initial: T) => {
   let state = initial;
-  const listeners = new Set<Listener>();
-  const subscribe = (listener: Listener) => {
+  const listeners = new Set<Listener<T>>();
+  const subscribe = (listener: Listener<T>) => {
     listeners.add(listener);
     return () => listeners.delete(listener);
   };
   const getState = () => state;
   const setState = (patch: Partial<T>) => {
+    const previous = state;
     state = { ...state, ...patch };
-    listeners.forEach((listener) => listener());
+    listeners.forEach((listener) => listener(state, previous));
   };
   const useStore = <S,>(selector: (value: T) => S): S => React.useSyncExternalStore(
     subscribe,
     () => selector(state),
     () => selector(state),
   );
-  return Object.assign(useStore, { getState, setState, reset: (value: T) => { state = value; } });
+  return Object.assign(useStore, { getState, setState, subscribe, reset: (value: T) => { state = value; } });
 };
 
 const directoryStore = createMutableStore({
@@ -334,6 +336,7 @@ afterEach(async () => {
   });
   sessionUIStore.reset(initialSessionUI());
   useProjectsStore.setState({ projects: [], activeProjectId: null });
+  configSnapshot.isConnected = true;
 });
 
 /** Folder switch as the drawer/project picker performs it after mount. */
@@ -470,6 +473,58 @@ describe('MobileApp directory focus keeps the user-owned selection (mounted)', (
 
     expect(useProjectsStore.getState().activeProjectId).toBe('a');
     expect(directoryStore.getState().currentDirectory).toBe('/a');
+    expect(store.getState().directory).toBe('/a');
+  });
+
+  // A later choice can lead back to the folder of the previous commit. The
+  // directory then reads the same as in the last render, so the sync must not
+  // hang on React effect dependencies to notice it.
+  const startAt = async (directory: string) => {
+    installPiStubs();
+    const store = attachStoreAt(directory);
+    listHandler = async (listedDirectory) => listed(listedDirectory, []);
+    directoryStore.reset({ ...directoryStore.getState(), currentDirectory: directory });
+    await mountMobileApp();
+    return store;
+  };
+
+  test('a folder choice back to the rendered folder after a Pi focus change in the same commit wins', async () => {
+    const store = await startAt('/a');
+
+    await act(async () => {
+      void store.focusProject('/b', null);
+      directoryStore.getState().setDirectory('/a');
+    });
+    await flush();
+
+    expect(directoryStore.getState().currentDirectory).toBe('/a');
+    expect(store.getState().directory).toBe('/a');
+  });
+
+  test('a Pi focus back to the rendered folder after a folder choice in the same commit wins', async () => {
+    const store = await startAt('/a');
+
+    await act(async () => {
+      directoryStore.getState().setDirectory('/b');
+      void store.focusProject('/a', null);
+    });
+    await flush();
+
+    expect(store.getState().directory).toBe('/a');
+    expect(directoryStore.getState().currentDirectory).toBe('/a');
+  });
+
+  // A runtime switch resets and restores the folder after the config store
+  // already reports the connection gone but before React re-renders. The
+  // directory subscription must not focus Pi in that window.
+  test('a folder write after the connection dropped does not focus Pi before reconnect', async () => {
+    const store = await startAt('/a');
+
+    await act(async () => {
+      configSnapshot.isConnected = false;
+      directoryStore.getState().setDirectory('/c');
+    });
+
     expect(store.getState().directory).toBe('/a');
   });
 

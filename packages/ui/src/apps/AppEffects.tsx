@@ -80,11 +80,11 @@ const PiSessionBootstrapBridge: React.FC = () => {
 
   React.useEffect(() => {
     // Mirror a Pi focus change when the store publishes it, not in a later
-    // effect. Folder writes then reach the other store in the order they
-    // happened, so a folder chosen after the focus moved in the same commit
-    // wins instead of being overwritten, and neither side echoes a value the
-    // other has already left (#108). Only a change of the focus is mirrored,
-    // never a mere difference to the directory store.
+    // effect. The directory subscription in `MobileApp` does the same in the
+    // other direction, so folder writes reach the other store in the order
+    // they happened and the later one wins in both (#108). Only a change of
+    // the focus is mirrored, never a mere difference to the directory store,
+    // so a write back of the other side's change is skipped.
     let mirroredDirectory: string | null = null;
     const mirrorFocus = () => {
       const focusedDirectory = store.getState().directory;
