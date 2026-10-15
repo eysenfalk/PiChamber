@@ -4,6 +4,7 @@
 // MCP `tools/list` accept as is.
 
 import { ORCHESTRATION_ROLES } from '../../settings-store.js';
+import { TOOL_PROFILE_NAMES } from './tool-profiles.js';
 
 export const ORCHESTRATION_NAMESPACE = 'mcp__pichamber';
 export const ORCHESTRATION_MCP_SERVER = 'pichamber';
@@ -28,6 +29,17 @@ const pullRequestRef = (description) => ({
 });
 const RUN_STATUS = 'Each session reports state, the outcome and error of its last turn, and while it runs an activity object: runningForMs, quietForMs since its transcript last changed, retry with the provider error during an automatic retry, and waitingForInput when a dialog blocks it.';
 const thinking = { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] };
+const profile = {
+  type: 'string',
+  enum: [...TOOL_PROFILE_NAMES],
+  description: 'Tools the worker may use; the daemon blocks the rest. Default from the role: read-only for review and oracle, else full. read-only excludes edit, write, the writing AFT tools and subagents; bash stays, so it is a tool limit, not a sandbox.',
+};
+const excludeExtensions = {
+  type: 'array',
+  maxItems: 32,
+  items: { type: 'string', minLength: 1, maxLength: 512 },
+  description: 'Extensions the worker does not load, as patterns (* wildcard) on the extension path or package source such as npm:pi-intercom. PiChamber\'s own extensions always load.',
+};
 const model = {
   type: 'object',
   additionalProperties: false,
@@ -65,6 +77,8 @@ export const ORCHESTRATION_TOOLS = [
         },
         model,
         thinking,
+        profile,
+        excludeExtensions,
         servesPr: pullRequestRef('For a helper without its own branch (review, research, oracle): the pull request it serves. worker_cleanup deletes the helper once that pull request is merged.'),
         mode: { type: 'string', enum: ['async', 'wait'] },
         timeoutMs: { type: 'integer', minimum: 0, maximum: 3600000 },
@@ -102,6 +116,8 @@ export const ORCHESTRATION_TOOLS = [
         brief: { type: 'string', minLength: 1, maxLength: 60000, description: 'Complete task brief for the worker.' },
         model,
         thinking,
+        profile,
+        excludeExtensions,
       },
     },
   },

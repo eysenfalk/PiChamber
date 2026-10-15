@@ -15,6 +15,7 @@ lab/run record orchestration # Orchestrator spawns a worker on the faux model (#
 lab/run record worktree-worker # A worker spawned in a linked worktree sits under that worktree (#179), in .proof/worktree-worker/
 lab/run record extension-messages # Custom messages as compact grouped rows (#147), in .proof/extension-messages/
 lab/run record html-render  # The faux model calls html_render; page inline, maximized, reloaded, mobile (#155), in .proof/html-render/
+lab/run record tool-profiles # REVIEW starts a read-only review worker; edit and write blocked, README unchanged (#151), in .proof/tool-profiles/
 lab/run record recreated-worktree # A session leaves with its closed worktree and returns with it, no reload (#160), in .proof/recreated-worktree/
 lab/run down                # removes pod, internal network and lab state volume
 ```

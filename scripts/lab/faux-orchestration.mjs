@@ -39,6 +39,8 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;b
 <div id="probe">Script: not run</div>
 <script>var t='Script: ran. Parent document: ';try{t+=parent.document?'readable':'readable'}catch(e){t+='blocked'}document.getElementById('probe').textContent=t;</script>
 </body></html>`;
+// Issue #151: REVIEW starts a review worker (tool profile read-only) that tries to change the README.
+export const LAB_REVIEW_WORKER_TITLE = 'Lab: reviewer';
 // Long enough for the owner to ask the orchestrator something while the worker runs.
 const WORKER_THINK_MS = 10000;
 
@@ -52,11 +54,48 @@ const textOf = (message) => typeof message?.content === 'string'
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 const respond = async (context) => {
-  const last = (context.messages ?? []).filter((message) => message.role !== 'system').at(-1);
+  const messages = context.messages ?? [];
+  const last = messages.filter((message) => message.role !== 'system').at(-1);
   const text = textOf(last).trim();
+  const userIndex = messages.findLastIndex((message) => message.role === 'user');
+  const task = textOf(messages[userIndex]).trim();
+  const results = messages.slice(userIndex + 1).filter((message) => message.role === 'toolResult');
+  // The request carries the tool set as additions and removals on its system messages.
+  const active = new Set();
+  for (const message of messages.filter((entry) => entry.role === 'system')) {
+    for (const tool of message.toolsRemoved ?? []) active.delete(tool.name);
+    for (const tool of message.toolsAdded ?? []) active.add(tool.name);
+  }
+  const toolList = [...active].sort().join(', ');
   if (last?.role === 'toolResult' && last.toolName === 'html_render') return fauxAssistantMessage(last.isError ? 'The page failed: ' + textOf(last) : ${JSON.stringify(LAB_HTML_RENDER_REPLY)});
   if (text === 'RENDER') {
     return fauxAssistantMessage([fauxToolCall('html_render', { title: ${JSON.stringify(LAB_HTML_RENDER_TITLE)}, html: ${JSON.stringify(LAB_HTML_RENDER_PAGE)} })], { stopReason: 'toolUse' });
+  }
+  if (task.includes('REVIEW TASK') && !/^(A|\\d+) worker events?:/.test(text)) {
+    const resultOf = (name) => textOf(results.find((result) => result.toolName === name)).trim();
+    if (last?.role !== 'toolResult') {
+      return fauxAssistantMessage([fauxToolCall('edit', { path: 'README.md', edits: [{ oldText: 'Synthetic proof lab project.', newText: 'Reviewed.' }] })], { stopReason: 'toolUse' });
+    }
+    if (last.toolName === 'edit') return fauxAssistantMessage([fauxToolCall('write', { path: 'README.md', content: '# Reviewed\\n' })], { stopReason: 'toolUse' });
+    if (last.toolName === 'write') {
+      return fauxAssistantMessage([fauxToolCall('bash', { command: 'test -z "$(git status --porcelain -- README.md)" && echo "git: README.md unchanged"; cat README.md' })], { stopReason: 'toolUse' });
+    }
+    return fauxAssistantMessage('REVIEW DONE. edit: ' + resultOf('edit') + ' write: ' + resultOf('write') + ' bash: ' + resultOf('bash').split('\\n')[0]
+      + '\\n\\nTools sent to me (review worker, profile read-only): ' + toolList);
+  }
+  if (task === 'REVIEW') {
+    if (last?.role === 'toolResult') {
+      return fauxAssistantMessage(last.isError ? 'The reviewer did not start: ' + textOf(last)
+        : 'The reviewer "${LAB_REVIEW_WORKER_TITLE}" runs with the read-only profile.\\n\\nTools sent to me (orchestrator, no profile, full): ' + toolList);
+    }
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__session_spawn', {
+      cwd: ${JSON.stringify(workerCwd)},
+      task: 'REVIEW TASK: review the README of this project and fix its wording in place.',
+      title: ${JSON.stringify(LAB_REVIEW_WORKER_TITLE)},
+      role: 'review',
+      model: { providerId: 'faux', modelId: 'faux-1' },
+      clientRequestId: 'lab-review-' + Date.now(),
+    })], { stopReason: 'toolUse' });
   }
   if (last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__worker_report') return fauxAssistantMessage('WORKER DONE: the README check passed and is recorded.');
   if (last?.role === 'toolResult') {
@@ -67,6 +106,10 @@ const respond = async (context) => {
       : 'The worker "${LAB_WORKER_TITLE}" is running. I stay available while it works.');
   }
   // The daemon's wake: "A worker event:" or "N worker events:" (orchestration/wakes.js).
+  // A finished worker's reply follows "run_finished:".
+  if (/^(A|\\d+) worker events?:/.test(text) && text.includes('run_finished: REVIEW DONE')) {
+    return fauxAssistantMessage('The reviewer could not change README.md: its read-only tool profile kept edit and write away from it.');
+  }
   if (/^(A|\\d+) worker events?:/.test(text)) {
     return fauxAssistantMessage(text.includes('WORKER DONE')
       ? 'The worker finished: the README check passed. Nothing else is open.'
@@ -93,7 +136,7 @@ const respond = async (context) => {
       clientRequestId: 'lab-spawn-' + Date.now(),
     })], { stopReason: 'toolUse' });
   }
-  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO or RENDER.');
+  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO, REVIEW or RENDER.');
 };
 
 export default function (pi) {
