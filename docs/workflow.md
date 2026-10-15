@@ -94,8 +94,8 @@ Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, 
 
 ### 4. Lane and go
 
-- **Fast, build right away:** a bug fix with a red test first, or a one-slice change with clear acceptance criteria, no new dependency, and no change to an external contract (API, persisted data, config format, visible UI behavior).
-- **Slow, wait for the user's go after the draft:** several slices, an external contract, a migration or deletion, a new dependency, a one-way door, a product question, or questions left open by exploration. While waiting, do what fits any plan: probes, prototypes, red tests for the wanted behavior, reading. No production code before the go.
+- **Fast, build right away:** a bug fix with a red test first, or a one-slice change with clear acceptance criteria, no new dependency, and no change to an external contract (API, persisted data, config format, visible UI behavior). A change that only touches documentation is never fast.
+- **Slow, wait for the user's go after the draft:** every documentation only change, and anything with several slices, an external contract, a migration or deletion, a new dependency, a one-way door, a product question, or questions left open by exploration. While waiting, do what fits any plan: probes, prototypes, red tests for the wanted behavior, reading. No production code before the go.
 - **Moving between lanes.** The brief or the plan names the lane. A worker may move to slow, never to fast. A fast plan that grows a second slice or touches a contract stops and moves to slow, and says so in the description.
 
 Changing the plan later means updating the description (`gh pr edit <n> --body-file <plan.md>`) and saying so.
