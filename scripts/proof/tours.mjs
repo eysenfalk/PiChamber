@@ -492,14 +492,15 @@ export function startLastSessionTour(manifest) {
   // The lab server starts in the first project, so its default runtime lives there; the seed marker predates both loads.
   const count = 'echo "new session files: $(find /lab/pi-agent/sessions -name \'*.jsonl\' -newer /lab/seed.json | wc -l)"';
   return validateTour({ name: 'start-last-session', steps: [
-    { caption: `First load on a fresh browser profile and a freshly started daemon: ${label(active.name)} main lists only its seeded sessions, no "Awaiting first prompt" row.`,
-      viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'click', text: label(active.name) },
+    { caption: 'First load on a fresh browser profile against a freshly started daemon, before any input.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'wait', ms: 3000 }],
+      evidence: [{ text: label(active.name) }] },
+    { caption: `${label(active.name)} main lists only its seeded sessions, no "Awaiting first prompt" row.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: label(active.name) },
         { type: 'wait', selector: main(active) }, { type: 'click', selector: main(active) }, { type: 'wait', selector: item(long.title) }],
       evidence: [{ selector: main(active) }, { selector: item(long.title) }] },
     { caption: `Opening "${last.title}" in ${label(lastProject.name)} makes it the last used session.`, viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'click', text: label(lastProject.name) }, { type: 'wait', selector: main(lastProject) }, { type: 'click', selector: main(lastProject) },
-        { type: 'wait', selector: item(last.title) }, { type: 'click', selector: item(last.title) }, { type: 'wait', ms: 1500 }],
+      actions: [{ type: 'click', text: label(lastProject.name) }, { type: 'wait', selector: item(last.title) }, { type: 'click', selector: item(last.title) }, { type: 'wait', ms: 3000 }],
       evidence: [{ selector: 'header', text: last.title }] },
     { caption: `After a reload without input, "${last.title}" opens again, not the newest session of ${label(active.name)}.`, viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'wait', ms: 3000 }],

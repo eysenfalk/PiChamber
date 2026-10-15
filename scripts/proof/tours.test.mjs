@@ -159,11 +159,12 @@ describe('tours.mjs format', () => {
       sessions: [{ project: 'lab-one', title: 'Long', role: 'long' }, { project: 'lab-one', title: 'Short one', role: 'short' }, { project: 'lab-two', title: 'Short two', role: 'short' }] };
     const tour = startLastSessionTour(manifest);
     expect(tour.name).toBe('start-last-session');
-    expect(tour.steps[0].evidence).toEqual([{ selector: '[data-tree-node="w:/one"]' }, { selector: '[role="treeitem"][aria-label="Long"]' }]);
-    expect(tour.steps[1].actions).toContainEqual({ type: 'click', selector: '[role="treeitem"][aria-label="Short two"]' });
-    expect(tour.steps[2].actions[0]).toEqual({ type: 'navigate', path: '' });
-    expect(tour.steps[2].evidence).toEqual([{ selector: 'header', text: 'Short two' }]);
-    expect(tour.steps[3].evidence).toContainEqual({ text: 'new session files: 0' });
+    expect(tour.steps[0].actions.map(action => action.type)).toEqual(['navigate', 'wait', 'wait']);
+    expect(tour.steps[1].evidence).toEqual([{ selector: '[data-tree-node="w:/one"]' }, { selector: '[role="treeitem"][aria-label="Long"]' }]);
+    expect(tour.steps[2].actions).toContainEqual({ type: 'click', selector: '[role="treeitem"][aria-label="Short two"]' });
+    expect(tour.steps[3].actions[0]).toEqual({ type: 'navigate', path: '' });
+    expect(tour.steps[3].evidence).toEqual([{ selector: 'header', text: 'Short two' }]);
+    expect(tour.steps[4].evidence).toContainEqual({ text: 'new session files: 0' });
     expect(tour.steps.at(-1).viewport).toBe('mobile');
     expect(() => startLastSessionTour({ ...manifest, sessions: manifest.sessions.slice(0, 2) })).toThrow('Invalid lab seed manifest');
   });
