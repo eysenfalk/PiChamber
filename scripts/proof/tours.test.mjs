@@ -99,6 +99,7 @@ describe('tours.mjs format', () => {
     const typed = tour.steps.flatMap(step => step.actions).filter(action => action.type === 'type').map(action => action.value);
     expect(typed).toEqual(['REVIEW']);
     const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ text: 'could not change README.md' });
     expect(evidence).toContainEqual({ text: 'git: README.md unchanged' });
     expect(evidence).toContainEqual({ text: 'Tools sent to me (review worker, profile read-only)' });
     expect(() => toolProfilesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');

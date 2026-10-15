@@ -306,8 +306,8 @@ export function toolProfilesTour(manifest) {
   const worker = LAB_REVIEW_WORKER_TITLE;
   const composer = '[data-chat-input="true"] .cm-content';
   const item = title => `[role="treeitem"][aria-label="${title}"]`;
-  const card = '[data-orchestration-result]';
   const started = { text: 'runs with the read-only profile.' };
+  const verdict = { text: 'could not change README.md' };
   const done = { text: 'REVIEW DONE.' };
   return validateTour({ name: 'tool-profiles', steps: [
     { caption: `The orchestrator starts the review worker "${worker}". Its own answer lists the tools sent to it: no profile, so the full set with edit and write.`, viewport: 'desktop', theme: 'light',
@@ -316,11 +316,12 @@ export function toolProfilesTour(manifest) {
         { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
         { type: 'type', selector: composer, value: 'REVIEW' }, { type: 'press', key: 'Enter' }, { type: 'wait', ...started }],
       evidence: [started, { text: 'Tools sent to me (orchestrator, no profile, full)' }] },
-    { caption: 'The review worker ends, and its result card in the orchestrator says that it could not change README.md.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'wait', selector: card }, { type: 'wait', text: 'could not change README.md' }],
-      evidence: [{ selector: card }, { text: 'could not change README.md' }] },
+    { caption: 'The review worker ends. Its result wakes the orchestrator, which reports that the worker could not change README.md.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', ...verdict }],
+      evidence: [{ text: 'A worker event:' }, verdict] },
     { caption: 'In the worker: edit and write fail, git reports README.md unchanged, and the tools sent to the worker lack edit and write.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'click', selector: `button[aria-label="Open worker ${worker}"]` }, { type: 'wait', ...done }],
+      actions: [{ type: 'click', selector: `${item(orchestrator.title)} button[aria-label="Expand forks"]` }, { type: 'wait', selector: item(worker) },
+        { type: 'click', selector: item(worker) }, { type: 'wait', ...done }],
       evidence: [done, { text: 'git: README.md unchanged' }, { text: 'Tools sent to me (review worker, profile read-only)' }] },
     { caption: 'The same worker transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [data-chat-input="true"]' }, done] },

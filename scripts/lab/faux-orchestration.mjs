@@ -95,7 +95,8 @@ const respond = async (context) => {
     })], { stopReason: 'toolUse' });
   }
   if (last?.role === 'toolResult') return fauxAssistantMessage('The worker "${LAB_WORKER_TITLE}" is running. I stay available while it works.');
-  if (text.startsWith('Worker "') && text.includes('REVIEW DONE')) {
+  // A finished worker reaches its orchestrator as a wake: "A worker event: ... run_finished: <reply>".
+  if (text.startsWith('A worker event') && text.includes('run_finished: REVIEW DONE')) {
     return fauxAssistantMessage('The reviewer could not change README.md: its read-only tool profile kept edit and write away from it.');
   }
   if (text.startsWith('Worker "')) {
