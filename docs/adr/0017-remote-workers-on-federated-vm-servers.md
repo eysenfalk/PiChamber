@@ -1,4 +1,4 @@
-# 0016. Remote workers run on PiChamber servers on isolated VMs, federated by the laptop server; only the laptop reaches forges and internal systems
+# 0017. Remote workers run on PiChamber servers on isolated VMs, federated by the laptop server; only the laptop reaches forges and internal systems
 
 - Status: Proposed
 - Date: 2026-10-15
