@@ -1,4 +1,4 @@
-import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_ASKER_FOLLOW_UP, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -326,6 +326,58 @@ export function toolProfilesTour(manifest) {
       evidence: [done, { text: 'git: README.md unchanged' }, { text: 'Tools sent to me (review worker, profile read-only)' }] },
     { caption: 'The same worker transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [data-chat-input="true"]' }, done] },
+  ] });
+}
+
+/** Issue #20, #87: a worker asks the owner; the control center lists the workers, and its decision inbox answers and closes the question. */
+export function controlCenterTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const worker = LAB_ASKER_TITLE;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const inbox = '[aria-label="Decision inbox"]';
+  const row = `button[aria-label="Open ${worker}"]`;
+  const waiting = 'button[aria-label="Open control center, 1 decision waiting"]';
+  const mobileEntry = 'button[aria-label^="Open control center"]';
+  const answer = 'ANSWER: fail the check';
+  const empty = { text: 'No open questions or dialogs.' };
+  return validateTour({ name: 'control-center', steps: [
+    { caption: `The orchestrator starts "${worker}", which asks the owner a question. The orchestrator leaves owner questions to the owner, and the header counts one waiting decision.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
+        { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
+        { type: 'type', selector: composer, value: 'ASK' }, { type: 'press', key: 'Enter' }, { type: 'wait', text: 'I leave that question to you.' }, { type: 'wait', selector: waiting }],
+      evidence: [{ text: `The worker "${worker}" is running.` }, { text: 'I leave that question to you.' }, { selector: waiting }] },
+    { caption: 'The control center shows the question with its brief, and the worker under its orchestrator with slots and host load.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: waiting }, { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'wait', selector: row }],
+      evidence: [{ selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }, { text: 'Strongest counterargument' },
+        { selector: '[aria-label="Slots and host"]' }, { selector: row }] },
+    { caption: 'The owner answers in the inbox. The answer goes to the worker as the owner\'s prompt and closes the question; the worker asks a follow-up.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'type', selector: `textarea[aria-label="Answer to ${worker}"]`, value: answer }, { type: 'click', text: 'Send answer' },
+        { type: 'wait', text: LAB_ASKER_FOLLOW_UP }],
+      evidence: [{ selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_FOLLOW_UP }] },
+    { caption: 'Opening the worker from the control center shows the answer in its transcript.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: row }, { type: 'wait', text: `Got your answer (${answer}).` }],
+      evidence: [{ text: `Got your answer (${answer}).` }, { text: answer }] },
+    { caption: 'The session list filter shows only workers.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: '[data-testid="worker-filter-trigger"]' }, { type: 'wait', selector: '[data-worker-filter="only"]' },
+        { type: 'click', selector: '[data-worker-filter="only"]' }, { type: 'wait', selector: 'button[aria-label="Workers: only workers"]' }],
+      evidence: [{ selector: 'button[aria-label="Workers: only workers"]' }, { selector: item(worker) }] },
+    { caption: 'The control center in dark theme, with the follow-up still open.', viewport: 'desktop', theme: 'dark',
+      actions: [{ type: 'click', selector: waiting }, { type: 'wait', selector: `${inbox} [data-inbox-question]` }],
+      evidence: [{ selector: `html.dark ${inbox} [data-inbox-question]`, text: LAB_ASKER_FOLLOW_UP }, { selector: row }] },
+    { caption: 'Hosted mobile opens the control center full screen from its header, with the open follow-up and its brief.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
+        { type: 'wait', selector: `${inbox} [data-inbox-question]` }],
+      evidence: [{ selector: mobileEntry }, { selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_FOLLOW_UP }, { text: 'Strongest counterargument' }] },
+    { caption: 'On the phone in dark theme, Mark answered closes the follow-up without a prompt. Nothing waits for the owner any more.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
+        { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'click', text: 'Mark answered' }, { type: 'wait', ...empty }],
+      // The row's last report line truncates on a phone by design, so the evidence is the worker's name.
+      evidence: [empty, { text: 'nothing waits for you' }, { text: worker }] },
   ] });
 }
 

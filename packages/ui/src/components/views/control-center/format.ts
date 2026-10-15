@@ -53,7 +53,7 @@ export const REPORT_LABEL: Record<PiOrchestrationReport['kind'], string> = {
   done: 'Done',
 };
 
-export type Tone = 'neutral' | 'success' | 'warning' | 'error' | 'info';
+type Tone = 'neutral' | 'success' | 'warning' | 'error' | 'info';
 
 /** CI as one short label and tone; null when the pull request was not read yet or has no checks. */
 export const describeChecks = (status: PiOrchestrationPullRequestStatus | null): { label: string; tone: Tone } | null => {

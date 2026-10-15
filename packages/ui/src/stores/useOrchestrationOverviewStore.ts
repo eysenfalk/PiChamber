@@ -29,7 +29,7 @@ interface OrchestrationOverviewState {
   reset: (runtimeKey?: string) => void;
 }
 
-export const OVERVIEW_POLL_MS = 5_000;
+const OVERVIEW_POLL_MS = 5_000;
 
 // Bumped on every reset, so a read that started before it never commits.
 let generation = 0;

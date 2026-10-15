@@ -41,6 +41,10 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;b
 </body></html>`;
 // Issue #151: REVIEW starts a review worker (tool profile read-only) that tries to change the README.
 export const LAB_REVIEW_WORKER_TITLE = 'Lab: reviewer';
+// Issue #20: ASK starts a worker that asks the owner a question with a brief; the control center answers it.
+export const LAB_ASKER_TITLE = 'Lab: asker';
+export const LAB_ASKER_QUESTION = 'Should the README check fail when the license section is missing?';
+export const LAB_ASKER_FOLLOW_UP = 'Should the check also cover the CHANGELOG?';
 // Long enough for the owner to ask the orchestrator something while the worker runs.
 const WORKER_THINK_MS = 10000;
 
@@ -70,6 +74,40 @@ const respond = async (context) => {
   if (last?.role === 'toolResult' && last.toolName === 'html_render') return fauxAssistantMessage(last.isError ? 'The page failed: ' + textOf(last) : ${JSON.stringify(LAB_HTML_RENDER_REPLY)});
   if (text === 'RENDER') {
     return fauxAssistantMessage([fauxToolCall('html_render', { title: ${JSON.stringify(LAB_HTML_RENDER_TITLE)}, html: ${JSON.stringify(LAB_HTML_RENDER_PAGE)} })], { stopReason: 'toolUse' });
+  }
+  if (task === 'ASK') {
+    if (last?.role === 'toolResult') {
+      return fauxAssistantMessage(last.isError ? 'The asker did not start: ' + textOf(last) : 'The worker "${LAB_ASKER_TITLE}" is running.');
+    }
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__session_spawn', {
+      cwd: ${JSON.stringify(workerCwd)},
+      task: 'QUESTION TASK: tighten the README check of this project.',
+      title: ${JSON.stringify(LAB_ASKER_TITLE)},
+      model: { providerId: 'faux', modelId: 'faux-1' },
+      clientRequestId: 'lab-ask-' + Date.now(),
+    })], { stopReason: 'toolUse' });
+  }
+  // The asker's question goes to the owner, so the orchestrator leaves it alone.
+  if (/^(A|\\d+) worker events?:/.test(text) && text.includes(${JSON.stringify(LAB_ASKER_TITLE)})) {
+    return fauxAssistantMessage('The asker has a question for the owner. I leave that question to you.');
+  }
+  // The first question comes with the task, the follow-up with the owner's answer.
+  const asks = task.includes('QUESTION TASK') ? ${JSON.stringify(LAB_ASKER_QUESTION)} : task.startsWith('ANSWER') ? ${JSON.stringify(LAB_ASKER_FOLLOW_UP)} : null;
+  if (asks && last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__worker_report') {
+    return fauxAssistantMessage(last.isError ? 'The question was refused: ' + textOf(last)
+      : (task.startsWith('ANSWER') ? 'Got your answer (' + task + '). ' : '') + 'I asked the owner and wait for the answer.');
+  }
+  if (asks && last?.role === 'user') {
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__worker_report', {
+      kind: 'question', audience: 'owner', summary: asks,
+      brief: {
+        options: ['Fail the check', 'Warn only'],
+        recommendation: 'Fail the check: a missing license blocks every release anyway.',
+        counterargument: 'Old branches without a license would turn red at once.',
+        revisit: 'When a project ships without a license on purpose.',
+      },
+      clientRequestId: 'lab-question-' + Date.now(),
+    })], { stopReason: 'toolUse' });
   }
   if (task.includes('REVIEW TASK') && !/^(A|\\d+) worker events?:/.test(text)) {
     const resultOf = (name) => textOf(results.find((result) => result.toolName === name)).trim();
