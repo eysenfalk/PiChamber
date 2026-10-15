@@ -28,7 +28,7 @@ export type SessionNodeItemProps = {
   setEditingId: (id: string | null) => void;
   editTitle: string;
   setEditTitle: (value: string) => void;
-  handleSaveEdit: (titleOverride?: string) => void;
+  handleSaveEdit: (titleOverride?: string) => void | Promise<void>;
   handleCancelEdit: () => void;
   handleSessionSelect: (sessionId: string, sessionDirectory: string | null) => void;
   handleSessionDoubleClick: (sessionId: string, sessionTitle: string) => void;
