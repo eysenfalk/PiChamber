@@ -180,10 +180,11 @@ module documentation, and every matching skill under `.agents/skills/`.
 
 ## Pull requests
 
-Changes follow [the workflow](docs/workflow.md): an issue, a draft pull request
-whose description is the plan, approval of the plan, then implementation with
-proof, review and a squash merge. A pull request should be easy to review
-without reconstructing the intent from the diff.
+Changes follow [the workflow](docs/workflow.md): an issue, exploration, a draft
+pull request whose description is the plan at the first plan, the owner's go
+for a slow lane plan (a fast lane plan builds right away), then implementation
+with proof, one commit per slice, review and a squash merge. A pull request
+should be easy to review without reconstructing the intent from the diff.
 
 Before opening one:
 

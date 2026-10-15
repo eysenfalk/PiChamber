@@ -17,7 +17,8 @@ Acceptance: <the issue's criteria, verbatim>
 
 Limits:
 - Follow AGENTS.md, docs/workflow.md and the project skills they require.
-- Stop after: <draft pull request with the plan | implementation with proof | other>. Do not implement before the owner's approval reaches you through me, quoted.
+- Lane: <fast | slow>, with the reason (docs/workflow.md). Fast: build right away. Slow: do not write production code before the owner's go reaches you through me, quoted. A worker may move to slow, never to fast.
+- Stop after: <draft pull request with the plan | implementation with proof | other>.
 - Lab: <you may use lab/run | do not use lab/run>. Full builds and test runs: <go ahead | ask me first>.
 - Subagents: <allowed | not allowed>. Without this line the worker decides itself.
 - Never push to main or dev, mark ready, merge, close issues, or touch other worktrees.
