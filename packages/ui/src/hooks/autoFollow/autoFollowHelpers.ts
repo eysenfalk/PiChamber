@@ -1,9 +1,13 @@
 export const BOTTOM_SPACER_DESKTOP_VH = 0.10;
 export const BOTTOM_SPACER_MOBILE_PX = 40;
-/** Footprint of the scroll to bottom button above the composer: 32px button + 8px gap. */
-export const SCROLL_BUTTON_FOOTPRINT_PX = 40;
+/** Rendered height of the scroll to bottom button (measured 36px in Chrome). */
+export const SCROLL_BUTTON_HEIGHT_PX = 36;
+/** Gap between the button and the composer (`mb-2`). */
+export const SCROLL_BUTTON_GAP_PX = 8;
+/** Footprint of the scroll to bottom button above the composer. */
+export const SCROLL_BUTTON_FOOTPRINT_PX = SCROLL_BUTTON_HEIGHT_PX + SCROLL_BUTTON_GAP_PX;
 /** Air kept between the last row and that footprint when the button first appears. */
-const SCROLL_BUTTON_BREATHING_PX = 8;
+const SCROLL_BUTTON_BREATHING_PX = 4;
 /**
  * Least space under the last row of a mobile chat. The button appears once the view is
  * more than BOTTOM_SPACER_MOBILE_PX from the bottom; the footprint and the breathing
