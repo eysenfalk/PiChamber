@@ -2398,6 +2398,15 @@ describe('worker_start', () => {
     expect(workers[0]).toMatchObject({ sessionId: 'worker-1', issue: { repo: 'acme/app', number: 7 }, branch: '7-fix', worktree: harness.worktree });
   });
 
+  it('starts the worker with the requested tool profile and rejects an unknown one (#151)', async () => {
+    const harness = setup();
+    await expectCode(harness.service.call('orch', 'worker_start', { ...args, profile: 'sandbox' }), 'INVALID_ARGUMENT');
+    await harness.service.call('orch', 'worker_start', { ...args, profile: 'read-only' });
+    expect(harness.deps.createWorkerSession).toHaveBeenCalledTimes(1);
+    expect(harness.deps.createWorkerSession.mock.calls[0][0].lineage.profile).toMatchObject({ name: 'read-only', excludeTools: expect.arrayContaining(['edit', 'write']) });
+    expect((await harness.workers())['worker-1'].profile.name).toBe('read-only');
+  });
+
   it('continues after a failed worktree step: one branch, one worktree, one worker', async () => {
     const harness = setup();
     mkdirSync(harness.worktree, { recursive: true });
