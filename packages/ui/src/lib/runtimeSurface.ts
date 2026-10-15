@@ -36,8 +36,10 @@ const isTouchOrCoarsePointer = (): boolean => {
  * Priority: explicit stamp (set once at boot) → URL override → Capacitor
  * shell (always the mobile surface) → desktop shells → phone heuristic
  * gated by the stored mobile layout preference. The heuristic needs a touch
- * pointer plus either a narrow viewport and screen, or a phone sized
- * physical screen (so a landscape phone, 844 px wide, is still a phone).
+ * pointer plus either a narrow viewport or screen (the smaller of
+ * innerWidth and screen.width is at most 768 px), or a phone sized physical
+ * screen (min(screen.width, screen.height) at most 500 px), so a landscape
+ * phone, 844 px wide, is still a phone.
  */
 export const detectHostedSurface = (): HostedSurface => {
   if (typeof window === 'undefined') return 'desktop';
