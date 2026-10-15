@@ -12,6 +12,14 @@ declare global {
 
 const MOBILE_SURFACE_MAX_WIDTH = 768;
 
+/**
+ * A touch device whose shorter physical screen side is at most this many css
+ * px is a phone in any orientation (ADR 0015). Phones measure about 430 px at
+ * most, the smallest tablets 744 px. The screen does not change with the
+ * keyboard, unlike the viewport.
+ */
+const PHONE_SCREEN_MAX_SHORT_SIDE = 500;
+
 const isTouchOrCoarsePointer = (): boolean => {
   if (typeof window === 'undefined') return false;
 
@@ -27,7 +35,11 @@ const isTouchOrCoarsePointer = (): boolean => {
  *
  * Priority: explicit stamp (set once at boot) → URL override → Capacitor
  * shell (always the mobile surface) → desktop shells → phone heuristic
- * gated by the stored mobile layout preference.
+ * gated by the stored mobile layout preference. The heuristic needs a touch
+ * pointer plus either a narrow viewport or screen (the smaller of
+ * innerWidth and screen.width is at most 768 px), or a phone sized physical
+ * screen (min(screen.width, screen.height) at most 500 px), so a landscape
+ * phone, 844 px wide, is still a phone.
  */
 export const detectHostedSurface = (): HostedSurface => {
   if (typeof window === 'undefined') return 'desktop';
@@ -49,8 +61,11 @@ export const detectHostedSurface = (): HostedSurface => {
     window.innerWidth || Number.POSITIVE_INFINITY,
     window.screen?.width || Number.POSITIVE_INFINITY,
   );
-  const likelyPhone = Number.isFinite(width)
-    && width <= MOBILE_SURFACE_MAX_WIDTH
+  const screenShortSide = Math.min(
+    window.screen?.width || Number.POSITIVE_INFINITY,
+    window.screen?.height || Number.POSITIVE_INFINITY,
+  );
+  const likelyPhone = (width <= MOBILE_SURFACE_MAX_WIDTH || screenShortSide <= PHONE_SCREEN_MAX_SHORT_SIDE)
     && isTouchOrCoarsePointer();
   return likelyPhone && getStoredMobileLayoutPreference() === 'new' ? 'mobile' : 'desktop';
 };

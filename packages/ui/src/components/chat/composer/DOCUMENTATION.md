@@ -241,6 +241,11 @@ the composer can therefore exceed a third; minimizing is the way out.
 "Visible" is the smaller of the container and `visualViewport`, because
 Capacitor shrinks the container for the keyboard while a mobile browser only
 shrinks the visual viewport. Desktop has no bound and keeps the line limit.
+A landscape phone (touch, shorter screen side at most 500 px, for example 844x390)
+is the mobile surface too, so it gets this bound, the handle and the drawer even
+though its viewport is wider than 768 px; `detectHostedSurface` decides that
+from the physical screen, not the viewport (ADR 0015). Tablets in landscape and
+desktops keep the desktop composer.
 The minimized state is local to `ChatInput`; restoring focuses the editor
 inside the tap. Queued-message edits and text handed over by other surfaces
 ("Add to chat", a reverted prompt; `state/usePendingComposerText.ts`) restore
