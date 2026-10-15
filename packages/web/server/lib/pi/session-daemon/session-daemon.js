@@ -1449,6 +1449,8 @@ export function createSessionDaemon({
           await validatePiSessionJsonlFile(target.path);
           return { target, directory };
         }
+        // The listing skipped a file it could not read, which may be this session.
+        if (sessions?.incomplete === true) incomplete = true;
       } catch {
         incomplete = true;
         // Continue through the remaining authoritative lookup paths.

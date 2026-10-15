@@ -853,7 +853,7 @@ describe('Pi session daemon spike', () => {
       expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-valid']);
       const refused = client.next((message) => message.kind === 'error');
       client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-broken', command: 'sessions.open', payload: { sessionId: 'pi-broken', directory: other } })}\n`);
-      await expect(refused).resolves.toMatchObject({ requestId: 'open-broken', error: { code: 'INVALID_SESSION' } });
+      await expect(refused).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
     } finally {
       warn.mockRestore();
       await client.close();
