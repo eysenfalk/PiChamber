@@ -1463,9 +1463,17 @@ export function createSessionDaemon({
       throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
     }
     // Set when a lookup path failed for another reason than absence. The
-    // final INVALID_SESSION then carries `incomplete`, because the session may
-    // exist behind a transient storage error and must not be treated as gone.
+    // session may exist behind a transient storage error, so the lookup then
+    // ends in SESSION_JSONL_UNREADABLE and never in INVALID_SESSION.
     let incomplete = false;
+    // Set when the session's own file was located but could not be read. That
+    // is "found but unreadable", never "does not exist", and is reported as
+    // such when no readable copy turns up.
+    let unreadable;
+    const noteLookupFailure = (error) => {
+      incomplete = true;
+      if (error?.code === 'MALFORMED_SESSION_JSONL' || error?.code === 'SESSION_JSONL_UNREADABLE') unreadable ??= error;
+    };
     const candidateDirs = new Set();
     let requestedTargetDirectory;
     if (requestedDirectory) {
@@ -1479,18 +1487,25 @@ export function createSessionDaemon({
     for (const d of knownDirectories) candidateDirs.add(d);
 
     const findInDirectory = async (directory) => {
+      let target;
       try {
         const sessions = await listSessions({ cwd: directory, agentDir });
-        const target = Array.isArray(sessions) ? sessions.find((session) => session?.id === sessionId) : undefined;
-        if (target && typeof target.path === 'string' && target.path.length > 0) {
-          await validatePiSessionJsonlFile(target.path);
-          return { target, directory };
-        }
+        target = Array.isArray(sessions) ? sessions.find((session) => session?.id === sessionId) : undefined;
         // The listing skipped a file it could not read, which may be this session.
         if (sessions?.incomplete === true) incomplete = true;
       } catch {
+        // The directory itself could not be listed: that says nothing about
+        // this session's file, so it is only an incomplete lookup.
         incomplete = true;
-        // Continue through the remaining authoritative lookup paths.
+      }
+      if (target && typeof target.path === 'string' && target.path.length > 0) {
+        try {
+          await validatePiSessionJsonlFile(target.path);
+          return { target, directory };
+        } catch (error) {
+          noteLookupFailure(error);
+          // Continue through the remaining authoritative lookup paths.
+        }
       }
       return undefined;
     };
@@ -1514,8 +1529,8 @@ export function createSessionDaemon({
         const directory = await resolveStoredDirectory(named.cwd);
         return { target: { id: sessionId, path: named.path }, directory };
       }
-    } catch {
-      incomplete = true;
+    } catch (error) {
+      noteLookupFailure(error);
       // Fall through to list / header scan for non-standard filenames.
     }
 
@@ -1531,17 +1546,27 @@ export function createSessionDaemon({
       sessionId,
       agentDir,
       accept: async ({ path, cwd: headerCwd }) => {
-        await validatePiSessionJsonlFile(path);
+        try {
+          await validatePiSessionJsonlFile(path);
+        } catch (error) {
+          noteLookupFailure(error);
+          throw error;
+        }
         return { target: { id: sessionId, path }, directory: await resolveStoredDirectory(headerCwd) };
       },
     });
     if (scanned.match) return scanned.match;
     if (scanned.incomplete) incomplete = true;
 
-    throw Object.assign(
-      new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.'),
-      incomplete ? { incomplete: true } : {},
-    );
+    if (unreadable) {
+      throw new SessionDaemonProtocolError(unreadable.code, 'The Pi session file exists but cannot be read.');
+    }
+    // A lookup that failed along the way proves nothing about absence, and
+    // INVALID_SESSION is read by the client as a deletion.
+    if (incomplete) {
+      throw new SessionDaemonProtocolError('SESSION_JSONL_UNREADABLE', 'The Pi session could not be looked up completely.');
+    }
+    throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
   };
 
   const activateInflightBySessionId = new Map();

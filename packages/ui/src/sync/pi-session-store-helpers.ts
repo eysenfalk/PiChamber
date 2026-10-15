@@ -70,6 +70,14 @@ export const isInvalidSessionError = (error: unknown): error is PiRequestError =
 export const isSessionInUseError = (error: unknown): error is PiRequestError =>
   error instanceof PiRequestError && error.code === 'SESSION_IN_USE';
 
+/**
+ * The session's file exists but cannot be read (damaged or unreadable). It is
+ * a per-session load failure, never evidence that the session was deleted.
+ */
+export const isSessionUnreadableError = (error: unknown): error is PiRequestError =>
+  error instanceof PiRequestError
+  && (error.code === 'MALFORMED_SESSION_JSONL' || error.code === 'SESSION_JSONL_UNREADABLE');
+
 export const isSessionRuntimeConflictError = (
   error: unknown
 ): error is PiRequestError =>

@@ -255,7 +255,7 @@ authoritative empty `sessions[]`, or the focus fails outright. An authoritativel
 missing session (`INVALID_SESSION` on hydrate or preferred-id lookup) commits
 normal deletion cleanup and navigates away to the next active session (or clears
 when none remains) instead of retaining an error page; other load errors
-(including `SESSION_IN_USE`) stay selected and land in `sessionLoadErrorById`
+(including `SESSION_IN_USE` and the unreadable-file codes `MALFORMED_SESSION_JSONL` / `SESSION_JSONL_UNREADABLE`, #191) stay selected and land in `sessionLoadErrorById`
 so the chat shows "Session could not be loaded" instead of spinning. A missing
 deep-linked session that fails for another reason is a per-session load error in
 `sessionLoadErrorById`, not `connection: 'error'` and not an infinite
