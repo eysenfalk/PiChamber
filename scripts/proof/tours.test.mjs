@@ -163,7 +163,7 @@ describe('tours.mjs format', () => {
     expect(tour.steps[1].evidence).toEqual([{ selector: '[data-tree-node="w:/one"]' }, { selector: '[role="treeitem"][aria-label="Long"]' }]);
     expect(tour.steps[2].actions).toContainEqual({ type: 'click', selector: '[role="treeitem"][aria-label="Short two"]' });
     expect(tour.steps[3].actions[0]).toEqual({ type: 'navigate', path: '' });
-    expect(tour.steps[3].evidence).toEqual([{ selector: 'header', text: 'Short two' }]);
+    expect(tour.steps[3].evidence).toEqual([{ selector: 'header', index: 0, text: 'Short two' }]);
     expect(tour.steps[4].evidence).toContainEqual({ text: 'new session files: 0' });
     expect(tour.steps.at(-1).viewport).toBe('mobile');
     expect(() => startLastSessionTour({ ...manifest, sessions: manifest.sessions.slice(0, 2) })).toThrow('Invalid lab seed manifest');
