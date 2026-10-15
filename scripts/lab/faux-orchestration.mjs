@@ -101,7 +101,12 @@ const respond = async (context) => {
     return fauxAssistantMessage([fauxToolCall('mcp__pichamber__worker_report', {
       kind: 'question', audience: 'owner', summary: asks,
       brief: {
-        options: ['Fail the check', 'Warn only'],
+        context: 'I tighten the README check of this project. Old branches have no license section, so how strict the check is decides which of them turn red.',
+        options: [
+          { label: 'Fail the check', consequence: 'A README without a license blocks the release; old branches turn red at once.', recommended: true },
+          { label: 'Warn only', consequence: 'Everything stays green; a missing license shows up only in review.' },
+        ],
+        meanwhile: 'I keep the title and install checks going; the license part waits.',
         recommendation: 'Fail the check: a missing license blocks every release anyway.',
         counterargument: 'Old branches without a license would turn red at once.',
         revisit: 'When a project ships without a license on purpose.',

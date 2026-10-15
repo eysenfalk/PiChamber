@@ -3,6 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { schemaViolation } from '../../packages/web/server/lib/pi/session-daemon/orchestration/contract-validator.js';
+import { reportViolation } from '../../packages/web/server/lib/pi/session-daemon/orchestration/report-rules.js';
+import { ORCHESTRATION_TOOLS } from '../../packages/web/server/lib/pi/session-daemon/orchestration/tool-contracts.js';
 import { createWakes } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
 import { LAB_ASKER_FOLLOW_UP, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 
@@ -73,11 +76,15 @@ test('ASK starts the asker, which asks the owner with a brief and asks again aft
   const directory = await mkdtemp(join(tmpdir(), 'pichamber-faux-'));
   try {
     expect(await toolCallOf(directory, 'ASK')).toMatchObject({ name: 'mcp__pichamber__session_spawn', arguments: { title: LAB_ASKER_TITLE } });
-    const brief = { recommendation: expect.any(String), counterargument: expect.any(String), revisit: expect.any(String) };
-    expect(await toolCallOf(directory, 'QUESTION TASK: tighten the README check of this project.')).toMatchObject({
-      name: 'mcp__pichamber__worker_report', arguments: { kind: 'question', audience: 'owner', summary: LAB_ASKER_QUESTION, brief },
-    });
-    expect(await toolCallOf(directory, 'ANSWER: fail it')).toMatchObject({ arguments: { kind: 'question', summary: LAB_ASKER_FOLLOW_UP } });
+    // Both questions pass the daemon's contract and owner rules, so the lab shows them.
+    const workerReport = ORCHESTRATION_TOOLS.find((tool) => tool.name === 'worker_report');
+    const accepted = (call) => [schemaViolation(workerReport.parameters, call.arguments), reportViolation(call.arguments)];
+    const question = await toolCallOf(directory, 'QUESTION TASK: tighten the README check of this project.');
+    expect(question).toMatchObject({ name: 'mcp__pichamber__worker_report', arguments: { kind: 'question', audience: 'owner', summary: LAB_ASKER_QUESTION } });
+    expect(accepted(question)).toEqual([null, null]);
+    const followUp = await toolCallOf(directory, 'ANSWER: fail it');
+    expect(followUp).toMatchObject({ arguments: { kind: 'question', summary: LAB_ASKER_FOLLOW_UP } });
+    expect(accepted(followUp)).toEqual([null, null]);
     // The orchestrator leaves an owner question to the owner.
     expect(await labReply(directory, (await wakeText(['question', LAB_ASKER_QUESTION])).replace('Lab: worker', LAB_ASKER_TITLE)))
       .toContain('I leave that question to you.');

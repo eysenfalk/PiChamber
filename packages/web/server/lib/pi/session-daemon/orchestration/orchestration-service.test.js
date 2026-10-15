@@ -53,6 +53,26 @@ const createRuntime = ({ sessionId, cwd = '/work/main', lineage } = {}) => {
   return runtime;
 };
 
+// A complete owner question and blocker (#210); the rules are in report-rules.test.js.
+const OWNER_QUESTION = {
+  context: 'I wire the payment client. The API version decides which calls and tests I write next.',
+  options: [
+    { label: 'v1', consequence: 'Already wired; gets no more fixes upstream.' },
+    { label: 'v2', consequence: 'Maintained; two calls change.', recommended: true },
+  ],
+  recommendation: 'v2, it is maintained',
+  counterargument: 'v1 is already wired',
+  revisit: 'when v1 gets a fix',
+  meanwhile: 'I write the tests that do not depend on the version.',
+};
+const OWNER_BLOCKER = {
+  context: 'The sandbox API refuses every call without a key.',
+  tried: 'The key from the project settings; it is expired.',
+  needed: 'A valid sandbox key in the project settings.',
+  recommendation: 'Create a new sandbox key; the old one cannot be renewed.',
+  meanwhile: 'The integration tests wait; I finish the unit tests.',
+};
+
 // The sessions these tests use as orchestrators carry the mark.
 const MARKED = ['orch', 'orch-2', 'other', 'owner-session', 'legacy', 'other-orch'];
 
@@ -797,8 +817,8 @@ describe('orchestration service', () => {
     it('does not wake for a report to the owner, and wakes for blocker and ready with their own kinds', async () => {
       const { service, orchestrator } = createHarness();
       await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-      const asked = await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'OWNER QUESTION', audience: 'owner' });
-      const owned = await service.call('worker-1', 'worker_report', { kind: 'blocked', summary: 'OWNER BLOCKER', audience: 'owner', resolves: asked.openQuestion });
+      const asked = await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'OWNER QUESTION', audience: 'owner', brief: OWNER_QUESTION });
+      const owned = await service.call('worker-1', 'worker_report', { kind: 'blocked', summary: 'OWNER BLOCKER', audience: 'owner', resolves: asked.openQuestion, brief: OWNER_BLOCKER });
       await service.call('worker-1', 'worker_report', { kind: 'blocked', summary: 'NEED KEY', audience: 'orchestrator', resolves: owned.openQuestion });
       await service.call('worker-1', 'worker_report', { kind: 'ready', summary: 'PR is up', pullRequest: 12 });
       await vi.waitFor(() => expect(wakeReasons(orchestrator)).toEqual(['blocked: NEED KEY', 'ready: PR is up']));
@@ -2138,7 +2158,7 @@ describe('worker reports and digest', () => {
     const { service } = harness;
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await harness.settle('worker-1', 'first');
-    const asked = await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner' });
+    const asked = await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION });
     const id = asked.openQuestion;
     expect(id).toEqual(expect.any(String));
 
@@ -2177,9 +2197,8 @@ describe('worker reports and digest', () => {
     const { service, deps } = harness;
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await harness.settle('worker-1', 'first');
-    const brief = { options: ['v1', 'v2'], recommendation: 'v2, it is maintained', counterargument: 'v1 is already wired', revisit: 'when v1 gets a fix' };
-    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief })).openQuestion;
-    expect((await harness.workers())['worker-1'].question).toMatchObject({ id, brief });
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION })).openQuestion;
+    expect((await harness.workers())['worker-1'].question).toMatchObject({ id, brief: OWNER_QUESTION });
     const sends = () => deps.sendInput.mock.calls.length;
     const before = sends();
 
@@ -2207,10 +2226,10 @@ describe('worker reports and digest', () => {
     const { service, deps } = harness;
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await harness.settle('worker-1', 'first');
-    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner' })).openQuestion;
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION })).openQuestion;
     let replaced;
     deps.sendInput.mockImplementationOnce(async ({ sessionId, source }) => {
-      replaced = (await report(harness, { kind: 'blocked', summary: 'need a key', audience: 'owner', resolves: id })).openQuestion;
+      replaced = (await report(harness, { kind: 'blocked', summary: 'need a key', audience: 'owner', resolves: id, brief: OWNER_BLOCKER })).openQuestion;
       return harness.input(sessionId, { source });
     });
     await expect(service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' })).resolves.toMatchObject({ accepted: true, resolved: false });
@@ -2236,15 +2255,34 @@ describe('worker reports and digest', () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await expectCode(report(harness, { kind: 'progress', summary: 'x', brief: { recommendation: 'y' } }), 'INVALID_ARGUMENT');
-    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'owner', brief: { options: ['a'] } }), 'INVALID_ARGUMENT');
-    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'owner', brief: { recommendation: 'y', extra: 1 } }), 'INVALID_ARGUMENT');
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'orchestrator', brief: { options: [{ label: 'a' }] } }), 'INVALID_ARGUMENT');
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'owner', brief: { ...OWNER_QUESTION, extra: 1 } }), 'INVALID_ARGUMENT');
+    // Options are objects now; plain strings are refused by the contract.
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'orchestrator', brief: { options: ['a', 'b'], recommendation: 'a' } }), 'INVALID_ARGUMENT');
     expect((await harness.workers())['worker-1'].question).toBeUndefined();
+  });
+
+  it('refuses an incomplete owner question or blocker, names what is missing and stores nothing', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const refusal = async (args) => {
+      const error = await report(harness, args).then(() => null, (failure) => failure);
+      expect(error?.code).toBe('INVALID_ARGUMENT');
+      return error.message;
+    };
+    const question = await refusal({ kind: 'question', summary: 'Which API?', audience: 'owner' });
+    for (const field of ['brief.context', 'brief.options', 'brief.recommendation', 'brief.meanwhile']) expect(question).toContain(field);
+    const { tried: _tried, ...blocker } = OWNER_BLOCKER;
+    expect(await refusal({ kind: 'blocked', summary: 'need a key', audience: 'owner', brief: blocker })).toContain('brief.tried');
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    // Questions for the orchestrator stay free.
+    await expect(report(harness, { kind: 'question', summary: 'Which API?', audience: 'orchestrator' })).resolves.toMatchObject({ openQuestion: expect.any(String) });
   });
 
   it('does not repeat a report retried with the same clientRequestId', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
-    const args = { kind: 'question', summary: 'Which API?', audience: 'owner', clientRequestId: 'ask-1' };
+    const args = { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION, clientRequestId: 'ask-1' };
     const first = await report(harness, args);
     await expect(report(harness, args)).resolves.toMatchObject({ deduplicated: true, openQuestion: first.openQuestion });
   });
@@ -2380,7 +2418,7 @@ describe('owner overview (#20)', () => {
     await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await service.call('orch-2', 'session_spawn', { cwd: '/work/b', task: 'two' });
     await harness.settle('worker-1', 'first');
-    await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'Which API?', audience: 'owner' });
+    await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION });
     await service.call('worker-2', 'worker_report', { kind: 'ready', summary: 'PR up', pullRequest: 12 });
     await service.prWatch.apply([{ sessionId: 'worker-2', repository: 'acme/app', number: 12, read: {
       state: 'open', headSha: 'abc1234def', url: 'https://github.com/acme/app/pull/12', comments: 0, checks: { total: 2, pending: 1, state: 'pending' },

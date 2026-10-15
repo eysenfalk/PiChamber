@@ -4,6 +4,7 @@ import { isAbsolute } from 'node:path';
 import { schemaViolation } from './contract-validator.js';
 import { OrchestrationError } from './errors.js';
 import { hostGateNumbers } from './host-info.js';
+import { reportViolation } from './report-rules.js';
 import { workerPreamble } from './instructions.js';
 import { authorize, needsOwnership } from './policy.js';
 import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTime } from './process-identity.js';
@@ -151,18 +152,6 @@ const settleSnapshot = (runtime, at) => {
       : null,
     usage: usageOf(runtime),
   };
-};
-
-// Rules `worker_report` checks beyond its schema, per kind.
-const reportViolation = (args) => {
-  if (args.kind === 'done' && !args.evidence?.length) return 'A done report needs evidence.';
-  if (args.kind === 'done' && args.pullRequest === undefined && args.noPullRequest === undefined) {
-    return 'A done report needs pullRequest or noPullRequest.';
-  }
-  if (args.kind === 'ready' && args.pullRequest === undefined) return 'A ready report needs pullRequest.';
-  if ((args.kind === 'question' || args.kind === 'blocked') && !args.audience) return `A ${args.kind} report needs audience.`;
-  if (args.brief && args.kind !== 'question' && args.kind !== 'blocked') return 'Only a question or blocked report has a brief.';
-  return null;
 };
 
 const DIGEST_OPERATION_STATES = new Set(['reserved', 'failed', 'abandoned']);
