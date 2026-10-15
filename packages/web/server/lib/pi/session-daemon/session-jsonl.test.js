@@ -1,9 +1,33 @@
 import { existsSync, readdirSync } from 'node:fs';
-import { appendFile, chmod, mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// Lets a test act between the directory read and a file's stat, or fail the
+// directory read itself; every other call goes to the real file system.
+const fsHooks = vi.hoisted(() => ({ beforeStat: undefined, beforeReaddir: undefined }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    readdir: async (...args) => {
+      await fsHooks.beforeReaddir?.(String(args[0]));
+      return actual.readdir(...args);
+    },
+    stat: async (...args) => {
+      await fsHooks.beforeStat?.(String(args[0]));
+      return actual.stat(...args);
+    },
+  };
+});
+
+afterEach(() => {
+  fsHooks.beforeStat = undefined;
+  fsHooks.beforeReaddir = undefined;
+  vi.restoreAllMocks();
+});
 
 import {
   createPiSessionListCache,
@@ -285,7 +309,10 @@ describe('Pi session JSONL validation', () => {
       await chmod(file, 0o000);
       try {
         await expect(listPiSessionJsonlDirectory({ cwd, agentDir, cache })).resolves.toEqual([expect.objectContaining({ name: 'Renamed later' })]);
-        await expect(listPiSessionJsonlDirectory({ cwd, agentDir })).rejects.toMatchObject({ code: 'SESSION_JSONL_UNREADABLE' });
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const uncached = await listPiSessionJsonlDirectory({ cwd, agentDir });
+        expect([...uncached]).toEqual([]);
+        expect(uncached.incomplete).toBe(true);
       } finally {
         await chmod(file, 0o600);
       }
@@ -342,17 +369,98 @@ describe('Pi session JSONL validation', () => {
     expect(listed.every((session) => session.cwd === cwd && session.firstMessage?.startsWith('Prompt '))).toBe(true);
   });
 
-  it('fails the directory list when one session header is malformed', async () => {
+});
+
+describe('Pi session directory listing with a broken or vanished file', () => {
+  const projectStore = async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-jsonl-'));
     const cwd = join(root, 'project');
     const agentDir = join(root, 'agent');
     const sessionDirectory = getPiSessionDirectory({ cwd, agentDir });
     await mkdir(sessionDirectory, { recursive: true });
     await writeFile(join(sessionDirectory, 'valid.jsonl'), `${validHeader(cwd)}\n`);
-    await writeFile(join(sessionDirectory, 'broken.jsonl'), '{"type":"not-a-session"}\n');
+    return { cwd, agentDir, sessionDirectory };
+  };
+  const silencedWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+  it('lists the other sessions when one session header is malformed', async () => {
+    const { cwd, agentDir, sessionDirectory } = await projectStore();
+    await writeFile(join(sessionDirectory, 'not-json.jsonl'), 'secret prompt text\n');
+    await writeFile(join(sessionDirectory, 'not-a-session.jsonl'), '{"type":"not-a-session"}\n');
+    const warn = silencedWarn();
+
+    const listed = await listPiSessionJsonlDirectory({ cwd, agentDir });
+
+    expect([...listed]).toEqual([expect.objectContaining({ id: 'session-one', cwd })]);
+    expect(listed.incomplete).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(2);
+    const logged = warn.mock.calls.flat().map(String).join('\n');
+    expect(logged).toContain('MALFORMED_SESSION_JSONL');
+    // Neither the session directory (it encodes the project path) nor the content.
+    expect(logged).not.toContain(sessionDirectory);
+    expect(logged).not.toContain('secret prompt text');
+  });
+
+  it('skips a session file removed between reading the directory and its stat', async () => {
+    const { cwd, agentDir, sessionDirectory } = await projectStore();
+    const gone = join(sessionDirectory, 'gone.jsonl');
+    await writeFile(gone, `${JSON.stringify({ type: 'session', version: 3, id: 'session-gone', timestamp: '2026-01-01T00:00:00.000Z', cwd })}\n`);
+    fsHooks.beforeStat = async (path) => {
+      if (path === gone) await rm(gone);
+    };
+    const warn = silencedWarn();
+
+    const listed = await listPiSessionJsonlDirectory({ cwd, agentDir });
+
+    expect([...listed]).toEqual([expect.objectContaining({ id: 'session-one' })]);
+    // A removed file is absent, so the listing is still complete.
+    expect(listed.incomplete).toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('skips a session file it cannot read and reports the listing incomplete', async () => {
+    const { cwd, agentDir, sessionDirectory } = await projectStore();
+    const failing = join(sessionDirectory, 'failing.jsonl');
+    await writeFile(failing, `${validHeader(cwd)}\n`);
+    fsHooks.beforeStat = async (path) => {
+      if (path === failing) throw Object.assign(new Error('io'), { code: 'EIO' });
+    };
+    const warn = silencedWarn();
+
+    const listed = await listPiSessionJsonlDirectory({ cwd, agentDir });
+
+    expect([...listed]).toEqual([expect.objectContaining({ id: 'session-one' })]);
+    expect(listed.incomplete).toBe(true);
+    expect(warn.mock.calls.flat().map(String).join('\n')).toContain('SESSION_JSONL_UNREADABLE');
+  });
+
+  it('logs an unchanged broken file once per listing cache and lists it once it is repaired', async () => {
+    const { cwd, agentDir, sessionDirectory } = await projectStore();
+    const broken = join(sessionDirectory, 'broken.jsonl');
+    await writeFile(broken, 'not json\n');
+    const cache = createPiSessionListCache();
+    const warn = silencedWarn();
+
+    expect((await listPiSessionJsonlDirectory({ cwd, agentDir, cache })).incomplete).toBe(true);
+    const second = await listPiSessionJsonlDirectory({ cwd, agentDir, cache });
+    expect([...second]).toEqual([expect.objectContaining({ id: 'session-one' })]);
+    expect(second.incomplete).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    await writeFile(broken, `${JSON.stringify({ type: 'session', version: 3, id: 'session-repaired', timestamp: '2026-01-02T00:00:00.000Z', cwd })}\n`);
+    const repaired = await listPiSessionJsonlDirectory({ cwd, agentDir, cache });
+    expect(repaired.map((session) => session.id).sort()).toEqual(['session-one', 'session-repaired']);
+    expect(repaired.incomplete).toBeUndefined();
+  });
+
+  it('still fails when the session directory itself cannot be read', async () => {
+    const { cwd, agentDir, sessionDirectory } = await projectStore();
+    fsHooks.beforeReaddir = async (path) => {
+      if (path === sessionDirectory) throw Object.assign(new Error('io'), { code: 'EIO' });
+    };
 
     await expect(listPiSessionJsonlDirectory({ cwd, agentDir })).rejects.toMatchObject({
-      code: 'MALFORMED_SESSION_JSONL',
+      code: 'SESSION_JSONL_UNREADABLE',
     });
   });
 });

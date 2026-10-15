@@ -162,7 +162,7 @@ const seed = (store: PiSessionStore, options: SeedOptions = {}) => {
 };
 
 interface StubOverrides {
-  listSessions?: (scope: { directory?: string }) => Promise<{ sessions: ReturnType<typeof listItem>[]; streamEpoch?: string }>;
+  listSessions?: (scope: { directory?: string }) => Promise<{ sessions: ReturnType<typeof listItem>[]; streamEpoch?: string; incomplete?: true }>;
   getSession?: (id: string) => Promise<unknown>;
   getSessionMessages?: (id: string) => Promise<unknown>;
   deleteSession?: (input: { sessionId: string }) => Promise<unknown>;
@@ -528,6 +528,48 @@ describe('session deletion propagation', () => {
       expect(store.getState().sessions.map((item) => item.session.id)).toEqual(['active']);
       expect(store.getState().reducer.lastSequence.has('deleted')).toBe(true);
     });
+  });
+
+  test('an incomplete list on focus keeps the session the server skipped', async () => {
+    for (const incomplete of [true, false]) {
+      await withStore({
+        listSessions: async () => ({ sessions: [listItem('healthy', '/repo-b')], ...(incomplete ? { incomplete: true as const } : {}) }),
+      }, async (store) => {
+        seed(store, { directory: '/repo-b', sessions: ['healthy', 'skipped'], selectedSessionId: 'healthy' });
+        internal(store).state = { ...store.getState(), directory: '/repo-a' };
+
+        await store.focusProject('/repo-b', 'healthy');
+
+        const catalog = store.getState().catalog;
+        expect(store.isDeleted('skipped')).toBe(false);
+        expect(catalog.listStatusByDirectory.get('/repo-b')).toBe('ready');
+        // A complete list still proves the omitted session is gone.
+        expect(catalog.byDirectory.get('/repo-b')?.includes('skipped')).toBe(incomplete);
+      });
+    }
+  });
+
+  test('an incomplete list on first attach keeps the session the server skipped', async () => {
+    for (const incomplete of [true, false]) {
+      await withStore({
+        health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: ['events.streamEpoch'], streamEpoch: 'epoch-open' }),
+        listSessions: async () => ({
+          sessions: [listItem('healthy', '/repo-a')],
+          streamEpoch: 'epoch-open',
+          ...(incomplete ? { incomplete: true as const } : {}),
+        }),
+        getSession: async () => ({ ...detail('healthy', '/repo-a'), isStreaming: false, lifecycle: 'idle', streamEpoch: 'epoch-open' }),
+      }, async (store) => {
+        seed(store, { sessions: ['healthy', 'skipped'], selectedSessionId: 'healthy' });
+        internal(store).state = { ...store.getState(), connection: 'error' };
+
+        await store.open('/repo-a', 'healthy');
+
+        const catalog = store.getState().catalog;
+        expect(store.isDeleted('skipped')).toBe(false);
+        expect(catalog.byDirectory.get('/repo-a')?.includes('skipped')).toBe(incomplete);
+      });
+    }
   });
 
   test('a tombstoned preferred session falls through to an active session on focus', async () => {

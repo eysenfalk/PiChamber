@@ -42,7 +42,9 @@ const lineageOpIdOf = async (file, lineageType) => {
  * session of `cwd` was read. A session file removed since the listing is
  * skipped. A failed read, or a prefix entry that cannot be parsed, does not
  * stop the scan; when no session matched it throws SESSION_LOOKUP_FAILED
- * (incomplete), so the caller cannot take it for a negative answer. Sessions
+ * (incomplete), so the caller cannot take it for a negative answer. The same
+ * holds for a listing marked `incomplete`, which skipped a file it could not
+ * read. Sessions
  * in `exclude` are known not to be the answer and are skipped, so they do not
  * hide a later one with the same opId.
  */
@@ -63,7 +65,7 @@ export const findPersistedSessionByOperation = async ({ opId, cwd, listSessions,
     if (found === opId) return { sessionId: session.id, cwd, sessionFile: session.path };
     if (found === UNREADABLE) unreadable.push(session.id);
   }
-  if (unreadable.length > 0) {
+  if (unreadable.length > 0 || sessions?.incomplete === true) {
     throw Object.assign(new Error('Some sessions could not be read to find the start operation.'), {
       code: 'SESSION_LOOKUP_FAILED',
       incomplete: true,

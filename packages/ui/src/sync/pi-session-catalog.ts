@@ -211,6 +211,15 @@ export interface DirectoryListLiveOptions {
 }
 
 /**
+ * Options of a reconciled listing. `incomplete` marks a listing the server
+ * answered without a session file it could not read: it proves the listed
+ * rows, not the absence of the omitted ones.
+ */
+interface DirectoryListReconcileOptions extends DirectoryListLiveOptions {
+  incomplete?: boolean;
+}
+
+/**
  * Apply a successful listing for one directory. Replaces that directory's
  * membership; other directories are untouched. Returns a new state object
  * only when the result actually changes; returns the input otherwise so
@@ -679,6 +688,10 @@ export const catalogLiveSessionIdsKey = (catalog: PiSessionCatalogState): string
  *   listing; a live-only change (`lifecycle`/`retry`/`hydrated`/`updatedAt`)
  *   survives because live activity observed after the list started proves
  *   the row still exists on the connected runtime.
+ * - An `incomplete` listing adds and updates the rows it lists but removes
+ *   none: an omitted row of `directory` is retained like an omitted live
+ *   row, because the server skipped a file it could not read. The directory
+ *   still counts as listed, so the next complete listing decides membership.
  */
 export const applyDirectoryListWithReconciliation = (
   baseline: PiSessionCatalogState,
@@ -687,7 +700,7 @@ export const applyDirectoryListWithReconciliation = (
   items: readonly PiSessionListItem[],
   now: number,
   tombstones?: ReadonlySet<string>,
-  options?: DirectoryListLiveOptions,
+  options?: DirectoryListReconcileOptions,
 ): PiSessionCatalogState => {
   const normalized = normalizedDirectory(directory);
   // Validate + filter the fresh payload to this directory first, preserving
@@ -725,6 +738,7 @@ export const applyDirectoryListWithReconciliation = (
   const addedOmitted = new Map<PiSessionId, LiveSessionRecord>();
   const omittedMetadata = new Map<PiSessionId, LiveSessionRecord>();
   const omittedLive = new Map<PiSessionId, LiveSessionRecord>();
+  const omittedByIncompleteList = new Map<PiSessionId, LiveSessionRecord>();
   const overlayPresent = new Map<PiSessionId, { rec: LiveSessionRecord; titleChanged: boolean; archivedChanged: boolean }>();
   const movedOutIds = new Set<PiSessionId>();
   const relevant = new Set<PiSessionId>();
@@ -735,7 +749,14 @@ export const applyDirectoryListWithReconciliation = (
     const currentRec = current.byId.get(id);
     if (!currentRec) continue; // deleted — handled above / via tombstones.
     const baselineRec = baseline.byId.get(id);
-    if (baselineRec === currentRec) continue; // unmutated — trust the listing.
+    if (baselineRec === currentRec) {
+      // Unmutated: trust the listing, except that an incomplete listing does
+      // not prove an omitted row's disappearance.
+      if (options?.incomplete && !freshSet.has(id) && currentRec.directory === normalized && !tombstones?.has(id)) {
+        omittedByIncompleteList.set(id, currentRec);
+      }
+      continue;
+    }
     if (currentRec.directory !== normalized) {
       // Moved out of this directory after the list started (or a stale dual
       // membership entry). Exclude the stale listing row; the owning
@@ -801,7 +822,7 @@ export const applyDirectoryListWithReconciliation = (
       nextById.set(id, { ...intermediateRec, title: nextTitle, archived: nextArchived });
     }
   }
-  if (addedOmitted.size === 0 && omittedMetadata.size === 0 && omittedLive.size === 0 && !nextById) return intermediate;
+  if (addedOmitted.size === 0 && omittedMetadata.size === 0 && omittedLive.size === 0 && omittedByIncompleteList.size === 0 && !nextById) return intermediate;
   const effectiveById = nextById ?? intermediate.byId;
   const intermediateMem = intermediate.byDirectory.get(normalized) ?? [];
   const intermediateSet = new Set(intermediateMem);
@@ -815,6 +836,7 @@ export const applyDirectoryListWithReconciliation = (
     ...addedOmitted,
     ...omittedMetadata,
     ...omittedLive,
+    ...omittedByIncompleteList,
   ]);
   const toReinsert: PiSessionId[] = [];
   for (const id of currentMem) {

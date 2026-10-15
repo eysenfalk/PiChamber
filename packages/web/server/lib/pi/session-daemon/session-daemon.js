@@ -1384,7 +1384,7 @@ export function createSessionDaemon({
       return /^[^_]+_([^/\\]+)\.jsonl$/.exec(basename(parentPath))?.[1];
     };
     const allSessions = [...extra, ...uncorrupted];
-    return allSessions.map((session) => {
+    const items = allSessions.map((session) => {
       const parentId = parentIdOf(session.parentSessionPath);
       const createdAt = session?.created instanceof Date ? session.created.getTime() : (typeof session?.createdAt === 'number' ? session.createdAt : NaN);
       const updatedAt = session?.modified instanceof Date ? session.modified.getTime() : (typeof session?.updatedAt === 'number' ? session.updatedAt : NaN);
@@ -1410,6 +1410,9 @@ export function createSessionDaemon({
         ...(liveById.has(session.id) ? { live: liveById.get(session.id) } : {}),
       };
     });
+    // The listing skipped a file it could not read. Clients must not take the
+    // missing session for a deleted one, so the marker travels with the items.
+    return { items, incomplete: sessions.incomplete === true };
   };
 
   const listSessionItems = async (requestedDirectory) => {
@@ -1483,6 +1486,8 @@ export function createSessionDaemon({
           await validatePiSessionJsonlFile(target.path);
           return { target, directory };
         }
+        // The listing skipped a file it could not read, which may be this session.
+        if (sessions?.incomplete === true) incomplete = true;
       } catch {
         incomplete = true;
         // Continue through the remaining authoritative lookup paths.
@@ -4404,14 +4409,14 @@ export function createSessionDaemon({
         return;
       }
       case 'sessions.list': {
-        const sessions = await listSessionItems(message.payload?.directory || message.payload?.cwd);
+        const { items, incomplete } = await listSessionItems(message.payload?.directory || message.payload?.cwd);
         writeFrame(socket, {
           protocolVersion: PROTOCOL_VERSION,
           kind: 'response',
           requestId: message.requestId,
           // Stamp the stream lifetime so clients can reject a listing that a
           // previous daemon process generated after an epoch change.
-          result: { sessions, streamEpoch },
+          result: { sessions: items, ...(incomplete ? { incomplete: true } : {}), streamEpoch },
         });
         return;
       }

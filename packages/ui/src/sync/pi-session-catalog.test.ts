@@ -1884,6 +1884,40 @@ describe('catalog-owner list/mutation reconciliation', () => {
     expect(reconciled.byDirectory.get('/repo-a')).toContain('mut');
   });
 
+  test('an incomplete listing adds and updates rows but removes none', () => {
+    const baseline = applyDirectoryListToCatalog(initialCatalog(), '/repo-a', [
+      listItem('keep', '/repo-a', { title: 'keep', updatedAt: 1 }),
+      listItem('skipped', '/repo-a', { title: 'skipped', updatedAt: 1 }),
+      listItem('deleted', '/repo-a', { title: 'deleted', updatedAt: 1 }),
+    ], 10);
+    const reconciled = applyDirectoryListWithReconciliation(
+      baseline,
+      baseline,
+      '/repo-a',
+      [listItem('keep', '/repo-a', { title: 'renamed', updatedAt: 1 }), listItem('fresh', '/repo-a', { title: 'fresh', updatedAt: 2 })],
+      20,
+      new Set(['deleted']),
+      { incomplete: true },
+    );
+    // The server skipped a file it could not read: the omitted row stays, the
+    // listed rows update, a new row arrives, and a tombstone still wins.
+    expect(reconciled.byId.get('skipped')?.title).toBe('skipped');
+    expect(reconciled.byDirectory.get('/repo-a')).toContain('skipped');
+    expect(reconciled.byId.get('keep')?.title).toBe('renamed');
+    expect(reconciled.byId.get('fresh')?.title).toBe('fresh');
+    expect(reconciled.byDirectory.get('/repo-a')).not.toContain('deleted');
+    expect(reconciled.listStatusByDirectory.get('/repo-a')).toBe('ready');
+
+    const complete = applyDirectoryListWithReconciliation(
+      baseline,
+      baseline,
+      '/repo-a',
+      [listItem('keep', '/repo-a', { title: 'keep', updatedAt: 1 })],
+      20,
+    );
+    expect(complete.byId.has('skipped')).toBe(false);
+  });
+
   test('delayed list with busy event then remote rename/archive takes remote metadata, keeps busy', async () => {
     const staleList = deferred<{ sessions: ReturnType<typeof listItem>[] }>();
     let listCalls = 0;

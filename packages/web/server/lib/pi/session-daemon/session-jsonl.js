@@ -432,6 +432,22 @@ async function readListMemo(filePath, fileStat, cached) {
   return readColdListMemo(filePath, fileStat);
 }
 
+/** A malformed file, remembered so an unchanged one is not read and logged on every listing. */
+const toFailedMemo = (fileStat) => ({
+  failed: true,
+  size: fileStat.size,
+  mtimeMs: fileStat.mtimeMs,
+  ino: fileStat.ino,
+  dev: fileStat.dev,
+});
+
+const isSameFile = (memo, fileStat) => memo.ino === fileStat.ino
+  && memo.dev === fileStat.dev
+  && memo.size === fileStat.size
+  && memo.mtimeMs === fileStat.mtimeMs;
+
+const isGone = (filePath) => stat(filePath).then(() => false, isMissing);
+
 /**
  * Opaque per-daemon memo for `listPiSessionJsonlDirectory`: session
  * directory → file name → list fields and scanned offset. Each successful
@@ -446,8 +462,12 @@ export const createPiSessionListCache = () => new Map();
  * does not load whole transcripts when a rename is found near the end. With a
  * `cache`, an unchanged file is not read again and an appended one only from
  * where the last listing stopped. Files in the directory are read with bounded
- * concurrency; one unreadable or header-malformed file still fails the whole
- * directory list.
+ * concurrency. A file that cannot be listed does not fail the others: one
+ * removed since the directory was read is absent; any other failure skips it,
+ * logs its error code without path or content, and sets `incomplete: true` on
+ * the returned array, so a lookup cannot take a miss for absence. An unchanged
+ * malformed file is remembered and not read or logged again. Only a failure to
+ * read the directory itself rejects.
  */
 export async function listPiSessionJsonlDirectory({
   cwd,
@@ -469,15 +489,33 @@ export async function listPiSessionJsonlDirectory({
   const files = entries.filter((entry) => entry.name.endsWith('.jsonl') && !entry.isDirectory());
   const previous = cache?.get(sessionDirectory);
   const memos = new Map();
-  const sessions = await mapWithConcurrency(files, LIST_FILE_CONCURRENCY, async (entry) => {
+  let incomplete = false;
+  const skip = (code) => {
+    incomplete = true;
+    console.warn(`[pi-session-daemon] Skipped a session file in the session list: ${code}`);
+    return undefined;
+  };
+  const listed = await mapWithConcurrency(files, LIST_FILE_CONCURRENCY, async (entry) => {
     const filePath = join(sessionDirectory, entry.name);
+    const cached = previous?.get(entry.name);
     let fileStat;
+    let memo;
     try {
       fileStat = await stat(filePath);
-    } catch {
-      throw unreadable();
+      if (cached?.failed && isSameFile(cached, fileStat)) {
+        memos.set(entry.name, cached);
+        incomplete = true;
+        return undefined;
+      }
+      memo = await readListMemo(filePath, fileStat, cached?.failed ? undefined : cached);
+    } catch (error) {
+      // Removed since the directory was read: absent, not broken.
+      if (isMissing(error) || await isGone(filePath)) return undefined;
+      const code = error instanceof SessionJsonlError ? error.code : 'SESSION_JSONL_UNREADABLE';
+      // Content is broken until the file changes; a read failure may pass.
+      if (fileStat && code === 'MALFORMED_SESSION_JSONL') memos.set(entry.name, toFailedMemo(fileStat));
+      return skip(code);
     }
-    const memo = await readListMemo(filePath, fileStat, previous?.get(entry.name));
     memos.set(entry.name, memo);
     const headerTime = typeof memo.header.timestamp === 'string'
       ? Date.parse(memo.header.timestamp)
@@ -495,8 +533,9 @@ export async function listPiSessionJsonlDirectory({
     };
   });
   cache?.set(sessionDirectory, memos);
+  const sessions = listed.filter(Boolean);
   sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
-  return sessions;
+  return incomplete ? Object.assign(sessions, { incomplete: true }) : sessions;
 }
 
 export const getPiSessionDirectory = ({

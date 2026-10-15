@@ -1652,6 +1652,9 @@ export const registerPiRuntimeRoutes = (app, {
       const archived = await archiveStore.read();
       res.json({
         ...(typeof result?.streamEpoch === 'string' && result.streamEpoch ? { streamEpoch: result.streamEpoch } : {}),
+        // A partial list (a session file was unreadable) must not read as
+        // authoritative membership in the client.
+        ...(result?.incomplete === true ? { incomplete: true } : {}),
         sessions: projectSessionList(result?.sessions).map((item) => archived[item.session.id]
           ? { ...item, session: { ...item.session, archived: true, timeArchived: archived[item.session.id] } }
           : item),
