@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 
-export interface SessionRenameDialogProps {
+interface SessionRenameDialogProps {
   open: boolean;
   value: string;
   onChange: (value: string) => void;
