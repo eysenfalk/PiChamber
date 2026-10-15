@@ -625,12 +625,19 @@ export const Header: React.FC<HeaderProps> = ({
   // while one is open the header shows the surface identity instead of the
   // session switcher.
   const isArchiveSurfaceOpen = useUIStore((state) => state.isArchivePageOpen);
+  const isControlCenterOpen = activeMainTab === 'control';
   const activeSurfaceHeader = React.useMemo<{ title: string; subtitle: string | null } | null>(() => {
     if (isArchiveSurfaceOpen) {
       return { title: "Archive", subtitle: null };
     }
+    if (isControlCenterOpen) {
+      return { title: "Control center", subtitle: null };
+    }
     return null;
-  }, [isArchiveSurfaceOpen]);
+  }, [isArchiveSurfaceOpen, isControlCenterOpen]);
+  const toggleControlCenter = React.useCallback(() => {
+    setActiveMainTab(isControlCenterOpen ? 'chat' : 'control');
+  }, [isControlCenterOpen, setActiveMainTab]);
 
 
   const actionDirectory = React.useMemo(() => {
@@ -951,6 +958,7 @@ export const Header: React.FC<HeaderProps> = ({
         { id: 'terminal', label: "Terminal", icon: "terminal-box" },
         { id: 'context', label: "Context", icon: "file-list-2" },
         { id: 'diagram', label: "Diagram", icon: 'file' },
+        { id: 'control', label: "Control center", icon: 'node-tree' },
       ];
 
       return base;
@@ -966,9 +974,10 @@ export const Header: React.FC<HeaderProps> = ({
 
   useEffect(() => {
     // Project actions may intentionally promote the terminal to the desktop
-    // main view, and diagram clicks open the diagram viewer; every other
-    // legacy main tab now lives in the context panel on desktop.
-    if (!isMobile && activeMainTab !== 'chat' && activeMainTab !== 'terminal' && activeMainTab !== 'diagram') {
+    // main view, diagram clicks open the diagram viewer and the header opens
+    // the control center; every other legacy main tab now lives in the
+    // context panel on desktop.
+    if (!isMobile && activeMainTab !== 'chat' && activeMainTab !== 'terminal' && activeMainTab !== 'diagram' && activeMainTab !== 'control') {
       setActiveMainTab('chat');
     }
   }, [activeMainTab, isMobile, setActiveMainTab]);
@@ -1267,6 +1276,13 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="flex shrink-0 items-center gap-1">
           <BackgroundTasksMenu />
+          <HeaderIconActionButton
+            title={"Control center"}
+            ariaLabel={isControlCenterOpen ? "Close control center" : "Open control center"}
+            onClick={toggleControlCenter}
+            pressed={isControlCenterOpen}
+            Icon={'node-tree'}
+          />
           {projectActionsContext ? (
             <ProjectActionsButton
               projectRef={projectActionsContext.projectRef}
@@ -1459,6 +1475,31 @@ export const Header: React.FC<HeaderProps> = ({
                     );
                   })}
                 </div>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        blurActiveElement();
+                        closeMobileHeaderPanels();
+                        setTabletMetadataOpen(false);
+                        toggleControlCenter();
+                      }}
+                      aria-label={isControlCenterOpen ? "Close control center" : "Open control center"}
+                      aria-pressed={isControlCenterOpen}
+                      className={cn(
+                        mobileHeaderIconButtonClass,
+                        'relative h-11 w-11 rounded-lg',
+                        isControlCenterOpen && 'bg-interactive-selection text-interactive-selection-foreground'
+                      )}
+                    >
+                      <Icon name="node-tree" className="h-5 w-5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>{"Control center"}</p>
+                  </TooltipContent>
+                </Tooltip>
                 <MobileSessionMetadataButton
                   open={tabletMetadataOpen}
                   onOpenChange={setTabletMetadataOpen}

@@ -964,6 +964,9 @@ export const useUIStore = create<UIStore>()(
 
         closeMainSurfaces: () => {
           const state = get();
+          if (state.activeMainTab === 'control') {
+            get().setActiveMainTab('chat');
+          }
           if (!state.isArchivePageOpen) {
             return;
           }

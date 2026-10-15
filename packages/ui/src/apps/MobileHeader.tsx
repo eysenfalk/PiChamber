@@ -2,6 +2,7 @@ import React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { cn } from '@/lib/utils';
+import { useUIStore } from '@/stores/useUIStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useSession } from '@/sync/sync-context';
@@ -123,6 +124,20 @@ export const MobileHeader: React.FC<{
             effectiveDirectory={effectiveDirectory}
             isNewSessionDraftOpen={isNewSessionDraftOpen}
           />
+
+          <button
+            type="button"
+            className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label={"Open control center"}
+            onClick={() => {
+              setMetadataOpen(false);
+              setSwitcherOpen(false);
+              useUIStore.getState().setActiveMainTab('control');
+            }}
+            style={{ touchAction: 'manipulation' }}
+          >
+            <Icon name="node-tree" className="size-5" />
+          </button>
 
           <button
             type="button"
