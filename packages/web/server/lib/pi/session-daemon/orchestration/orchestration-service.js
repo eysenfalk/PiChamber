@@ -67,6 +67,8 @@ const GONE_CODES = new Set(['INVALID_SESSION', 'SESSION_NOT_FOUND']);
 // A lookup that failed on storage errors is marked `incomplete`: the
 // session may still exist, so it is not treated as gone.
 const isGone = (error) => GONE_CODES.has(error?.code) && error?.incomplete !== true;
+// The session's file may exist but could not be read or looked up (#191): not gone, retry later.
+const UNREADABLE_CODES = new Set(['MALFORMED_SESSION_JSONL', 'SESSION_JSONL_UNREADABLE']);
 // The session a call acts as was deleted; adapters revoke its credentials.
 export const CALLER_GONE = 'ORCHESTRATION_CALLER_GONE';
 
@@ -305,7 +307,7 @@ export function createOrchestrationService(deps) {
         runtime = await activateSession(callerSessionId);
       } catch (error) {
         if (isGone(error)) throw new OrchestrationError(CALLER_GONE, 'The calling session no longer exists.');
-        if (GONE_CODES.has(error?.code)) {
+        if (GONE_CODES.has(error?.code) || UNREADABLE_CODES.has(error?.code)) {
           throw new OrchestrationError('SESSION_LOOKUP_FAILED', 'The calling session could not be looked up; retry later.');
         }
         throw error;

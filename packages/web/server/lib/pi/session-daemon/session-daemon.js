@@ -1463,8 +1463,8 @@ export function createSessionDaemon({
       throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
     }
     // Set when a lookup path failed for another reason than absence. The
-    // final INVALID_SESSION then carries `incomplete`, because the session may
-    // exist behind a transient storage error and must not be treated as gone.
+    // session may exist behind a transient storage error, so the lookup then
+    // ends in SESSION_JSONL_UNREADABLE and never in INVALID_SESSION.
     let incomplete = false;
     // Set when the session's own file was located but could not be read. That
     // is "found but unreadable", never "does not exist", and is reported as
@@ -1561,10 +1561,12 @@ export function createSessionDaemon({
     if (unreadable) {
       throw new SessionDaemonProtocolError(unreadable.code, 'The Pi session file exists but cannot be read.');
     }
-    throw Object.assign(
-      new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.'),
-      incomplete ? { incomplete: true } : {},
-    );
+    // A lookup that failed along the way proves nothing about absence, and
+    // INVALID_SESSION is read by the client as a deletion.
+    if (incomplete) {
+      throw new SessionDaemonProtocolError('SESSION_JSONL_UNREADABLE', 'The Pi session could not be looked up completely.');
+    }
+    throw new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.');
   };
 
   const activateInflightBySessionId = new Map();
