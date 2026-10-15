@@ -1,13 +1,22 @@
 export const BOTTOM_SPACER_DESKTOP_VH = 0.10;
 export const BOTTOM_SPACER_MOBILE_PX = 40;
 /** Footprint of the scroll to bottom button above the composer: 32px button + 8px gap. */
-export const SCROLL_BUTTON_CLEARANCE_PX = 40;
+export const SCROLL_BUTTON_FOOTPRINT_PX = 40;
+/** Air kept between the last row and that footprint when the button first appears. */
+const SCROLL_BUTTON_BREATHING_PX = 8;
 /**
- * Space under the last row of a mobile chat. The button appears once the view is
- * more than BOTTOM_SPACER_MOBILE_PX from the bottom; with the clearance on top the
- * last row is still above the button at that point instead of under it.
+ * Least space under the last row of a mobile chat. The button appears once the view is
+ * more than BOTTOM_SPACER_MOBILE_PX from the bottom; the footprint and the breathing
+ * room on top keep the last row above the button at that point instead of under it.
  */
-export const MOBILE_BOTTOM_SPACE_PX = BOTTOM_SPACER_MOBILE_PX + SCROLL_BUTTON_CLEARANCE_PX;
+export const MOBILE_BOTTOM_SPACE_PX =
+  BOTTOM_SPACER_MOBILE_PX + SCROLL_BUTTON_FOOTPRINT_PX + SCROLL_BUTTON_BREATHING_PX;
+/**
+ * CSS height of the mobile spacer. A larger inset keeps the room it always had
+ * (the spacer never shrinks), so the change only adds space where there was less.
+ */
+export const MOBILE_BOTTOM_SPACER_HEIGHT =
+  `max(${MOBILE_BOTTOM_SPACE_PX}px, calc(${BOTTOM_SPACER_MOBILE_PX}px + var(--oc-safe-area-bottom, 0px)))`;
 export const TOUCH_FINGER_DOWN_THRESHOLD = 2;
 export const AUTO_MARK_TTL_MS = 1500;
 export const AUTO_MATCH_TOLERANCE_PX = 2;

@@ -114,7 +114,8 @@ leave the dirty editor intact.
 ## Native Bottom Safe Area
 
 - `--oc-app-bottom-safe` is the bottom room the Capacitor app shell, the chat scroller and the terminal reserve. iOS reserves half of the inset (thin home indicator, 16px floor). Android reserves the whole inset (`:root.oc-capacitor-app.oc-platform-android` in `styles/mobile.css`, pinned by `styles/mobileSafeArea.test.ts`), because a three button navigation bar is a real bar the composer must sit above. Capacitor reports the inset only on WebView 140 or newer, so an older emulator image shows no overlap.
-- The mobile chat ends in `MOBILE_BOTTOM_SPACE_PX` (`hooks/autoFollow/autoFollowHelpers.ts`): the auto follow bottom zone plus the footprint of the scroll to bottom button, so the last row is not under the button where it first appears. The spacer adds no inset of its own; the shell padding already does.
+- The mobile chat ends in `MOBILE_BOTTOM_SPACER_HEIGHT` (`hooks/autoFollow/autoFollowHelpers.ts`): at least `MOBILE_BOTTOM_SPACE_PX` (the auto follow bottom zone, the scroll to bottom button footprint and a little air), so the last row is above the button where it first appears. A large inset keeps the old `40px + inset`, so the spacer never shrinks; it only adds room where there was less (hosted mobile without an inset gains 40px). `useChatAutoFollow.test.ts` pins the rule. With the Android keyboard open Capacitor reports a bottom inset of 0 and resizes the window, so the shell reserves the 16px floor and the keyboard sits directly under the composer.
+- `MobileOverlayPanel` footers (Add folder dialog) pad with `--oc-safe-area-bottom`, which Android sets from Capacitor's injected inset, falling back to `env()`: older Android WebViews report 0 through `env()` while Capacitor still injects the real inset.
 
 ## Tablet-Layout Subscriptions
 

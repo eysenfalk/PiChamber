@@ -6,6 +6,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { useChatAutoFollow } from './useChatAutoFollow';
+import {
+  MOBILE_BOTTOM_SPACE_PX,
+  SCROLL_BUTTON_FOOTPRINT_PX,
+} from './autoFollow/autoFollowHelpers';
 import type {
   UseChatAutoFollowOptions,
   UseChatAutoFollowResult,
@@ -206,6 +210,45 @@ describe('useChatAutoFollow real hook transitions (simulated scroll element)', (
     expect(get().state).toBe('released');
     expect(get().isPinned).toBe(false);
     expect(fakeEl.scrollTop).toBe(0);
+  });
+
+  test('mobile: the scroll to bottom button first appears while the last row is still clear of it', async () => {
+    const fakeEl = createFakeScrollElement();
+    fakeEl.scrollHeight = 3000;
+    fakeEl.clientHeight = 600;
+    const maxTop = fakeEl.scrollHeight - fakeEl.clientHeight;
+    const { get } = await mountAutoFollow(baseOptions({ isMobile: true }), fakeEl);
+    await act(async () => {
+      await get().restoreSnapshot();
+    });
+    expect(get().state).toBe('following');
+    expect(get().showScrollButton).toBe(false);
+
+    // Release far above the end, then walk back down one pixel at a time. The last
+    // distance with the button still visible is where it first shows when scrolling up.
+    const scrollTo = async (distanceFromEnd: number) => {
+      fakeEl.scrollTop = maxTop - distanceFromEnd;
+      await act(async () => {
+        getScrollHandler(fakeEl)();
+      });
+    };
+    await scrollTo(300);
+    expect(get().state).toBe('released');
+    expect(get().showScrollButton).toBe(true);
+
+    let nearestShown = 300;
+    for (let distance = 299; distance >= 0 && get().showScrollButton; distance -= 1) {
+      await scrollTo(distance);
+      if (get().showScrollButton) nearestShown = distance;
+    }
+    // The spacer ends at the scroller bottom, so the last row's bottom edge sits
+    // (spacer - distance) above the composer, where the button's footprint is.
+    expect(nearestShown).toBeGreaterThan(0);
+    expect(MOBILE_BOTTOM_SPACE_PX - nearestShown).toBeGreaterThanOrEqual(SCROLL_BUTTON_FOOTPRINT_PX);
+    // Back at the end the chat follows again and the button is gone.
+    await scrollTo(0);
+    expect(get().state).toBe('following');
+    expect(get().showScrollButton).toBe(false);
   });
 
   test('unrelated message-count rerender does not restore saved position', async () => {
