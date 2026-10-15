@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.11] - 2026-10-15
+
+Worker tool profiles, Pi style slash search and session list and daemon fixes since 1.0.10.
+
+- **Worker tool profiles (#151, #178).** Every worker started by `session_spawn` or `worker_start` runs with a named tool profile. The role picks the default (`review` and `oracle` get `read-only`, `research` keeps `full`), the orchestrator can override it per start, and the session daemon blocks every tool call outside the profile, including calls nested in Fabric or codemode scripts. The digest, `session_read` and `orchestration_capabilities` show the profile and the tools it excludes.
+- **Slash search like Pi (#184, #185).** The slash command search in the composer matches and orders commands like Pi's slash autocomplete, so `/protot` shows `skill:prototype` first and substrings and prefixes find commands.
+- **Session list (#126, #187, #160, #176, #179, #181).** One malformed, unreadable or vanished session file no longer empties the session list of its directory; the list shows every readable session and keeps the skipped one instead of deleting it. A session whose worktree directory is removed and recreated comes back in the sidebar without a reload, and a worker in another worktree than its parent sits under that worktree's row.
+- **Session daemon (#164, #171, #175, #177, #189).** The daemon keeps spawning workers after the orchestrator deletes the default session or removes its worktree, and `session_stop` stops a finished worker whose directory was already removed.
+
 ## [1.0.10] - 2026-10-14
 
 A built-in browser on desktop and phone and a live updates fix since 1.0.9.
