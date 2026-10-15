@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { appendFile, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -911,7 +911,7 @@ describe('Pi session daemon spike', () => {
     }
   });
 
-  it('does not call an absent session unreadable because a directory could not be listed', async () => {
+  it('answers an unlistable directory as an incomplete lookup, not as a gone session', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-unreadable-'));
     const cwd = join(root, 'project');
     const blocked = join(root, 'blocked');
@@ -935,10 +935,73 @@ describe('Pi session daemon spike', () => {
     try {
       const refused = client.next((message) => message.kind === 'error');
       client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: blocked } })}\n`);
-      // Nothing located this session's own file, so it is not "found but unreadable".
-      await expect(refused).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+      // A failed lookup proves nothing: INVALID_SESSION would be read as a deletion.
+      await expect(refused).resolves.toMatchObject({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
     } finally {
       await client.close();
+    }
+  });
+
+  it('does not call a session gone because its directory could not be read (#191)', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod cannot hide a directory here
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-denied-'));
+    const cwd = join(root, 'project');
+    const other = join(root, 'other');
+    const agentDir = join(root, 'agent');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(other, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    const seed = async (directory, id) => {
+      const sessionDirectory = getPiSessionDirectory({ cwd: directory, agentDir });
+      await mkdir(sessionDirectory, { recursive: true });
+      await writeFile(join(sessionDirectory, `2026-01-01T00-00-00-000Z_${id}.jsonl`), `${JSON.stringify({ type: 'session', version: 3, id, timestamp, cwd: directory })}\n`);
+      return sessionDirectory;
+    };
+    const deniedDirectory = await seed(cwd, 'pi-denied');
+    await seed(other, 'pi-other');
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession(options.sessionFile.includes('pi-other') ? 'pi-other' : 'pi-denied', options.sessionFile) }),
+    });
+    await daemon.start();
+    // A refused request closes its connection, so every open gets a fresh one.
+    const open = async (sessionId, directory) => {
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      try {
+        const reply = client.next((message) => message.kind === 'error' || message.kind === 'response');
+        client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open', command: 'sessions.open', payload: { sessionId, directory } })}\n`);
+        return await reply;
+      } finally {
+        await client.close();
+      }
+    };
+
+    {
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      const listed = await client.request('sessions.list', { directory: cwd });
+      await client.close();
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-denied']);
+    }
+
+    {
+
+      await chmod(deniedDirectory, 0o000);
+      try {
+        // The session exists but its directory cannot be read: absence is not proven.
+        await expect(open('pi-denied', cwd)).resolves.toMatchObject({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+        // One unreadable directory does not block a session elsewhere.
+        await expect(open('pi-other', other)).resolves.toMatchObject({ result: { session: { id: 'pi-other' } } });
+      } finally {
+        await chmod(deniedDirectory, 0o755);
+      }
+
+      // Once the directory is readable again the session opens without a restart.
+      await expect(open('pi-denied', cwd)).resolves.toMatchObject({ result: { session: { id: 'pi-denied' } } });
     }
   });
 
