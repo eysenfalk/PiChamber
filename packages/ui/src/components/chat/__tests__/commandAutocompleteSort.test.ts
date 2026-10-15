@@ -71,23 +71,43 @@ describe('filterAndSortCommands: description and alias matches come last (#184)'
   const withMeta: CommandAutocompleteSearchItem[] = [
     { name: 'deploy-docs', source: 'prompt', description: 'Publish the handbook' },
     { name: 'handbook-sync', source: 'prompt', description: 'Sync' },
-    { name: 'ship-it', source: 'prompt', description: 'Publish the release', searchAliases: ['handbook'] },
+    { name: 'ship-it', source: 'prompt', description: 'Release/publish now', searchAliases: ['team-handbook'] },
     { name: 'publish-all', source: 'prompt', description: 'Everything' },
     { name: 'unrelated', source: 'prompt', description: 'Nothing here' },
   ];
   const run = (query: string, category: Parameters<typeof filterAndSortCommands>[2] = 'all') =>
     filterAndSortCommands(withMeta, query, category).map((item) => item.name);
 
-  test('a command reachable only by description or alias follows every name match', () => {
-    expect(run('handbook')).toEqual(['handbook-sync', 'ship-it', 'deploy-docs']);
-    // the alias is an exact word, so it outranks the description match inside the group
+  test('a command reachable only by a word start in its description or alias follows every name match', () => {
+    // handbook-sync by name; deploy-docs by description; ship-it by the alias word after "-".
+    expect(run('handbook')).toEqual(['handbook-sync', 'deploy-docs', 'ship-it']);
+    // "publish" after a "/" in a description is a word start too.
+    expect(run('publish')).toEqual(['publish-all', 'deploy-docs', 'ship-it']);
+    // a prefix of a word counts, case-insensitively
+    expect(run('HAND')).toEqual(['handbook-sync', 'deploy-docs', 'ship-it']);
   });
 
-  test('the metadata group is ranked by fuzzy score and lists a command once', () => {
-    // 'publish': name match first; deploy-docs and ship-it match by description (same score, catalog order).
-    expect(run('publish')).toEqual(['publish-all', 'deploy-docs', 'ship-it']);
-    // ship-it matches both by description and alias but appears once.
+  test('scattered letters and mid word text do not match a description (no flooding)', () => {
+    const catalogWithSim: CommandAutocompleteSearchItem[] = [
+      { name: 'prototype', invocationName: 'skill:prototype', source: 'skill', isSkill: true, description: 'Build a disposable experiment' },
+      {
+        name: 'serve-sim',
+        invocationName: 'skill:serve-sim',
+        source: 'skill',
+        isSkill: true,
+        description: 'Boot, install and launch the Capacitor iOS app, stream it, tap, type, rotate and inspect accessibility',
+      },
+    ];
+    const find = (query: string) => filterAndSortCommands(catalogWithSim, query, 'all').map((item) => item.invocationName);
+    expect(find('prototype')).toEqual(['skill:prototype']);
+    expect(find('accessibility')).toEqual(['skill:serve-sim']);
+    expect(find('cessibility')).toEqual([]);
+    expect(find('capacitor ios')).toEqual(['skill:serve-sim']);
+  });
+
+  test('a command is listed once, in catalog order within the group', () => {
     expect(run('handbook').filter((name) => name === 'ship-it')).toHaveLength(1);
+    expect(run('hand').indexOf('deploy-docs')).toBeLessThan(run('hand').indexOf('ship-it'));
   });
 
   test('the name part stays exactly Pi: it does not change when metadata is added', () => {
