@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -55,16 +55,21 @@ describe('judgeCommand', () => {
     ['behind timeout', 'timeout 30 git push origin main', /updates main/],
     ['through a path to git', '/usr/bin/git push origin main', /updates main/],
     ['with git -C', 'git -C ../other push origin main', /updates main/],
-    ['with git -c', 'git -c push.default=current push origin main', /updates main/],
+    ['with git -c', 'git -c push.default=current push origin main', /brings its own configuration/],
     ['the matching refspec', 'git push origin :', /every matching branch, main included/],
     ['a forced matching refspec', 'git push origin +:', /every matching branch/],
-    ['push.default set by -c', 'git -c push.default=matching push origin', /which this command overrides/],
-    ['a push refspec set by -c', 'git -c remote.origin.push=HEAD:main push origin', /which this command overrides/],
-    ['an upstream set by -c', 'git -c branch.dev.merge=refs/heads/main push', /which this command overrides/],
-    ['a -c setting from a variable', 'git -c "$SETTING" push', /which this command overrides/],
-    ['push configuration from --config-env', 'git --config-env=push.default=PUSH_DEFAULT push', /which this command overrides/],
-    ['push configuration from GIT_CONFIG_* variables', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push origin', /which this command overrides/],
-    ['push configuration exported before', 'export GIT_CONFIG_PARAMETERS="\'push.default\'=\'matching\'" && git push', /which this command overrides/],
+    ['push.default set by -c', 'git -c push.default=matching push origin', /brings its own configuration/],
+    ['a push refspec set by -c', 'git -c remote.origin.push=HEAD:main push origin', /brings its own configuration/],
+    ['an upstream set by -c', 'git -c branch.dev.merge=refs/heads/main push', /brings its own configuration/],
+    ['a -c setting from a variable', 'git -c "$SETTING" push', /brings its own configuration/],
+    ['a mirror set by -c, even with --tags', 'git -c remote.origin.mirror=true push origin --tags', /brings its own configuration/],
+    ['an include set by -c', 'git -c include.path=/tmp/extra.conf push origin', /brings its own configuration/],
+    ['a conditional include set by -c', 'git -c includeIf.onbranch:dev.path=/tmp/extra.conf push origin dev', /brings its own configuration/],
+    ['an unrelated -c setting with a refspec', 'git -c user.name=x push origin dev', /brings its own configuration/],
+    ['any setting from --config-env', 'git --config-env core.sshCommand=SSH push origin dev', /brings its own configuration/],
+    ['push configuration from GIT_CONFIG_* variables', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push origin', /brings its own configuration/],
+    ['GIT_CONFIG_PARAMETERS exported before', 'export GIT_CONFIG_PARAMETERS="\'include.path\'=\'/tmp/x\'" && git push origin dev', /brings its own configuration/],
+    ['a GIT_CONFIG_* variable exported without a value', 'export GIT_CONFIG_COUNT; git push origin dev', /brings its own configuration/],
     ['a merge commit API call into main', 'gh api repos/o/r/merges -f base=main -f head=feature', /merges into main/],
     ['a merge commit API call without a readable base', 'gh api repos/o/r/merges --input body.json', /no base this guard can read/],
     ['a GraphQL merge without a pull request id', 'gh api graphql -f query="mutation { mergePullRequest(input: $input) { clientMutationId } }"', /no pull request id/],
@@ -77,13 +82,6 @@ describe('judgeCommand', () => {
   });
 
   it.each([
-    ['a push to a feature branch', 'git push origin 20-x'],
-    ['a refspec onto a feature branch', 'git push origin HEAD:feature'],
-    ['a push to dev', 'git push origin HEAD:dev'],
-    ['a branch whose name starts with main', 'git push origin maintenance mainline'],
-    ['an upstream setting push', 'git push -u origin 20-control-center-s4'],
-    ['a refspec with unrelated -c settings', 'git -c push.default=matching -c user.name=x push origin dev'],
-    ['tags only', 'git push --tags'],
     ['git log main', 'git log main'],
     ['git fetch origin main', 'git fetch origin main'],
     ['git pull origin main', 'git pull origin main'],
@@ -97,15 +95,30 @@ describe('judgeCommand', () => {
     ['a commit message', 'git commit -m "gh pr merge 12 into main"'],
     ['a comment', '# git push origin main\necho ok'],
     ['a here-document', 'cat <<EOF > notes.md\ngit push origin main\nEOF\necho ok'],
-    ['a chain of feature pushes with prefixes', 'env A=1 git status && sudo git push origin HEAD:feature; git -C sub push origin x:y'],
   ])('allows %s without any lookup', (_name, command) => {
     expect(judgeCommand(command, { cwd })).toEqual({ decision: 'allow' });
+  });
+
+  it.each([
+    ['a push to a feature branch', 'git push origin 20-x'],
+    ['a refspec onto a feature branch', 'git push origin HEAD:feature'],
+    ['a push to dev', 'git push origin HEAD:dev'],
+    ['a branch whose name starts with main', 'git push origin maintenance mainline'],
+    ['an upstream setting push', 'git push -u origin 20-control-center-s4'],
+    ['tags only', 'git push --tags'],
+    ['a chain of feature pushes with prefixes', 'env A=1 git status && sudo git push origin HEAD:feature; git -C sub push origin x:y'],
+  ])('allows %s once the push configuration has no mirror', (_name, command) => {
+    const first = judgeCommand(command, { cwd });
+    expect(first.decision).toBe('need');
+    expect(first.needs.every((need) => need.fact === 'pushConfig')).toBe(true);
+    expect(judge(command, onBranch('dev'))).toEqual({ decision: 'allow' });
   });
 
   it('splits PowerShell chains', () => {
     expect(judge('git status; git push origin main', undefined, 'powershell').decision).toBe('block');
     expect(judge('pwsh -Command "git push origin main"').decision).toBe('block');
-    expect(judge('git push origin `\n  HEAD:feature', undefined, 'powershell')).toEqual({ decision: 'allow' });
+    expect(judge('git push origin `\n  HEAD:feature', onBranch('dev'), 'powershell')).toEqual({ decision: 'allow' });
+    expect(judge("$env:GIT_CONFIG_PARAMETERS = \"'include.path'='x'\"; git push origin dev", onBranch('dev'), 'powershell')).toMatchObject({ decision: 'block', reason: expect.stringMatching(/brings its own configuration/) });
   });
 
   it('asks for the current branch of a push without a refspec and decides by branch and upstream', () => {
@@ -121,7 +134,10 @@ describe('judgeCommand', () => {
 
   it('reads the push configuration of a push without a refspec and blocks what can reach main', () => {
     expect(judge('git push origin', onBranch('dev', 'dev', { pushDefault: 'matching' }))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/push.default=matching/) });
-    expect(judge('git push origin', onBranch('dev', 'dev', { mirror: true }))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/mirrors every branch/) });
+    for (const command of ['git push origin', 'git push origin --tags', 'git push --tags', 'git push origin dev']) {
+      expect(judge(command, onBranch('dev', 'dev', { mirror: true }))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/is a mirror .* even with --tags/) });
+    }
+    expect(judge('git push origin --tags', onBranch('dev', 'dev', { pushDefault: 'matching', refspecs: ['HEAD:main'] }))).toEqual({ decision: 'allow' });
     expect(judge('git push', onBranch('dev', 'dev', { refspecs: ['HEAD:main'] }))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/configured refspec HEAD:main, which updates main/) });
     expect(judge('git push', onBranch('dev', 'dev', { refspecs: ['refs/heads/*:refs/heads/*'] }))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/can update main/) });
     expect(judge('git push', onBranch('dev', 'dev', { refspecs: [':'] }))).toMatchObject({ decision: 'block' });
@@ -134,7 +150,7 @@ describe('judgeCommand', () => {
       expect(judgeCommand(command, { cwd })).toMatchObject({ decision: 'block', reason: expect.stringMatching(/can change the current branch/) });
     }
     // A push naming its target needs no branch, and a push before the switch reads it.
-    expect(judgeCommand('git checkout -b feature && git push -u origin feature', { cwd })).toEqual({ decision: 'allow' });
+    expect(judge('git checkout -b feature && git push -u origin feature', onBranch('dev'))).toEqual({ decision: 'allow' });
     expect(judgeCommand('git push && git checkout main', { cwd }).decision).toBe('need');
   });
 
@@ -192,11 +208,15 @@ describe('the tool_call hook', () => {
     return { call, sessionKind, runLookup };
   };
 
+  // `git config` exits 1 when nothing is set: no mirror, no push configuration.
+  const noPushConfig = async () => ({ code: 1, stdout: '', stderr: '' });
+
   it('blocks a worker\'s push to main with a reason and lets an unmarked session push', async () => {
-    const worker = loadHook();
+    const worker = loadHook({ runLookup: vi.fn(noPushConfig) });
     expect(await worker.call('git push origin HEAD:main')).toEqual({ block: true, reason: expect.stringMatching(/^Merge guard: git push HEAD:main updates main\./) });
     expect(await worker.call('git push origin HEAD:main', 'powershell')).toMatchObject({ block: true });
     expect(await worker.call('git push origin HEAD:feature')).toBeUndefined();
+    expect(worker.runLookup).toHaveBeenCalledWith('git', expect.arrayContaining(['config', '--get-regexp']), cwd);
     const owner = loadHook({ kind: async () => 'unmarked' });
     expect(await owner.call('git push origin HEAD:main')).toBeUndefined();
     expect(await loadHook({ kind: async () => 'orchestrator' }).call('git push origin main')).toMatchObject({ block: true });
@@ -210,7 +230,7 @@ describe('the tool_call hook', () => {
   });
 
   it('guards when the session kind cannot be read, but only merges and pushes into main', async () => {
-    const unknown = loadHook({ kind: async () => { throw new Error('settings unreadable'); } });
+    const unknown = loadHook({ kind: async () => { throw new Error('settings unreadable'); }, runLookup: vi.fn(noPushConfig) });
     expect(await unknown.call('git push origin main')).toMatchObject({ block: true });
     expect(await unknown.call('git push origin feature')).toBeUndefined();
   });
@@ -301,6 +321,8 @@ describe('the tool_call hook against real git', () => {
     'git push origin :',
     'git -c push.default=matching push origin',
     'git -c remote.origin.push=HEAD:main push origin',
+    // Round 2, B1a: a mirror deletes every branch the clone has no tag of.
+    'git -c remote.origin.mirror=true push origin --tags',
   ])('blocks %s, which git would push to main', async (command) => {
     expect(gitUpdatesMain(command)).toBe(true);
     expect(await call(command)).toMatchObject({ block: true, reason: expect.stringMatching(/^Merge guard: /) });
@@ -318,6 +340,24 @@ describe('the tool_call hook against real git', () => {
     } finally {
       git('config', '--unset', key);
     }
+  });
+
+  it('blocks a push with --tags when the clone sets remote.origin.mirror (round 2, B1a)', async () => {
+    git('config', 'remote.origin.mirror', 'true');
+    try {
+      expect(gitUpdatesMain('git push origin --tags')).toBe(true);
+      expect(await call('git push origin --tags')).toMatchObject({ block: true, reason: expect.stringMatching(/is a mirror/) });
+    } finally {
+      git('config', '--unset', 'remote.origin.mirror');
+    }
+  });
+
+  it('blocks a push whose -c include brings a refspec onto main (round 2, B1b)', async () => {
+    const extra = join(root, 'extra-push.conf');
+    writeFileSync(extra, '[remote "origin"]\n\tpush = HEAD:main\n');
+    const command = `git -c include.path=${extra} push origin`;
+    expect(gitUpdatesMain(command)).toBe(true);
+    expect(await call(command)).toMatchObject({ block: true, reason: expect.stringMatching(/brings its own configuration/) });
   });
 
   it.each([

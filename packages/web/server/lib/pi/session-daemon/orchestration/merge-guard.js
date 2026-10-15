@@ -5,11 +5,15 @@
 // script or another tool gets past it; the real enforcement is #199. Pure: the
 // caller gathers the facts a verdict needs and asks again.
 //
-// A push without a refspec goes where the repository's configuration says
-// (push.default, remote.<name>.push, remote.<name>.mirror, the upstream), so
-// the guard reads that configuration and blocks when it can reach main. A
-// command that overrides it (`git -c`, `--config-env`, GIT_CONFIG_*) leaves the
-// target unclear and is blocked. The guard never asks git itself with
+// A push also goes where the repository's configuration says: a push without
+// a refspec follows push.default, remote.<name>.push and the upstream, and a
+// remote with remote.<name>.mirror makes every push, `--tags` included, update
+// and delete every branch. The guard reads that configuration and blocks when
+// it can reach main; a mirror on any remote blocks, since which remote a push
+// goes to is configuration as well. Configuration a push brings along changes
+// what that read sees (`git -c` with any key, include.path and includeIf
+// among them, `--config-env`, GIT_CONFIG_* variables), so every such push is
+// blocked: its target is unclear. The guard never asks git itself with
 // `git push --dry-run`: that contacts the remote and would run the agent's
 // own `--receive-pack`/`--exec` programs.
 
@@ -38,9 +42,8 @@ const PREFIXES = {
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const POWERSHELLS = new Set(['pwsh', 'powershell']);
 const GIT_GLOBAL_VALUES = new Set(['--namespace', '--super-prefix']);
-// Configuration that decides where a push without a refspec goes.
-const PUSH_CONFIG = /^(push|remote|branch)\./i;
-const GIT_CONFIG_ENV = /^GIT_CONFIG\w*=/;
+// A GIT_CONFIG_* variable assigned, exported or set in PowerShell.
+const GIT_CONFIG_ENV = /^(\$env:)?GIT_CONFIG\w*(=|$)/i;
 const GIT_REPOSITORY_OPTIONS = new Set(['--git-dir', '--work-tree']);
 const PUSH_VALUES = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec']);
 const PR_MERGE_VALUES = new Set(['-b', '--body', '-F', '--body-file', '-t', '--subject', '-A', '--author-email', '--match-head-commit']);
@@ -59,8 +62,8 @@ const BRANCH_CHANGES = new Set(['checkout', 'switch', 'branch', 'config', 'symbo
  *   | { fact: 'pullBaseById', id: string }} MergeFactNeed
  *   `branch` is the current branch of `dir` and the remote branch it tracks,
  *   `{ branch: string | null, upstream: string | null }` (null when detached or
- *   untracked). `pushConfig` is what decides the target of a push without a
- *   refspec, `{ pushDefault: string | null, mirror: boolean, refspecs: string[] }`
+ *   untracked). `pushConfig` is what decides the target of a push besides its
+ *   refspecs, `{ pushDefault: string | null, mirror: boolean, refspecs: string[] }`
  *   (every remote's `remote.<name>.push` and `.mirror`). `pullBase` is the
  *   base branch name of the pull request `gh pr view <selector> --repo <repo>`
  *   finds in `dir`, `pullBaseById` the one of a GraphQL node id.
@@ -225,10 +228,12 @@ const refspecTarget = (refspec) => {
   return { kind: 'branch', name: destination };
 };
 
-// The configured push target of a push without a refspec; a configured `HEAD`
-// is the current branch, which the branch check covers.
-const judgePushConfig = ({ pushDefault, mirror, refspecs }) => {
-  if (mirror) return 'git push without a refspec mirrors every branch (remote.<name>.mirror), main included.';
+// What the push configuration makes a push update: a mirror every branch, and
+// for a push without a refspec (`bare`) the configured target. A configured
+// `HEAD` is the current branch, which the branch check covers.
+const judgePushConfig = ({ pushDefault, mirror, refspecs }, bare) => {
+  if (mirror) return 'A remote of this repository is a mirror (remote.<name>.mirror), so git push, even with --tags, updates and deletes every branch, main included.';
+  if (!bare) return null;
   if (pushDefault === 'matching') return 'git push without a refspec pushes every matching branch (push.default=matching), main included.';
   for (const refspec of refspecs) {
     const target = refspecTarget(refspec);
@@ -239,6 +244,10 @@ const judgePushConfig = ({ pushDefault, mirror, refspecs }) => {
 };
 
 const checkPush = (args, dir, out, configOverridden) => {
+  if (configOverridden) {
+    out.push(block('git push brings its own configuration (git -c, --config-env or a GIT_CONFIG_* variable), which can change where it pushes, so its target is unclear.'));
+    return;
+  }
   const positional = [];
   let everything = null;
   let tags = false;
@@ -263,17 +272,13 @@ const checkPush = (args, dir, out, configOverridden) => {
   const currentBranch = (check) => out.push(out.branchChanged
     ? block('git push follows a git command that can change the current branch, so the branch it pushes is unknown before the command runs.')
     : { need: { fact: 'branch', dir }, judge: check });
-  if (!refspecs.length && !tags) {
-    if (configOverridden) {
-      out.push(block('git push without a refspec follows the push configuration, which this command overrides, so its target is unclear.'));
-      return;
-    }
+  const bare = !refspecs.length && !tags;
+  if (bare) {
     currentBranch(
       ({ branch, upstream }) => (branch === PROTECTED || upstream === PROTECTED
         ? `git push without a refspec on ${branch ?? 'a detached HEAD'}${upstream ? ` tracking ${upstream}` : ''} pushes to main.`
         : null),
     );
-    out.push({ need: { fact: 'pushConfig', dir }, judge: judgePushConfig });
   }
   for (const refspec of refspecs) {
     if (refspec.dynamic) {
@@ -291,6 +296,7 @@ const checkPush = (args, dir, out, configOverridden) => {
       out.push(block(`git push ${refspec.value} updates main.`));
     }
   }
+  out.push({ need: { fact: 'pushConfig', dir }, judge: (config) => judgePushConfig(config, bare) });
 };
 
 const checkGit = (args, dir, out) => {
@@ -302,8 +308,8 @@ const checkGit = (args, dir, out) => {
     const [flag, inline] = splitOption(value);
     if (value === '-C') gitDir = changeDir(gitDir, args[++index]);
     else if (value === '-c' || flag === '--config-env') {
-      const setting = inline === undefined ? args[++index] : { value: inline, dynamic: args[index].dynamic };
-      if (!setting || setting.dynamic || PUSH_CONFIG.test(setting.value)) configOverridden = true;
+      configOverridden = true;
+      if (inline === undefined) index += 1;
     }
     else if (GIT_REPOSITORY_OPTIONS.has(flag)) {
       // The repository is no longer the directory's; its branch is unknown.
@@ -429,7 +435,7 @@ const checkGh = (args, dir, out) => {
 const invocation = (words, dir, shell, depth, out) => {
   let local = dir;
   let index = 0;
-  // A GIT_CONFIG_* variable, assigned or exported, configures every later git command.
+  // A GIT_CONFIG_* variable configures every later git command.
   if (words.some((word) => GIT_CONFIG_ENV.test(word.value))) out.configEnv = true;
   while (index < words.length) {
     const value = words[index].value;
