@@ -885,9 +885,7 @@ export function createSessionDaemon({
   // Starts the default runtime by reopening the dormant session. A dormant
   // session that is live again is adopted instead of opened a second time, and
   // one whose JSONL or working directory is gone is forgotten, so the default
-  // runtime starts fresh instead of failing every call that needs it. A fresh
-  // start is implicit: its session stays out of the listing until it holds a
-  // conversation.
+  // runtime starts fresh instead of failing every call that needs it.
   const startRuntime = async (requestedCwd = activeDirectory || cwd) => {
     let reopen = dormantSession?.sessionFile ? dormantSession : undefined;
     const live = reopen && runtimeRegistry?.findBySessionId(reopen.sessionId);
