@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-10-15
+
+The control center and two chat fixes since 1.0.12.
+
+- **Control center (#20, #194).** A new main view lists every worker that an orchestrator manages, grouped by orchestrator, with its live state, last report, open question, pull request with CI, and the slot use and host load; selecting a worker opens its session. Its decision inbox collects every open worker question and every pending extension dialog across sessions and projects, newest first, and answering there works like answering in the session; a count shows in the header and on mobile. The session list gets a filter **All / Hide workers / Only workers**, and a worker waiting for an answer shows as waiting. Workers and orchestrator sessions can no longer merge a pull request into `main` or push to `main`; `dev` stays open to them.
+- **Dialogs stay in their session (#212, #215).** An extension dialog of another session no longer covers the open chat. It stays pending and shows in its own session and in the control center inbox.
+- **Composer on short phone screens (#204, #208).** With the keyboard open and only about 200 px visible, the composer of an empty session or a session in a project folder keeps the model row and the send button in view.
+
 ## [1.0.12] - 2026-10-15
 
 Mobile fixes and an orchestrator wake fix since 1.0.11.
