@@ -65,6 +65,7 @@ import { createMergeLookup } from '../../github/merge-lookup.js';
 import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
+import { withoutExcludedExtensions } from './orchestration/tool-profiles.js';
 import { createHtmlRenderExtension } from '../html-render/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -132,15 +133,19 @@ export function isLocalSessionDaemonEndpoint(endpoint, platform = process.platfo
 
 // Hooks let the daemon thread extension bindings into every Pi runtime
 // creation (initial, new/resume/fork replacement) without coupling this
-// factory to daemon socket state.
+// factory to daemon socket state. `workerProfile` names a worker's tool
+// profile (#151) for the session a creation is for; its excluded extensions
+// are not loaded. Pi chooses extensions only here, when services are built.
 export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), sessionFile }, hooks) {
   const createRuntime = async ({ cwd: runtimeCwd, agentDir: runtimeAgentDir, sessionManager, sessionStartEvent }) => {
+    const profile = hooks?.workerProfile?.(sessionManager);
     const services = await createAgentSessionServices({
       cwd: runtimeCwd,
       agentDir: runtimeAgentDir,
-      resourceLoaderOptions: hooks?.extensionFactories?.length
-        ? { extensionFactories: hooks.extensionFactories }
-        : {},
+      resourceLoaderOptions: {
+        ...(hooks?.extensionFactories?.length ? { extensionFactories: hooks.extensionFactories } : {}),
+        ...(profile !== undefined ? { extensionsOverride: (loaded) => withoutExcludedExtensions(loaded, profile) } : {}),
+      },
     });
 
     const result = {
@@ -623,9 +628,16 @@ export function createSessionDaemon({
   // host factories keep their single-argument contract and ignore the hooks.
   const baseCreateRuntime = injectCreateRuntime
     ?? ((runtimeOptions, runtimeHooks) => createPiSessionRuntime(runtimeOptions, runtimeHooks));
-  const createRuntime = (runtimeOptions) => baseCreateRuntime(runtimeOptions, {
+  // A new worker's lineage entry is written only after Pi built its runtime
+  // (`newSession` setup), so its profile comes with the options; a reopened
+  // session file carries its own.
+  const createRuntime = ({ profile, ...runtimeOptions }) => baseCreateRuntime(runtimeOptions, {
     createExtensionBindings: buildExtensionBindings,
     extensionFactories: [orchestrationExtension, htmlRenderExtension],
+    workerProfile: (sessionManager) => {
+      const recorded = orchestration.sessionProfile(sessionManager);
+      return recorded === undefined ? profile : recorded;
+    },
   });
 
   const getSessionState = () => runtime
@@ -1956,6 +1968,7 @@ export function createSessionDaemon({
       cwd: targetCwd,
       agentDir,
       ...(parent && !worker ? { sessionFile: parent.path } : {}),
+      ...(worker?.lineage?.profile ? { profile: worker.lineage.profile } : {}),
     });
     if (!newRuntime.cwd) newRuntime.cwd = targetCwd;
     // Apply default retry limit for new sessions. Explicit per-run overrides win.

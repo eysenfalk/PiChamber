@@ -1175,6 +1175,8 @@ describe('Pi session daemon spike', () => {
 
   it('answers the private pull request watch command with targets and accepts reads', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-prwatch-'));
+    // Its own data root: the host's registry may hold workers with pull requests.
+    vi.stubEnv('PICHAMBER_DATA_DIR', join(root, 'data'));
     const endpoint = testDaemonEndpoint(root);
     daemon = createSessionDaemon({
       endpoint,

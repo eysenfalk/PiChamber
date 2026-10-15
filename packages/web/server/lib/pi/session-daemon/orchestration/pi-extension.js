@@ -1,5 +1,6 @@
 import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
 import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName, toolsForKind } from './tool-contracts.js';
+import { toolAllowed } from './tool-profiles.js';
 
 // Adapter A: an inline Pi extension the daemon adds to every session runtime.
 // The runtime already knows which session calls a tool, so no credential is
@@ -25,7 +26,8 @@ const toToolError = (error) => {
 };
 
 /**
- * @param {{ call: Function, sessionKind: (sessionManager) => Promise<'worker' | 'orchestrator' | 'unmarked'> }} service
+ * @param {{ call: Function, sessionKind: (sessionManager) => Promise<'worker' | 'orchestrator' | 'unmarked'>,
+ *   sessionProfile: (sessionManager) => object | null | undefined }} service
  */
 export const createOrchestrationExtension = (service) => ({
   name: ORCHESTRATION_EXTENSION_NAME,
@@ -59,11 +61,15 @@ export const createOrchestrationExtension = (service) => ({
     // service rejects forbidden calls independently. The kind is decided again
     // before every run: a worker's lineage entry may arrive after its
     // session_start, and a mark may be set or removed between runs. A failed
-    // settings read counts as unmarked until the next run.
+    // settings read counts as unmarked until the next run. A worker's tool
+    // profile (#151) also drops its excluded tools here, so the model is not
+    // sent their schemas.
     const applyKind = async (ctx) => {
       const kind = await service.sessionKind(ctx.sessionManager).catch(() => 'unmarked');
+      const profile = service.sessionProfile(ctx.sessionManager);
       const active = pi.getActiveTools();
-      const allowed = [...active.filter((name) => !ALL_TOOLS.has(name)), ...toolsForKind(kind).map((tool) => qualifiedToolName(tool.name))];
+      const allowed = [...active.filter((name) => !ALL_TOOLS.has(name)), ...toolsForKind(kind).map((tool) => qualifiedToolName(tool.name))]
+        .filter((name) => toolAllowed(profile, name));
       const current = new Set(active);
       if (allowed.length !== current.size || allowed.some((name) => !current.has(name))) pi.setActiveTools(allowed);
       return kind;
@@ -71,6 +77,21 @@ export const createOrchestrationExtension = (service) => ({
 
     pi.on('session_start', async (_event, ctx) => {
       await applyKind(ctx);
+    });
+
+    // The enforcement: every tool call, from the model or nested in another
+    // tool (`ctx.executeTool`, Fabric's captured tools), passes this hook.
+    // A tool activated after `applyKind` is still blocked, and a throw here
+    // blocks the call too.
+    pi.on('tool_call', async (event, ctx) => {
+      const profile = service.sessionProfile(ctx.sessionManager);
+      if (toolAllowed(profile, event.toolName)) return undefined;
+      return {
+        block: true,
+        reason: profile
+          ? `This worker runs with the tool profile "${profile.name}", which excludes ${event.toolName}.`
+          : `This worker's tool profile cannot be read, so only reading tools run; ${event.toolName} is blocked.`,
+      };
     });
 
     // Like t3code's Pi bridge: the base instructions extend the system prompt

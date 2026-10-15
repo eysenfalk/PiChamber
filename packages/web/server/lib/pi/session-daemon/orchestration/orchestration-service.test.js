@@ -246,7 +246,13 @@ describe('orchestration service', () => {
     expect(spawned.model).toEqual({ providerId: 'anthropic', modelId: 'claude-opus-5-5' });
     const { lineage } = deps.createWorkerSession.mock.calls[0][0];
     expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/work/a', thinking: 'high', parentSessionPath: '/sessions/orch.jsonl' }));
-    expect(lineage).toEqual({ parentSessionId: 'orch', parentDirectory: '/work/main', role: 'task-hard', opId: expect.stringMatching(/^op_/) });
+    expect(lineage).toEqual({
+      parentSessionId: 'orch',
+      parentDirectory: '/work/main',
+      role: 'task-hard',
+      opId: expect.stringMatching(/^op_/),
+      profile: { name: 'full', excludeTools: [], excludeExtensions: [] },
+    });
     const [{ text, operationId }] = deps.sendInput.mock.calls[0];
     expect(text).toMatch(/^You are a worker session started by the PiChamber orchestrator session orch\./);
     expect(text.endsWith('Fix the bug\nDetails')).toBe(true);
@@ -1013,6 +1019,33 @@ describe('orchestration service', () => {
       ['abort', 'worker-1', 1],
     ]);
     expect([...held.values()].every((count) => count === 0)).toBe(true);
+  });
+
+  it('starts each worker with the profile of its role or the requested one and records it in lineage, registry and reports (#151)', async () => {
+    const harness = createHarness({ workerLimit: 10 });
+    const { service, deps, runtimes } = harness;
+    const readOnly = { name: 'read-only', excludeTools: expect.arrayContaining(['edit', 'write', '*subagent*']), excludeExtensions: [] };
+    const review = await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'review', role: 'review' });
+    const research = await service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'research', role: 'research' });
+    const chosen = await service.call('orch', 'session_spawn', {
+      cwd: '/work/c', task: 'own', role: 'review', profile: 'full', excludeExtensions: ['npm:pi-intercom'],
+    });
+    expect([review.profile, research.profile, chosen.profile]).toEqual(['read-only', 'full', 'full']);
+    const lineages = deps.createWorkerSession.mock.calls.map(([options]) => options.lineage.profile);
+    expect(lineages).toEqual([readOnly, { name: 'full', excludeTools: [], excludeExtensions: [] }, { name: 'full', excludeTools: [], excludeExtensions: ['npm:pi-intercom'] }]);
+    expect((await harness.workers())[review.sessionId].profile).toEqual(readOnly);
+    // The daemon's enforcement reads the record from the session itself.
+    expect(service.sessionProfile(runtimes.get(review.sessionId).session.sessionManager)).toEqual(readOnly);
+    expect(service.sessionProfile(harness.orchestrator.session.sessionManager)).toBeUndefined();
+    const digest = await service.call('orch', 'orchestration_digest', {});
+    expect(digest.workers.find((worker) => worker.sessionId === review.sessionId).profile).toEqual(readOnly);
+    const read = await service.call('orch', 'session_read', { sessionId: review.sessionId });
+    expect(read.profile).toEqual(readOnly);
+    const capabilities = await service.call('orch', 'orchestration_capabilities');
+    expect(capabilities.roleProfiles).toEqual({ review: 'read-only', oracle: 'read-only' });
+    expect(Object.keys(capabilities.profiles)).toEqual(['full', 'read-only']);
+    await expectCode(service.call('orch', 'session_spawn', { cwd: '/work/d', task: 'x', profile: 'sandbox' }), 'INVALID_ARGUMENT');
+    expect(deps.createWorkerSession).toHaveBeenCalledTimes(3);
   });
 
   it('rejects unknown models, retired roles and relative directories', async () => {
