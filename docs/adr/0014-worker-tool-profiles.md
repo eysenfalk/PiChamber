@@ -1,4 +1,4 @@
-# 0013. Worker tool profiles: a recorded tool limit per worker, enforced by the daemon, not a sandbox
+# 0014. Worker tool profiles: a recorded tool limit per worker, enforced by the daemon, not a sandbox
 
 - Status: Proposed
 - Date: 2026-10-15

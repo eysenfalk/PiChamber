@@ -1,6 +1,6 @@
 import { OrchestrationError } from './errors.js';
 
-// Worker tool profiles (#151, ADR 0013). A profile names what a worker must
+// Worker tool profiles (#151, ADR 0014). A profile names what a worker must
 // not use: tools by name pattern, extensions by path or package source. The
 // resolved profile is fixed at the start and recorded in the worker's lineage
 // entry, which stays the authority after a restart; code defaults that change
