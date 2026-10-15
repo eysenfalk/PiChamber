@@ -199,7 +199,10 @@ describe('worker tool profiles through the real daemon', () => {
     globalThis.__pichamberProfileLog = [];
     client = await start();
     const restartDone = answer(client, 'RESTART DONE');
-    await client.request('sessions.prompt', { sessionId: workerId, text: 'AFTER RESTART' });
+    // Pi restores a session's model only when its provider already counts as
+    // configured; the keyless faux provider counts only after an async
+    // availability check, so the prompt names its model instead of racing it.
+    await client.request('sessions.prompt', { sessionId: workerId, text: 'AFTER RESTART', model: { providerId: 'faux', modelId: 'faux-1' } });
     await restartDone;
     const [before, after] = globalThis.__pichamberProfileLog.filter((entry) => entry.task === 'AFTER RESTART');
     expect(before.tools).toContain('read');
