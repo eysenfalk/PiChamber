@@ -44,7 +44,7 @@ mock.module('@/components/chat/extensionDialogResponse', () => ({
 }));
 
 const inbox = await import('./decisionInboxModel');
-const { EMPTY_ANSWER_DRAFT, answerDraftReducer } = inbox;
+const { EMPTY_ANSWER_DRAFT, answerAttempt, answerDraftReducer } = inbox;
 
 const NOW = Date.UTC(2026, 9, 15, 12, 0, 0);
 const MIN = 60_000;
@@ -175,26 +175,31 @@ describe('decision inbox model', () => {
     expect(resolves).toEqual([{ sessionId: 'w', questionId: 'q', scope: { runtimeKey: 'local' } }]);
   });
 
-  test('a failed answer keeps the text and the request id, so the retry cannot prompt twice', () => {
+  test('a failed answer keeps the text and the attempt, so retrying the same text cannot prompt twice', () => {
     let draft = answerDraftReducer(EMPTY_ANSWER_DRAFT, { type: 'edit', text: 'use v2' });
-    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', requestId: 'req-1' });
+    const first = { id: 'req-1', text: 'use v2' };
+    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', attempt: first });
     expect(draft.pending).toBe('answer');
-    expect(answerDraftReducer(draft, { type: 'start', action: 'resolve', requestId: null })).toBe(draft);
+    expect(answerDraftReducer(draft, { type: 'start', action: 'resolve' })).toBe(draft);
     draft = answerDraftReducer(draft, { type: 'settled', action: 'answer', outcome: { status: 'failed', message: 'daemon down' } });
-    expect(draft).toEqual({ text: 'use v2', requestId: 'req-1', pending: null, notice: { tone: 'error', text: 'Could not send the answer. daemon down' } });
-    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', requestId: 'req-2' });
-    expect(draft.requestId).toBe('req-1');
+    expect(draft).toEqual({ text: 'use v2', attempt: first, pending: null, notice: { tone: 'error', text: 'Could not send the answer. daemon down' } });
+    let ids = 0;
+    const newId = () => `req-new-${++ids}`;
+    expect(answerAttempt(draft.attempt, 'use v2', newId)).toBe(first);
+    // The daemon refuses a request id reused with other text, so another option or an edited answer gets a new one.
+    expect(answerAttempt(draft.attempt, 'Warn only', newId)).toEqual({ id: 'req-new-1', text: 'Warn only' });
+    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', attempt: first });
     expect(draft.notice).toBeNull();
   });
 
-  test('a sent answer clears the draft; a closed question drops the request id and says so', () => {
-    const sending = answerDraftReducer({ ...EMPTY_ANSWER_DRAFT, text: 'use v2' }, { type: 'start', action: 'answer', requestId: 'req-1' });
+  test('a sent answer clears the draft; a closed question drops the attempt and says so', () => {
+    const sending = answerDraftReducer({ ...EMPTY_ANSWER_DRAFT, text: 'use v2' }, { type: 'start', action: 'answer', attempt: { id: 'req-1', text: 'use v2' } });
     expect(answerDraftReducer(sending, { type: 'settled', action: 'answer', outcome: { status: 'sent', resolved: true } }))
-      .toEqual({ text: '', requestId: null, pending: null, notice: { tone: 'info', text: 'Answer sent.' } });
+      .toEqual({ text: '', attempt: null, pending: null, notice: { tone: 'info', text: 'Answer sent.' } });
     expect(answerDraftReducer(sending, { type: 'settled', action: 'answer', outcome: { status: 'sent', resolved: false } }).notice?.text)
       .toBe('Answer sent. The worker replaced the question in the meantime.');
     expect(answerDraftReducer(sending, { type: 'settled', action: 'answer', outcome: { status: 'closed' } }))
-      .toEqual({ text: 'use v2', requestId: null, pending: null, notice: { tone: 'info', text: 'This question is no longer open.' } });
+      .toEqual({ text: 'use v2', attempt: null, pending: null, notice: { tone: 'info', text: 'This question is no longer open.' } });
   });
 
   test('a dialog is answered through the shared dialog path, then the overview is reread', async () => {

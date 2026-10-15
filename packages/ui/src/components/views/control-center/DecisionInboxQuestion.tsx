@@ -6,6 +6,7 @@ import { createBrowserUuid } from '@/lib/uuid';
 import { cn } from '@/lib/utils';
 import {
   EMPTY_ANSWER_DRAFT,
+  answerAttempt,
   answerDraftReducer,
   briefOptions,
   markQuestionAnswered,
@@ -71,10 +72,10 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
 
   const send = async (text: string, chosen: string | null) => {
     if (!text || draft.pending) return;
-    const requestId = draft.requestId ?? createBrowserUuid();
+    const attempt = answerAttempt(draft.attempt, text, createBrowserUuid);
     setChoice(chosen);
-    dispatch({ type: 'start', action: 'answer', requestId });
-    const outcome = await sendQuestionAnswer(target, text, requestId, runtimeKey);
+    dispatch({ type: 'start', action: 'answer', attempt });
+    const outcome = await sendQuestionAnswer(target, text, attempt.id, runtimeKey);
     dispatch({ type: 'settled', action: 'answer', outcome });
     if (outcome.status !== 'failed') onRefresh();
   };
@@ -84,7 +85,7 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
 
   const markAnswered = async () => {
     if (draft.pending) return;
-    dispatch({ type: 'start', action: 'resolve', requestId: null });
+    dispatch({ type: 'start', action: 'resolve' });
     const outcome = await markQuestionAnswered(target, runtimeKey);
     dispatch({ type: 'settled', action: 'resolve', outcome });
     if (outcome.status !== 'failed') onRefresh();
@@ -123,9 +124,9 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
 
       {options.length > 0 ? (
         <div role="group" aria-label={"Answer with an option"} className="flex flex-col gap-1.5">
-          {options.map((option) => (
+          {options.map((option, index) => (
             <Button
-              key={option.label}
+              key={`${index}:${option.label}`}
               type="button"
               variant={option.recommended ? 'default' : 'outline'}
               size="sm"
@@ -201,7 +202,7 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
           </Button>
           <Button type="submit" variant="default" size="sm" disabled={draft.pending !== null || draft.text.trim().length === 0}>
             {draft.pending === 'answer' && choice === null ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : null}
-            {draft.requestId && draft.pending === null && choice === null ? "Retry" : "Send answer"}
+            {draft.attempt?.text === draft.text.trim() && draft.pending === null && choice === null ? "Retry" : "Send answer"}
           </Button>
         </div>
       </form>

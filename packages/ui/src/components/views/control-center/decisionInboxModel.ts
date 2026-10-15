@@ -168,20 +168,28 @@ export const markQuestionAnswered = async (target: QuestionTarget, runtimeKey: s
 
 type AnswerAction = 'answer' | 'resolve';
 
+/** One answer sent under one request id; the daemon refuses an id reused with other text. */
+type AnswerAttempt = { id: string; text: string };
+
 type AnswerDraft = {
   text: string;
-  /** One id per answer attempt, kept across retries until the answer went through or the question closed. */
-  requestId: string | null;
+  /** The last answer attempt, kept until the answer went through or the question closed. */
+  attempt: AnswerAttempt | null;
   pending: AnswerAction | null;
   notice: { tone: 'info' | 'error'; text: string } | null;
 };
 
 type AnswerDraftEvent =
   | { type: 'edit'; text: string }
-  | { type: 'start'; action: AnswerAction; requestId: string | null }
+  | { type: 'start'; action: 'answer'; attempt: AnswerAttempt }
+  | { type: 'start'; action: 'resolve' }
   | { type: 'settled'; action: AnswerAction; outcome: QuestionOutcome };
 
-export const EMPTY_ANSWER_DRAFT: AnswerDraft = { text: '', requestId: null, pending: null, notice: null };
+export const EMPTY_ANSWER_DRAFT: AnswerDraft = { text: '', attempt: null, pending: null, notice: null };
+
+/** A retry of the same text keeps its id, so it cannot prompt twice; other text, such as another option, gets a new one. */
+export const answerAttempt = (last: AnswerAttempt | null, text: string, newId: () => string): AnswerAttempt =>
+  (last?.text === text ? last : { id: newId(), text });
 
 export const answerDraftReducer = (draft: AnswerDraft, event: AnswerDraftEvent): AnswerDraft => {
   switch (event.type) {
@@ -192,7 +200,7 @@ export const answerDraftReducer = (draft: AnswerDraft, event: AnswerDraftEvent):
       return {
         ...draft,
         pending: event.action,
-        requestId: event.action === 'answer' ? (draft.requestId ?? event.requestId) : draft.requestId,
+        attempt: event.action === 'answer' ? event.attempt : draft.attempt,
         notice: null,
       };
     case 'settled': {
@@ -202,14 +210,14 @@ export const answerDraftReducer = (draft: AnswerDraft, event: AnswerDraftEvent):
         return { ...draft, pending: null, notice: { tone: 'error', text: `${what} ${outcome.message}` } };
       }
       if (outcome.status === 'closed') {
-        return { ...draft, pending: null, requestId: null, notice: { tone: 'info', text: 'This question is no longer open.' } };
+        return { ...draft, pending: null, attempt: null, notice: { tone: 'info', text: 'This question is no longer open.' } };
       }
       if (action === 'resolve') {
         return { ...draft, pending: null, notice: { tone: 'info', text: 'Marked answered.' } };
       }
       return {
         text: '',
-        requestId: null,
+        attempt: null,
         pending: null,
         notice: {
           tone: 'info',
