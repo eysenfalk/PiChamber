@@ -238,9 +238,21 @@ a third of the visible height of the screen container (`data-composer-bound`).
 after the measured chrome (form height minus scroller height), never less than
 two lines, and the text scrolls inside itself. On a very small visible height
 the composer can therefore exceed a third; minimizing is the way out.
-"Visible" is the smaller of the container and `visualViewport`, because
-Capacitor shrinks the container for the keyboard while a mobile browser only
-shrinks the visual viewport. Desktop has no bound and keeps the line limit.
+The informational branch row above the composer of a session (not the new
+session draft's selectors) is part of that stack. It is dropped only when the
+visible part of the container cannot hold the smallest composer with it:
+152 px (handle, card with its two line floor, bottom padding) plus the 34 px
+row, 186 px (`composerAffordsTargetRow`, `state/useComposerTargetRowFits.ts`).
+Below that the model row and send button fall below the visible area, as at a
+200 px viewport where the container is 144 px (#204); a pending changes bar then
+sits in the status row. A taller visible height keeps the row and its copy
+button. The constants are measured, so re-measure them when the composer chrome
+changes. The visible part of the container is its extent cut by what the
+visual viewport shows (`offsetTop` to `offsetTop + height`, in the same page
+coordinates), because Capacitor shrinks the container for the keyboard while a
+mobile browser only shrinks and pans the visual viewport; a panned header does
+not count against the height, and a pan alone re-measures (the `scroll` event
+of the visual viewport). Desktop has no bound and keeps the line limit.
 A landscape phone (touch, shorter screen side at most 500 px, for example 844x390)
 is the mobile surface too, so it gets this bound, the handle and the drawer even
 though its viewport is wider than 768 px; `detectHostedSurface` decides that
