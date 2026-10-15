@@ -851,6 +851,8 @@ describe('Pi session daemon spike', () => {
     try {
       const listed = await client.request('sessions.list', { directory: other });
       expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-valid']);
+      // A partial list must say so, or a client takes the skipped session as deleted.
+      expect(listed.result.incomplete).toBe(true);
       const refused = client.next((message) => message.kind === 'error');
       client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-broken', command: 'sessions.open', payload: { sessionId: 'pi-broken', directory: other } })}\n`);
       await expect(refused).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });

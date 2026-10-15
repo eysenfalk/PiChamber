@@ -920,6 +920,27 @@ describe('Pi runtime route', () => {
     });
   });
 
+  it('forwards that a session list is incomplete and omits the marker for a complete one', async () => {
+    const row = { session: { id: 'pi-readable', directory: '/workspace', createdAt: 1, updatedAt: 2 }, updatedAt: 2 };
+    let incomplete = true;
+    const runtime = {
+      health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: ['sessions.list'] }),
+      request: async () => ({ sessions: [row], ...(incomplete ? { incomplete: true } : {}) }),
+    };
+    const app = express();
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime: () => runtime });
+    server = await listen(app);
+    const url = `http://127.0.0.1:${server.address().port}/api/pi/sessions?directory=%2Fworkspace`;
+
+    const partial = await fetch(url);
+    expect(partial.status).toBe(200);
+    await expect(partial.json()).resolves.toEqual({ sessions: [row], incomplete: true });
+
+    incomplete = false;
+    const complete = await fetch(url);
+    await expect(complete.json()).resolves.toEqual({ sessions: [row] });
+  });
+
   it('whitelists live list status and drops a malformed one without failing the row', async () => {
     const row = (id, live) => ({
       session: { id, directory: '/workspace', createdAt: 1, updatedAt: 2 },
