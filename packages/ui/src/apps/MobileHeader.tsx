@@ -10,6 +10,7 @@ import { useSession } from '@/sync/sync-context';
 import { MobileSessionMetadataButton } from './MobileSessionMetadata';
 import { MobileSessionSwitcher } from './MobileSessionSwitcher';
 import { getSessionDisplayTitle } from '@/lib/chat/sessionTitle';
+import { controlCenterEntryLabel, useDecisionInboxCount } from '@/components/views/control-center/useDecisionInboxCount';
 
 export const MobileHeader: React.FC<{
   onOpenSessions: () => void;
@@ -21,6 +22,7 @@ export const MobileHeader: React.FC<{
 }> = ({ onOpenSessions, onOpenWorkspace, compactTitle = false }) => {
   
   const [metadataOpen, setMetadataOpen] = React.useState(false);
+  const decisionCount = useDecisionInboxCount();
   const [switcherOpen, setSwitcherOpen] = React.useState(false);
   const titleRef = React.useRef<HTMLButtonElement>(null);
   const currentDirectory = useDirectoryStore((state) => state.currentDirectory);
@@ -127,8 +129,8 @@ export const MobileHeader: React.FC<{
 
           <button
             type="button"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            aria-label={"Open control center"}
+            className="relative flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label={controlCenterEntryLabel(false, decisionCount)}
             onClick={() => {
               setMetadataOpen(false);
               setSwitcherOpen(false);
@@ -137,6 +139,11 @@ export const MobileHeader: React.FC<{
             style={{ touchAction: 'manipulation' }}
           >
             <Icon name="node-tree" className="size-5" />
+            {decisionCount ? (
+              <span aria-hidden="true" className="pointer-events-none absolute top-0.5 right-0.5 text-[10px] font-semibold text-primary">
+                {decisionCount}
+              </span>
+            ) : null}
           </button>
 
           <button

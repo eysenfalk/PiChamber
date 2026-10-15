@@ -8,6 +8,7 @@ type StoreState = {
   fetchedAt: number | null;
   error: string | null;
   refresh: () => Promise<void>;
+  runtimeKey: string;
 };
 
 let state: StoreState;
@@ -67,7 +68,7 @@ describe('ControlCenterView', () => {
   beforeEach(() => {
     pollingMounts = 0;
     opened.length = 0;
-    state = { overview: null, fetchedAt: null, error: null, refresh: async () => {} };
+    state = { overview: null, fetchedAt: null, error: null, refresh: async () => {}, runtimeKey: 'local' };
   });
 
   test('mounts the overview polling and shows loading before the first read', () => {
@@ -110,12 +111,20 @@ describe('ControlCenterView', () => {
       { sessionId: 'orch-2', marked: false, title: null, workers: [worker({ sessionId: 'worker-3', title: 'Chaos run', question: { id: 'q2', kind: 'blocked', audience: 'orchestrator', summary: 'Lab is held', at: NOW } })] },
     ]);
     state.fetchedAt = NOW;
-    const markup = render();
+    const page = render();
+
+    // The decision inbox sits above the workers and carries the open questions.
+    const inboxAt = page.indexOf('aria-label="Decision inbox"');
+    const listAt = page.indexOf('aria-label="Workers by orchestrator"');
+    expect(inboxAt).toBeGreaterThan(-1);
+    expect(listAt).toBeGreaterThan(inboxAt);
+    expect(page.slice(inboxAt, listAt)).toContain('Lab is held');
+    const markup = page.slice(listAt);
 
     // Slots and host.
-    expect(markup).toContain('2 of 4 in use');
-    expect(markup).toContain('1.50 on 8 cores');
-    expect(markup).toContain('12.0 GiB free');
+    expect(page).toContain('2 of 4 in use');
+    expect(page).toContain('1.50 on 8 cores');
+    expect(page).toContain('12.0 GiB free');
 
     // Groups in daemon order with their workers.
     const first = markup.indexOf('Release orchestrator');

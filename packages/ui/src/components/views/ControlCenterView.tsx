@@ -1,14 +1,15 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { useOrchestrationOverviewPolling, useOrchestrationOverviewStore } from '@/stores/useOrchestrationOverviewStore';
+import { DecisionInbox } from './control-center/DecisionInbox';
 import { HostAndSlots } from './control-center/HostAndSlots';
 import { OrchestratorGroup } from './control-center/OrchestratorGroup';
 import { formatClock } from './control-center/format';
 import { openWorkerSession } from './control-center/openWorkerSession';
 
 /**
- * The owner's control center (#20): every orchestrator with its workers, the
- * slot use and the host load. The overview store is the only data source and
+ * The owner's control center (#20): the decision inbox, every orchestrator
+ * with its workers, the slot use and the host load. The overview store is the only data source and
  * polls while this view is mounted.
  */
 export function ControlCenterView(): React.ReactElement {
@@ -17,6 +18,7 @@ export function ControlCenterView(): React.ReactElement {
   const error = useOrchestrationOverviewStore((state) => state.error);
   const fetchedAt = useOrchestrationOverviewStore((state) => state.fetchedAt);
   const refresh = useOrchestrationOverviewStore((state) => state.refresh);
+  const runtimeKey = useOrchestrationOverviewStore((state) => state.runtimeKey);
   const retry = React.useCallback(() => { void refresh(); }, [refresh]);
 
   if (!overview) {
@@ -70,7 +72,7 @@ export function ControlCenterView(): React.ReactElement {
           ) : null}
         </div>
 
-        {/* S7 places the decision inbox here, above the workers. */}
+        <DecisionInbox overview={overview} runtimeKey={runtimeKey} onRefresh={retry} />
 
         {overview.orchestrators.length === 0 ? (
           <div className="py-10 text-center text-muted-foreground">

@@ -75,6 +75,7 @@ import {
   DESKTOP_HEADER_ICON_BUTTON_CLASS,
   MOBILE_HEADER_ICON_BUTTON_CLASS,
 } from './header/HeaderIconActionButton';
+import { controlCenterEntryLabel, useDecisionInboxCount } from '@/components/views/control-center/useDecisionInboxCount';
 import { DesktopGitHubControl } from './header/DesktopGitHubControl';
 import { DesktopServicesMenu } from './header/DesktopServicesMenu';
 import { BackgroundTasksMenu } from '@/components/worktree/BackgroundTasksMenu';
@@ -626,6 +627,8 @@ export const Header: React.FC<HeaderProps> = ({
   // session switcher.
   const isArchiveSurfaceOpen = useUIStore((state) => state.isArchivePageOpen);
   const isControlCenterOpen = activeMainTab === 'control';
+  const decisionCount = useDecisionInboxCount();
+  const controlCenterLabel = controlCenterEntryLabel(isControlCenterOpen, decisionCount);
   const activeSurfaceHeader = React.useMemo<{ title: string; subtitle: string | null } | null>(() => {
     if (isArchiveSurfaceOpen) {
       return { title: "Archive", subtitle: null };
@@ -1278,9 +1281,10 @@ export const Header: React.FC<HeaderProps> = ({
           <BackgroundTasksMenu />
           <HeaderIconActionButton
             title={"Control center"}
-            ariaLabel={isControlCenterOpen ? "Close control center" : "Open control center"}
+            ariaLabel={controlCenterLabel}
             onClick={toggleControlCenter}
             pressed={isControlCenterOpen}
+            badge={decisionCount}
             Icon={'node-tree'}
           />
           {projectActionsContext ? (
@@ -1485,7 +1489,7 @@ export const Header: React.FC<HeaderProps> = ({
                         setTabletMetadataOpen(false);
                         toggleControlCenter();
                       }}
-                      aria-label={isControlCenterOpen ? "Close control center" : "Open control center"}
+                      aria-label={controlCenterLabel}
                       aria-pressed={isControlCenterOpen}
                       className={cn(
                         mobileHeaderIconButtonClass,
@@ -1494,6 +1498,11 @@ export const Header: React.FC<HeaderProps> = ({
                       )}
                     >
                       <Icon name="node-tree" className="h-5 w-5" />
+                      {decisionCount ? (
+                        <span aria-hidden="true" className="pointer-events-none absolute -top-1 -right-1 text-[10px] font-semibold text-primary">
+                          {decisionCount}
+                        </span>
+                      ) : null}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>
