@@ -35,16 +35,29 @@ const installBrowser = () => {
 
     const viewport = {
         height: 844,
-        listeners: new Set<() => void>(),
-        addEventListener(_type: string, listener: () => void) {
-            this.listeners.add(listener);
+        offsetTop: 0,
+        listeners: new Map<string, Set<() => void>>(),
+        addEventListener(type: string, listener: () => void) {
+            const set = this.listeners.get(type) ?? new Set<() => void>();
+            set.add(listener);
+            this.listeners.set(type, set);
         },
-        removeEventListener(_type: string, listener: () => void) {
-            this.listeners.delete(listener);
+        removeEventListener(type: string, listener: () => void) {
+            this.listeners.get(type)?.delete(listener);
+        },
+        count() {
+            return [...this.listeners.values()].reduce((sum, set) => sum + set.size, 0);
+        },
+        fire(type: string) {
+            for (const listener of [...(this.listeners.get(type) ?? [])]) listener();
         },
         resizeTo(height: number) {
             this.height = height;
-            for (const listener of [...this.listeners]) listener();
+            this.fire('resize');
+        },
+        panTo(offsetTop: number) {
+            this.offsetTop = offsetTop;
+            this.fire('scroll');
         },
     };
     const observers = new Set<{ callback: () => void; disconnected: boolean }>();
@@ -157,6 +170,23 @@ describe('useComposerTargetRowFits', () => {
         expect(result.fits).toBe(true);
     });
 
+    test('a pan alone (offsetTop moves, no size change) re-measures', async () => {
+        const { viewport, bound, result } = await mount(true);
+        // Container [56, 844]; the visual viewport is 200 tall at the top, so
+        // the header takes 56 of it and only 144 of the container is visible.
+        viewport.height = 200;
+        bound.clientHeight = 788;
+        await act(async () => viewport.panTo(0));
+        expect(result.fits).toBe(false);
+
+        // Panned down 80px: the header is out of view, 200px of container show.
+        await act(async () => viewport.panTo(80));
+        expect(result.fits).toBe(true);
+
+        await act(async () => viewport.panTo(0));
+        expect(result.fits).toBe(false);
+    });
+
     test('repeated identical resize events do not re-render', async () => {
         const { viewport, bound, result } = await mount(true);
         bound.clientHeight = 144;
@@ -174,13 +204,13 @@ describe('useComposerTargetRowFits', () => {
         bound.clientHeight = 144;
         await act(async () => viewport.resizeTo(200));
         expect(result.fits).toBe(true);
-        expect(viewport.listeners.size).toBe(0);
+        expect(viewport.count()).toBe(0);
         expect(observers.size).toBe(0);
     });
 
     test('disabling and unmounting remove the listener and disconnect the observer', async () => {
         const { viewport, bound, observers, result, setEnabled, unmount } = await mount(true);
-        expect(viewport.listeners.size).toBe(1);
+        expect(viewport.count()).toBe(2);
 
         bound.clientHeight = 144;
         await act(async () => viewport.resizeTo(200));
@@ -188,13 +218,13 @@ describe('useComposerTargetRowFits', () => {
 
         await setEnabled(false);
         expect(result.fits).toBe(true);
-        expect(viewport.listeners.size).toBe(0);
+        expect(viewport.count()).toBe(0);
         expect([...observers].every((observer) => observer.disconnected)).toBe(true);
 
         await setEnabled(true);
-        expect(viewport.listeners.size).toBe(1);
+        expect(viewport.count()).toBe(2);
         await unmount();
-        expect(viewport.listeners.size).toBe(0);
+        expect(viewport.count()).toBe(0);
         expect([...observers].every((observer) => observer.disconnected)).toBe(true);
     });
 });

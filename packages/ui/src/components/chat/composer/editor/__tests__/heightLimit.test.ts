@@ -100,9 +100,10 @@ describe('composerAffordsTargetRow', () => {
     // send button fall below the visible area (#204).
     const container = (clientHeight: number, top = 56) =>
         ({ clientHeight, getBoundingClientRect: () => ({ top, height: clientHeight }) }) as unknown as Element;
+    const viewport = (height: number, offsetTop = 0) => ({ height, offsetTop });
 
     test('a 200px viewport leaves the container too short for the row', () => {
-        expect(composerAffordsTargetRow(container(144), 200)).toBe(false);
+        expect(composerAffordsTargetRow(container(144), viewport(200))).toBe(false);
     });
 
     test('the row stays until the container really cannot hold the smallest stack with it', () => {
@@ -112,31 +113,45 @@ describe('composerAffordsTargetRow', () => {
 
     test('the same boundary holds in viewport terms, through the header', () => {
         // Container as tall as the viewport minus the 56px header.
-        expect(composerAffordsTargetRow(container(241 - 56), 241)).toBe(false);
-        expect(composerAffordsTargetRow(container(242 - 56), 242)).toBe(true);
+        expect(composerAffordsTargetRow(container(241 - 56), viewport(241))).toBe(false);
+        expect(composerAffordsTargetRow(container(242 - 56), viewport(242))).toBe(true);
     });
 
     test('a 300px viewport keeps the row it has room for', () => {
-        expect(composerAffordsTargetRow(container(244), 300)).toBe(true);
+        expect(composerAffordsTargetRow(container(244), viewport(300))).toBe(true);
     });
 
     test('the shrunken visual viewport counts when the browser pans instead of resizing', () => {
-        expect(composerAffordsTargetRow(container(800), 200)).toBe(false);
-        expect(composerAffordsTargetRow(container(800), 300)).toBe(true);
+        expect(composerAffordsTargetRow(container(800), viewport(200))).toBe(false);
+        expect(composerAffordsTargetRow(container(800), viewport(300))).toBe(true);
+    });
+
+    test('a panned visual viewport shows the container from its own top edge, header out of view (#204)', () => {
+        // Container [56, 844]. Viewport 200 tall at offset 0 shows [0, 200]:
+        // 144px of container. Panned 80px it shows [80, 280]: 200px.
+        expect(composerAffordsTargetRow(container(788), viewport(200, 0))).toBe(false);
+        expect(composerAffordsTargetRow(container(788), viewport(200, 80))).toBe(true);
+        // Panned to the container's lower end: [650, 850] shows 194px of it, [700, 900] only 144px.
+        expect(composerAffordsTargetRow(container(788), viewport(200, 650))).toBe(true);
+        expect(composerAffordsTargetRow(container(788), viewport(200, 700))).toBe(false);
+    });
+
+    test('a viewport panned past the container shows none of it', () => {
+        expect(composerAffordsTargetRow(container(200, 56), viewport(200, 400))).toBe(false);
     });
 
     test('a landscape phone without the keyboard and a portrait phone with it keep the row', () => {
-        expect(composerAffordsTargetRow(container(334), 390)).toBe(true);
-        expect(composerAffordsTargetRow(container(444), 500)).toBe(true);
+        expect(composerAffordsTargetRow(container(334), viewport(390))).toBe(true);
+        expect(composerAffordsTargetRow(container(444), viewport(500))).toBe(true);
     });
 
     test('a container without a top edge reading is judged by its height and the viewport alone', () => {
-        expect(composerAffordsTargetRow(el({ clientHeight: 144 }), 200)).toBe(false);
-        expect(composerAffordsTargetRow(el({ clientHeight: 244 }), 300)).toBe(true);
+        expect(composerAffordsTargetRow(el({ clientHeight: 144 }), viewport(200))).toBe(false);
+        expect(composerAffordsTargetRow(el({ clientHeight: 244 }), viewport(300))).toBe(true);
     });
 
     test('an unmeasured container keeps the row', () => {
         expect(composerAffordsTargetRow(el({ clientHeight: 0 }), undefined)).toBe(true);
-        expect(composerAffordsTargetRow(null, 200)).toBe(true);
+        expect(composerAffordsTargetRow(null, viewport(200))).toBe(true);
     });
 });

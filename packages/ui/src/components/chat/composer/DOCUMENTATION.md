@@ -247,10 +247,12 @@ Below that the model row and send button fall below the visible area, as at a
 200 px viewport where the container is 144 px (#204); a pending changes bar then
 sits in the status row. A taller visible height keeps the row and its copy
 button. The constants are measured, so re-measure them when the composer chrome
-changes. The visible part of the container is the smaller of its height and
-`visualViewport` height minus the container's top edge, because Capacitor
-shrinks the container for the keyboard while a mobile browser only shrinks the
-visual viewport (the text scroller's third uses the same two sources). Desktop has no bound and keeps the line limit.
+changes. The visible part of the container is its extent cut by what the
+visual viewport shows (`offsetTop` to `offsetTop + height`, in the same page
+coordinates), because Capacitor shrinks the container for the keyboard while a
+mobile browser only shrinks and pans the visual viewport; a panned header does
+not count against the height, and a pan alone re-measures (the `scroll` event
+of the visual viewport). Desktop has no bound and keeps the line limit.
 A landscape phone (touch, shorter screen side at most 500 px, for example 844x390)
 is the mobile surface too, so it gets this bound, the handle and the drawer even
 though its viewport is wider than 768 px; `detectHostedSurface` decides that

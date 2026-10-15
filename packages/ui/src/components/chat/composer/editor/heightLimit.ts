@@ -50,16 +50,26 @@ function visibleHeightOf(bound: Element, visualViewportHeight: number | undefine
 const COMPOSER_MIN_HEIGHT = 152;
 const TARGET_ROW_HEIGHT = 34;
 
+/** The part of the visual viewport that matters here: its size and where it is panned to. */
+export interface VisualViewportBox {
+    height: number;
+    offsetTop: number;
+}
+
 /**
- * The part of the screen container the user can see: what is left of the
- * container (a Capacitor shell shrinks the element itself for the keyboard)
- * and of the visual viewport below the container's top edge (a mobile browser
- * only shrinks the viewport, and the header keeps its share of it).
+ * The part of the screen container the user can see, in the layout viewport's
+ * coordinates: the container's own extent (a Capacitor shell shrinks the
+ * element itself for the keyboard) cut by what the visual viewport shows,
+ * `offsetTop` to `offsetTop + height` (a mobile browser only shrinks and pans
+ * the visual viewport, so a panned header does not count against the height).
  */
-function visibleContainerHeight(bound: Element, visualViewportHeight: number | undefined): number {
-    const rect = bound.getBoundingClientRect();
-    const top = Number.isFinite(rect.top) ? Math.max(0, rect.top) : 0;
-    return Math.min(bound.clientHeight, (visualViewportHeight ?? Number.POSITIVE_INFINITY) - top);
+function visibleContainerHeight(bound: Element, visualViewport: VisualViewportBox | undefined): number {
+    const rectTop = bound.getBoundingClientRect().top;
+    const top = Number.isFinite(rectTop) ? rectTop : 0;
+    const bottom = top + bound.clientHeight;
+    if (!visualViewport) return bound.clientHeight;
+    const viewTop = visualViewport.offsetTop;
+    return Math.max(0, Math.min(bottom, viewTop + visualViewport.height) - Math.max(top, viewTop));
 }
 
 /**
@@ -68,9 +78,9 @@ function visibleContainerHeight(bound: Element, visualViewportHeight: number | u
  * area keeps the row, with its copy button. Unmeasured (no bound, or not laid
  * out) keeps it.
  */
-export function composerAffordsTargetRow(bound: Element | null, visualViewportHeight: number | undefined): boolean {
+export function composerAffordsTargetRow(bound: Element | null, visualViewport: VisualViewportBox | undefined): boolean {
     if (!bound || !(bound.clientHeight > 0)) return true;
-    return visibleContainerHeight(bound, visualViewportHeight) >= COMPOSER_MIN_HEIGHT + TARGET_ROW_HEIGHT;
+    return visibleContainerHeight(bound, visualViewport) >= COMPOSER_MIN_HEIGHT + TARGET_ROW_HEIGHT;
 }
 
 /**
