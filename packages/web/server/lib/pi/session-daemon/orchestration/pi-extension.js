@@ -42,6 +42,16 @@ const lookupError = ({ code, stderr }) => {
   return (line ?? (typeof code === 'number' ? `exit ${code}` : String(code))).slice(0, 200);
 };
 
+// `git config` exits 1 without output when nothing is set.
+const readConfig = async (run, args, dir) => {
+  const read = await run('git', ['config', ...args], dir);
+  if (read.code === 1 && !read.stdout.trim()) return { lines: [] };
+  if (read.code !== 0) return { error: lookupError(read) };
+  return { lines: read.stdout.split('\n').map((line) => line.trim()).filter(Boolean) };
+};
+
+const GIT_FALSE = /^(false|no|off|0)$/i;
+
 /** Answers one need of `judgeCommand` as `{ value }` or `{ error }`; never throws. */
 const lookupFact = async (need, cwd, run) => {
   try {
@@ -54,6 +64,19 @@ const lookupFact = async (need, cwd, run) => {
       const tracked = await run('git', ['for-each-ref', '--format=%(upstream:remoteref)', `refs/heads/${branch}`], need.dir);
       if (tracked.code !== 0) return { error: lookupError(tracked) };
       return { value: { branch, upstream: tracked.stdout.trim().replace(/^refs\/heads\//, '') || null } };
+    }
+    if (need.fact === 'pushConfig') {
+      const pushDefault = await readConfig(run, ['--get', 'push.default'], need.dir);
+      if (pushDefault.error) return { error: pushDefault.error };
+      const remotes = await readConfig(run, ['--get-regexp', '^remote\\..*\\.(push|mirror)$'], need.dir);
+      if (remotes.error) return { error: remotes.error };
+      // `remote.<name>.push <refspec>` or `remote.<name>.mirror [<bool>]`; a mirror counts unless it is false.
+      const settings = remotes.lines.map((line) => line.match(/^(\S+)\s*(.*)$/)).filter(Boolean);
+      return { value: {
+        pushDefault: pushDefault.lines.at(-1)?.toLowerCase() ?? null,
+        mirror: settings.some(([, key, value]) => key.endsWith('.mirror') && !GIT_FALSE.test(value)),
+        refspecs: settings.filter(([, key]) => key.endsWith('.push')).map(([, , value]) => value),
+      } };
     }
     const read = need.fact === 'pullBase'
       ? await run('gh', ['pr', 'view', ...(need.selector ? [need.selector] : []), ...(need.repo ? ['--repo', need.repo] : []),

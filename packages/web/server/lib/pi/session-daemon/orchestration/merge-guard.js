@@ -4,6 +4,14 @@
 // `dev` under the owner's standing approval. It reads command text only, so a
 // script or another tool gets past it; the real enforcement is #199. Pure: the
 // caller gathers the facts a verdict needs and asks again.
+//
+// A push without a refspec goes where the repository's configuration says
+// (push.default, remote.<name>.push, remote.<name>.mirror, the upstream), so
+// the guard reads that configuration and blocks when it can reach main. A
+// command that overrides it (`git -c`, `--config-env`, GIT_CONFIG_*) leaves the
+// target unclear and is blocked. The guard never asks git itself with
+// `git push --dry-run`: that contacts the remote and would run the agent's
+// own `--receive-pack`/`--exec` programs.
 
 import { resolve } from 'node:path';
 
@@ -29,7 +37,10 @@ const PREFIXES = {
 };
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const POWERSHELLS = new Set(['pwsh', 'powershell']);
-const GIT_GLOBAL_VALUES = new Set(['-c', '--config-env', '--namespace', '--super-prefix']);
+const GIT_GLOBAL_VALUES = new Set(['--namespace', '--super-prefix']);
+// Configuration that decides where a push without a refspec goes.
+const PUSH_CONFIG = /^(push|remote|branch)\./i;
+const GIT_CONFIG_ENV = /^GIT_CONFIG\w*=/;
 const GIT_REPOSITORY_OPTIONS = new Set(['--git-dir', '--work-tree']);
 const PUSH_VALUES = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec']);
 const PR_MERGE_VALUES = new Set(['-b', '--body', '-F', '--body-file', '-t', '--subject', '-A', '--author-email', '--match-head-commit']);
@@ -44,12 +55,15 @@ const BRANCH_CHANGES = new Set(['checkout', 'switch', 'branch', 'config', 'symbo
 /**
  * @typedef {{ fact: 'branch', dir: string | null }
  *   | { fact: 'pullBase', dir: string | null, repo?: string, selector?: string }
+ *   | { fact: 'pushConfig', dir: string | null }
  *   | { fact: 'pullBaseById', id: string }} MergeFactNeed
  *   `branch` is the current branch of `dir` and the remote branch it tracks,
  *   `{ branch: string | null, upstream: string | null }` (null when detached or
- *   untracked). `pullBase` is the base branch name of the pull request
- *   `gh pr view <selector> --repo <repo>` finds in `dir`, `pullBaseById` the
- *   one of a GraphQL node id.
+ *   untracked). `pushConfig` is what decides the target of a push without a
+ *   refspec, `{ pushDefault: string | null, mirror: boolean, refspecs: string[] }`
+ *   (every remote's `remote.<name>.push` and `.mirror`). `pullBase` is the
+ *   base branch name of the pull request `gh pr view <selector> --repo <repo>`
+ *   finds in `dir`, `pullBaseById` the one of a GraphQL node id.
  * @typedef {{ value: unknown } | { error: string }} MergeFact
  * @typedef {{ decision: 'allow' } | { decision: 'block', reason: string }
  *   | { decision: 'need', needs: MergeFactNeed[] }} MergeVerdict
@@ -198,7 +212,33 @@ const programName = (word) => word.value.split(/[\\/]/).pop().toLowerCase().repl
 
 const block = (reason) => ({ reason });
 
-const checkPush = (args, dir, out) => {
+// Where a refspec writes: every matching branch (`:`), a pattern, the current
+// branch, or one named branch.
+const refspecTarget = (refspec) => {
+  const spec = refspec.replace(/^\+/, '');
+  if (spec === ':') return { kind: 'matching' };
+  const colon = spec.indexOf(':');
+  const source = colon === -1 ? spec : spec.slice(0, colon);
+  const destination = colon === -1 || colon === spec.length - 1 ? source : spec.slice(colon + 1);
+  if (destination === 'HEAD' || destination === '@') return { kind: 'head' };
+  if (destination.includes('*')) return { kind: 'wildcard' };
+  return { kind: 'branch', name: destination };
+};
+
+// The configured push target of a push without a refspec; a configured `HEAD`
+// is the current branch, which the branch check covers.
+const judgePushConfig = ({ pushDefault, mirror, refspecs }) => {
+  if (mirror) return 'git push without a refspec mirrors every branch (remote.<name>.mirror), main included.';
+  if (pushDefault === 'matching') return 'git push without a refspec pushes every matching branch (push.default=matching), main included.';
+  for (const refspec of refspecs) {
+    const target = refspecTarget(refspec);
+    if (target.kind === 'matching' || target.kind === 'wildcard') return `git push without a refspec uses the configured refspec ${refspec}, which can update main.`;
+    if (target.kind === 'branch' && isMain(target.name)) return `git push without a refspec uses the configured refspec ${refspec}, which updates main.`;
+  }
+  return null;
+};
+
+const checkPush = (args, dir, out, configOverridden) => {
   const positional = [];
   let everything = null;
   let tags = false;
@@ -224,26 +264,30 @@ const checkPush = (args, dir, out) => {
     ? block('git push follows a git command that can change the current branch, so the branch it pushes is unknown before the command runs.')
     : { need: { fact: 'branch', dir }, judge: check });
   if (!refspecs.length && !tags) {
+    if (configOverridden) {
+      out.push(block('git push without a refspec follows the push configuration, which this command overrides, so its target is unclear.'));
+      return;
+    }
     currentBranch(
       ({ branch, upstream }) => (branch === PROTECTED || upstream === PROTECTED
         ? `git push without a refspec on ${branch ?? 'a detached HEAD'}${upstream ? ` tracking ${upstream}` : ''} pushes to main.`
         : null),
     );
+    out.push({ need: { fact: 'pushConfig', dir }, judge: judgePushConfig });
   }
   for (const refspec of refspecs) {
     if (refspec.dynamic) {
       out.push(block(`The target of the refspec ${refspec.value} depends on a shell expansion, so it may be main.`));
       continue;
     }
-    const spec = refspec.value.replace(/^\+/, '');
-    const colon = spec.indexOf(':');
-    const source = colon === -1 ? spec : spec.slice(0, colon);
-    const destination = colon === -1 || colon === spec.length - 1 ? source : spec.slice(colon + 1);
-    if (destination === 'HEAD' || destination === '@') {
+    const target = refspecTarget(refspec.value);
+    if (target.kind === 'head') {
       currentBranch(({ branch }) => (branch === PROTECTED ? `git push ${refspec.value} pushes the current branch main.` : null));
-    } else if (destination.includes('*')) {
+    } else if (target.kind === 'matching') {
+      out.push(block(`The refspec ${refspec.value} pushes every matching branch, main included.`));
+    } else if (target.kind === 'wildcard') {
       out.push(block(`The wildcard refspec ${refspec.value} can update main.`));
-    } else if (isMain(destination)) {
+    } else if (isMain(target.name)) {
       out.push(block(`git push ${refspec.value} updates main.`));
     }
   }
@@ -251,11 +295,16 @@ const checkPush = (args, dir, out) => {
 
 const checkGit = (args, dir, out) => {
   let gitDir = dir;
+  let configOverridden = out.configEnv === true;
   let index = 0;
   for (; index < args.length; index += 1) {
     const value = args[index].value;
-    const [flag] = splitOption(value);
+    const [flag, inline] = splitOption(value);
     if (value === '-C') gitDir = changeDir(gitDir, args[++index]);
+    else if (value === '-c' || flag === '--config-env') {
+      const setting = inline === undefined ? args[++index] : { value: inline, dynamic: args[index].dynamic };
+      if (!setting || setting.dynamic || PUSH_CONFIG.test(setting.value)) configOverridden = true;
+    }
     else if (GIT_REPOSITORY_OPTIONS.has(flag)) {
       // The repository is no longer the directory's; its branch is unknown.
       gitDir = null;
@@ -264,7 +313,7 @@ const checkGit = (args, dir, out) => {
     else if (!value.startsWith('-')) break;
   }
   const command = args[index]?.value;
-  if (command === 'push') checkPush(args.slice(index + 1), gitDir, out);
+  if (command === 'push') checkPush(args.slice(index + 1), gitDir, out, configOverridden);
   else if (BRANCH_CHANGES.has(command)) out.branchChanged = true;
 };
 
@@ -380,6 +429,8 @@ const checkGh = (args, dir, out) => {
 const invocation = (words, dir, shell, depth, out) => {
   let local = dir;
   let index = 0;
+  // A GIT_CONFIG_* variable, assigned or exported, configures every later git command.
+  if (words.some((word) => GIT_CONFIG_ENV.test(word.value))) out.configEnv = true;
   while (index < words.length) {
     const value = words[index].value;
     if (ASSIGNMENT.test(value) || KEYWORDS.has(value)) {
