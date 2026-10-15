@@ -7,7 +7,7 @@ import { SessionManager } from '../../packages/web/node_modules/@earendil-works/
 import { getPiSessionDirectory } from '../../packages/web/server/lib/pi/session-daemon/session-jsonl.js';
 
 import { SEED_MANIFEST } from './seed-spec.mjs';
-import { LAB_HTML_RENDER_PROMPT, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
+import { LAB_HTML_RENDER_PROMPT, LAB_WORKTREE_WORKER, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 export { SessionManager, SEED_MANIFEST };
 
 const usage = { input: 80, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 120,
@@ -257,12 +257,14 @@ export async function seedLab(root, now = Date.now()) {
 }
 
 // Issue #107: an orchestrating session on the scripted faux model, which the
-// extension in the lab agent directory registers. It spawns its worker in the same project.
+// extension in the lab agent directory registers. It spawns one worker in its own directory
+// and one in a linked worktree of the same project (#179).
 async function seedOrchestrator({ root, agentDir, now, projects, sessions }) {
   const spec = SEED_MANIFEST.sessions.find((session) => session.role === 'orchestrator');
   const cwd = projects.find((project) => project.name === spec.project).path;
   await mkdir(join(agentDir, 'extensions'), { recursive: true });
-  await writeFile(join(agentDir, 'extensions', 'faux-orchestration.js'), fauxOrchestrationExtension({ fauxUrl: resolveFauxUrl(), workerCwd: cwd }));
+  await writeFile(join(agentDir, 'extensions', 'faux-orchestration.js'), fauxOrchestrationExtension({ fauxUrl: resolveFauxUrl(), workerCwd: cwd,
+    worktreeWorkerCwd: join(root, 'projects', `${spec.project}-worktrees`, LAB_WORKTREE_WORKER.worktree) }));
   const createdAt = now - 600000;
   let manager;
   withSeedClock(createdAt, () => {
