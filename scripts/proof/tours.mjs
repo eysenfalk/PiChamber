@@ -561,8 +561,9 @@ export function startLastSessionTour(manifest) {
   const main = project => `[data-tree-node="w:${project.path}"]`;
   const item = title => `[role="treeitem"][aria-label="${title}"]`;
   const terminal = '.xterm-screen';
-  // The lab server starts in the first project, so its default runtime lives there; the seed marker predates both loads.
-  const count = 'echo "new session files: $(find /lab/pi-agent/sessions -name \'*.jsonl\' -newer /lab/seed.json | wc -l)"';
+  // The lab server starts in the first project, so its default runtime lives there. Opening a session appends to its file,
+  // so modification times prove nothing; count the session files the seed manifest does not list.
+  const count = 'grep -o \'/lab/pi-agent/sessions/[^"]*\' /lab/seed.json > /tmp/seeded-sessions; echo "new session files: $(find /lab/pi-agent/sessions -name \'*.jsonl\' | grep -cvxFf /tmp/seeded-sessions)"';
   return validateTour({ name: 'start-last-session', steps: [
     { caption: 'First load on a fresh browser profile against a freshly started daemon, before any input.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'wait', ms: 3000 }],
@@ -577,7 +578,7 @@ export function startLastSessionTour(manifest) {
     { caption: `After a reload without input, "${last.title}" opens again, not the newest session of ${label(active.name)}.`, viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'wait', ms: 3000 }],
       evidence: [{ selector: 'header', index: 0, text: last.title }] },
-    { caption: 'In the terminal: Pi wrote no session file since the seed, so neither load created a session.', viewport: 'desktop', theme: 'light',
+    { caption: 'In the terminal: no session file beyond the seeded ones, so neither load created a session.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: 'nav[aria-label="Panel surfaces"] [aria-label="Terminal"]' }, { type: 'wait', selector: terminal }, { type: 'wait', ms: 2000 },
         { type: 'type', selector: terminal, value: count }, { type: 'press', key: 'Enter' }, { type: 'wait', text: 'new session files: 0' }],
       evidence: [{ selector: terminal }, { text: 'new session files: 0' }] },
