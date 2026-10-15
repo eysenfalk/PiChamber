@@ -235,6 +235,39 @@ describe('default runtime after session deletion', () => {
     expect(listed.result.sessions).toEqual([]);
   });
 
+  it('lists persisted sessions next to the hidden default runtime session (#89)', async () => {
+    const { home, agentDir, runtimes, request } = await setup();
+    await writeSessionFile({ agentDir, cwd: home, sessionId: 'session-a' });
+
+    expectProviders(await request('providers.list', {}));
+    expect(runtimes.map((entry) => entry.sessionId)).toEqual(['fresh-1']);
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['session-a']);
+  });
+
+  it('lists the default runtime session once it holds a conversation (#104)', async () => {
+    const { home, runtimes, request } = await setup();
+    expectProviders(await request('providers.list', {}));
+
+    runtimes[0].runtime.session.messages = [{ role: 'user', content: 'hello', timestamp: 1 }];
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.result.sessions.map((item) => [item.session.id, item.session.messageCount])).toEqual([['fresh-1', 1]]);
+  });
+
+  it('still lists an explicitly created session while it is empty (#104)', async () => {
+    const { home, request } = await setup();
+    expectProviders(await request('providers.list', {}));
+
+    const created = await request('sessions.create', { cwd: home });
+    expect(created.error).toBeUndefined();
+    expect(created.result.session.id).toBe('fresh-2');
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.result.sessions.map((item) => [item.session.id, item.session.messageCount])).toEqual([['fresh-2', 0]]);
+  });
+
   // A second daemon with its own identity on the same agent directory, like
   // another PiChamber instance. It may open session-a only when the lease is
   // free.

@@ -310,6 +310,12 @@ export function createSessionDaemon({
   let runtimeStartPromise;
   let idleDisposeTimer;
   let dormantSession;
+  // Fresh Pi sessions the default runtime started for itself, for calls
+  // without a session id (providers, resources, extensions, settings). Nobody
+  // asked for them, so the listing hides them until they hold a conversation
+  // (#104, #89). Keyed by session, not runtime: a fork or clone replaces the
+  // runtime's session with one the user asked for.
+  const implicitSessions = new WeakSet();
   let sequence = 0;
   // Opaque, random, public stream-lifetime identifier. It regenerates on every
   // daemon process start (restart, crash, or replacement), so clients can
@@ -875,7 +881,9 @@ export function createSessionDaemon({
   // Starts the default runtime by reopening the dormant session. A dormant
   // session that is live again is adopted instead of opened a second time, and
   // one whose JSONL or working directory is gone is forgotten, so the default
-  // runtime starts fresh instead of failing every call that needs it.
+  // runtime starts fresh instead of failing every call that needs it. A fresh
+  // start is implicit: its session stays out of the listing until it holds a
+  // conversation.
   const startRuntime = async (requestedCwd = activeDirectory || cwd) => {
     let reopen = dormantSession?.sessionFile ? dormantSession : undefined;
     const live = reopen && runtimeRegistry?.findBySessionId(reopen.sessionId);
@@ -924,6 +932,7 @@ export function createSessionDaemon({
       if (reopen && disposed) await releaseUnownedLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
       throw error;
     }
+    if (!reopen && newRuntime.session) implicitSessions.add(newRuntime.session);
     return setDefaultRuntime(newRuntime, runtimeCwd);
   };
 
@@ -1352,6 +1361,7 @@ export function createSessionDaemon({
     }
     const extra = [];
     for (const entry of activeEntries) {
+      if (implicitSessions.has(entry?.session) && !(entry.session.messages?.length > 0)) continue;
       if (entry?.session?.sessionId && !knownIds.has(entry.session.sessionId)) {
         extra.push({
           id: entry.session.sessionId,
