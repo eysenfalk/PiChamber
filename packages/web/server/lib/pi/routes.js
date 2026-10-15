@@ -1823,8 +1823,11 @@ export const registerPiRuntimeRoutes = (app, {
       );
       const items = projectSessionList(result?.sessions);
       if (!items.some((item) => item.session.id === sessionId)) {
-        const error = new Error('The Pi session does not exist.');
-        error.code = 'INVALID_SESSION';
+        // A partial list skipped a file it could not read, which may be this
+        // session: absence is not proven, so do not call it deleted.
+        const partial = result?.incomplete === true;
+        const error = new Error(partial ? 'The Pi session file cannot be read.' : 'The Pi session does not exist.');
+        error.code = partial ? 'SESSION_JSONL_UNREADABLE' : 'INVALID_SESSION';
         throw error;
       }
       await archiveStore.set(sessionId, archived);

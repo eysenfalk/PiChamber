@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { getPiSessionStore } from '@/apps/pi-session-store';
-import { PiRequestError, piClient } from '@/lib/pi/client';
 import * as sessionActions from './session-actions';
 
 describe('session-actions Pi shims', () => {
@@ -11,29 +10,32 @@ describe('session-actions Pi shims', () => {
 });
 
 describe('session-actions archive failures', () => {
-  const original = piClient.archiveSession.bind(piClient);
+  const store = getPiSessionStore();
+  const original = store.archive.bind(store);
   afterEach(() => {
-    piClient.archiveSession = original;
+    store.archive = original;
   });
 
-  test('a rejected archive is reported as failed, not thrown, and archives nothing', async () => {
-    piClient.archiveSession = (async () => {
-      throw new PiRequestError('SESSION_JSONL_UNREADABLE', 'unreadable', 503);
-    }) as typeof piClient.archiveSession;
+  test('a rejected archive is reported as failed, not thrown', async () => {
+    store.archive = (async () => {
+      throw new Error('SESSION_JSONL_UNREADABLE');
+    }) as typeof store.archive;
 
-    await expect(sessionActions.archiveSession('broken')).resolves.toBe(false);
-    await expect(sessionActions.archiveSessions(['broken'])).resolves.toEqual({ archivedIds: [], failedIds: ['broken'] });
+    expect(await sessionActions.archiveSession('broken')).toBe(false);
+    expect(await sessionActions.archiveSessions(['broken'])).toEqual({ archivedIds: [], failedIds: ['broken'] });
   });
 
   test('one failed archive does not block the others', async () => {
-    piClient.archiveSession = (async (input: { sessionId: string }) => {
-      if (input.sessionId === 'broken') throw new PiRequestError('SESSION_JSONL_UNREADABLE', 'unreadable', 503);
-      return undefined;
-    }) as typeof piClient.archiveSession;
+    const archived: string[] = [];
+    store.archive = (async (id: string) => {
+      if (id === 'broken') throw new Error('SESSION_JSONL_UNREADABLE');
+      archived.push(id);
+    }) as typeof store.archive;
 
-    await expect(sessionActions.archiveSessions(['a', 'broken', 'b'])).resolves.toEqual({
+    expect(await sessionActions.archiveSessions(['a', 'broken', 'b'])).toEqual({
       archivedIds: ['a', 'b'],
       failedIds: ['broken'],
     });
+    expect(archived).toEqual(['a', 'b']);
   });
 });

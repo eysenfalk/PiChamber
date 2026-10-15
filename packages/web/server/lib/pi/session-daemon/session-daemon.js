@@ -1466,6 +1466,14 @@ export function createSessionDaemon({
     // final INVALID_SESSION then carries `incomplete`, because the session may
     // exist behind a transient storage error and must not be treated as gone.
     let incomplete = false;
+    // Set when the session's own file was located but could not be read. That
+    // is "found but unreadable", never "does not exist", and is reported as
+    // such when no readable copy turns up.
+    let unreadable;
+    const noteLookupFailure = (error) => {
+      incomplete = true;
+      if (error?.code === 'MALFORMED_SESSION_JSONL' || error?.code === 'SESSION_JSONL_UNREADABLE') unreadable ??= error;
+    };
     const candidateDirs = new Set();
     let requestedTargetDirectory;
     if (requestedDirectory) {
@@ -1488,8 +1496,8 @@ export function createSessionDaemon({
         }
         // The listing skipped a file it could not read, which may be this session.
         if (sessions?.incomplete === true) incomplete = true;
-      } catch {
-        incomplete = true;
+      } catch (error) {
+        noteLookupFailure(error);
         // Continue through the remaining authoritative lookup paths.
       }
       return undefined;
@@ -1514,8 +1522,8 @@ export function createSessionDaemon({
         const directory = await resolveStoredDirectory(named.cwd);
         return { target: { id: sessionId, path: named.path }, directory };
       }
-    } catch {
-      incomplete = true;
+    } catch (error) {
+      noteLookupFailure(error);
       // Fall through to list / header scan for non-standard filenames.
     }
 
@@ -1531,13 +1539,21 @@ export function createSessionDaemon({
       sessionId,
       agentDir,
       accept: async ({ path, cwd: headerCwd }) => {
-        await validatePiSessionJsonlFile(path);
+        try {
+          await validatePiSessionJsonlFile(path);
+        } catch (error) {
+          noteLookupFailure(error);
+          throw error;
+        }
         return { target: { id: sessionId, path }, directory: await resolveStoredDirectory(headerCwd) };
       },
     });
     if (scanned.match) return scanned.match;
     if (scanned.incomplete) incomplete = true;
 
+    if (unreadable) {
+      throw new SessionDaemonProtocolError(unreadable.code, 'The Pi session file exists but cannot be read.');
+    }
     throw Object.assign(
       new SessionDaemonProtocolError('INVALID_SESSION', 'The Pi session does not exist.'),
       incomplete ? { incomplete: true } : {},
