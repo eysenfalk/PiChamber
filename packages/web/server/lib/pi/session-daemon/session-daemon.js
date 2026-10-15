@@ -11,6 +11,7 @@ import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  DefaultPackageManager,
   getAgentDir,
   ProjectTrustStore,
   SessionManager,
@@ -65,7 +66,7 @@ import { createMergeLookup } from '../../github/merge-lookup.js';
 import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
-import { withoutExcludedExtensions } from './orchestration/tool-profiles.js';
+import { keptExtensionPaths } from './orchestration/tool-profiles.js';
 import { createHtmlRenderExtension } from '../html-render/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -135,16 +136,28 @@ export function isLocalSessionDaemonEndpoint(endpoint, platform = process.platfo
 // creation (initial, new/resume/fork replacement) without coupling this
 // factory to daemon socket state. `workerProfile` names a worker's tool
 // profile (#151) for the session a creation is for; its excluded extensions
-// are not loaded. Pi chooses extensions only here, when services are built.
+// are never imported. Pi chooses extensions only here, when services are built.
+// A worker profile that excludes extensions (#151) resolves Pi's extension
+// resources first and hands Pi only the kept paths, so an excluded extension
+// is never imported and registers no tool or listener. Pi's own filter hook
+// (`extensionsOverride`) runs after every factory already ran.
+async function profileExtensionOptions(profile, { cwd, agentDir, settingsManager }) {
+  if (profile === undefined || (profile !== null && profile.excludeExtensions.length === 0)) return {};
+  const { extensions } = await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve();
+  return { noExtensions: true, additionalExtensionPaths: keptExtensionPaths(extensions, profile) };
+}
+
 export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), sessionFile }, hooks) {
   const createRuntime = async ({ cwd: runtimeCwd, agentDir: runtimeAgentDir, sessionManager, sessionStartEvent }) => {
     const profile = hooks?.workerProfile?.(sessionManager);
+    const settingsManager = SettingsManager.create(runtimeCwd, runtimeAgentDir);
     const services = await createAgentSessionServices({
       cwd: runtimeCwd,
       agentDir: runtimeAgentDir,
+      settingsManager,
       resourceLoaderOptions: {
         ...(hooks?.extensionFactories?.length ? { extensionFactories: hooks.extensionFactories } : {}),
-        ...(profile !== undefined ? { extensionsOverride: (loaded) => withoutExcludedExtensions(loaded, profile) } : {}),
+        ...(await profileExtensionOptions(profile, { cwd: runtimeCwd, agentDir: runtimeAgentDir, settingsManager })),
       },
     });
 

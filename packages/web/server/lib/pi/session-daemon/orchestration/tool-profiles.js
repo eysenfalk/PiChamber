@@ -86,16 +86,16 @@ export const toolAllowed = (profile, toolName) => {
 };
 
 /**
- * Pi's loaded extensions without the excluded ones. PiChamber's inline
- * extensions (`<inline:...>`) always stay: they carry orchestration itself.
- * An unreadable profile keeps only those.
+ * Paths of the extensions a session with this recorded profile loads, from
+ * Pi's resolved extension resources (`DefaultPackageManager.resolve()`):
+ * the enabled ones that no pattern excludes by path or by package source.
+ * An unreadable profile loads none. PiChamber's inline extensions are not
+ * resources and always load: they carry orchestration itself.
  */
-export const withoutExcludedExtensions = (loaded, profile) => {
-  if (profile === undefined) return loaded;
-  const excluded = profile === null ? () => true : patternMatcher(profile.excludeExtensions);
-  return {
-    ...loaded,
-    extensions: loaded.extensions.filter((extension) => extension.path.startsWith('<inline:')
-      || !(excluded(extension.path) || (extension.sourceInfo?.source && excluded(extension.sourceInfo.source)))),
-  };
+export const keptExtensionPaths = (resources, profile) => {
+  if (profile === null) return [];
+  const excluded = patternMatcher(profile.excludeExtensions);
+  return resources
+    .filter((resource) => resource.enabled && !excluded(resource.path) && !(resource.metadata?.source && excluded(resource.metadata.source)))
+    .map((resource) => resource.path);
 };

@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { recordedProfile, resolveProfile, toolAllowed, withoutExcludedExtensions } from './tool-profiles.js';
-
-const extension = (path, source) => ({ path, sourceInfo: { source } });
+import { keptExtensionPaths, recordedProfile, resolveProfile, toolAllowed } from './tool-profiles.js';
 
 describe('worker tool profiles', () => {
   it('blocks the writing tools of read-only, with and without an MCP proxy prefix, and keeps bash and reading', () => {
@@ -34,19 +32,16 @@ describe('worker tool profiles', () => {
     expect(['bash', 'write', 'mcp__pichamber__worker_report'].some((name) => toolAllowed(broken, name))).toBe(false);
   });
 
-  it('drops excluded extensions by path or package source and always keeps the inline ones', () => {
-    const loaded = {
-      extensions: [
-        extension('<inline:pichamber-orchestration>', 'inline'),
-        extension('/home/u/.pi/agent/npm/node_modules/pi-intercom/index.ts', 'npm:pi-intercom'),
-        extension('/home/u/.pi/agent/extensions/notes.ts', 'local'),
-      ],
-      errors: [],
-    };
+  it('keeps the enabled extension resources that no pattern excludes by path or package source', () => {
+    const resources = [
+      { path: '/home/u/.pi/agent/npm/node_modules/pi-intercom/index.ts', enabled: true, metadata: { source: 'npm:pi-intercom' } },
+      { path: '/home/u/.pi/agent/extensions/notes.ts', enabled: true, metadata: { source: 'local' } },
+      { path: '/home/u/.pi/agent/extensions/kept.ts', enabled: true, metadata: { source: 'local' } },
+      { path: '/home/u/.pi/agent/extensions/off.ts', enabled: false, metadata: { source: 'local' } },
+    ];
     const profile = resolveProfile({ excludeExtensions: ['npm:pi-intercom', '*/notes.ts'] });
-    expect(withoutExcludedExtensions(loaded, profile).extensions.map((item) => item.path)).toEqual(['<inline:pichamber-orchestration>']);
-    expect(withoutExcludedExtensions(loaded, resolveProfile({})).extensions).toHaveLength(3);
-    expect(withoutExcludedExtensions(loaded, undefined)).toBe(loaded);
-    expect(withoutExcludedExtensions(loaded, null).extensions.map((item) => item.path)).toEqual(['<inline:pichamber-orchestration>']);
+    expect(keptExtensionPaths(resources, profile)).toEqual(['/home/u/.pi/agent/extensions/kept.ts']);
+    expect(keptExtensionPaths(resources, resolveProfile({}))).toHaveLength(3);
+    expect(keptExtensionPaths(resources, null)).toEqual([]);
   });
 });
