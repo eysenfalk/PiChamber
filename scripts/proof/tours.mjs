@@ -1,4 +1,4 @@
-import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -339,11 +339,20 @@ export function controlCenterTour(manifest) {
   if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
   const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
   const worker = LAB_ASKER_TITLE;
+  const chooser = LAB_CHOOSER_TITLE;
+  const [license, badge] = LAB_CHOOSER_DIALOGS;
   const composer = '[data-chat-input="true"] .cm-content';
   const item = title => `[role="treeitem"][aria-label="${title}"]`;
   const inbox = '[aria-label="Decision inbox"]';
   const row = `button[aria-label="Open ${worker}"]`;
+  const chooserRow = `button[aria-label="Open ${chooser}"]`;
   const waiting = 'button[aria-label="Open control center, 1 decision waiting"]';
+  const waitingTwo = 'button[aria-label="Open control center, 2 decisions waiting"]';
+  const desktopEntry = 'button[aria-label^="Open control center"]';
+  const inboxDialog = `${inbox} [data-inbox-dialog]`;
+  const chatDialog = `[role="dialog"][aria-label="${license.title}"]`;
+  const closeOne = 'button[aria-label="Close control center, 1 decision waiting"]';
+  const chosen = { text: `Chosen: ${license.options[1]} and ${badge.options[0]}.` };
   const mobileEntry = 'button[aria-label^="Open control center"]';
   const choice = LAB_ASKER_OPTIONS.find(option => option.recommended).label;
   const option = `${inbox} [data-inbox-option="${choice}"]`;
@@ -357,11 +366,18 @@ export function controlCenterTour(manifest) {
         { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
         { type: 'type', selector: composer, value: 'ASK' }, { type: 'press', key: 'Enter' }, { type: 'wait', text: 'I leave that question to you.' }, { type: 'wait', selector: waiting }],
       evidence: [{ text: `The worker "${worker}" is running.` }, { text: 'I leave that question to you.' }, { selector: waiting }] },
-    { caption: 'The control center shows the question as its title with the context, three options as answer buttons with their consequence, the recommended one marked, and what the worker does until then. The worker sits under its orchestrator with slots and host load.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'click', selector: waiting }, { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'wait', selector: row }],
+    { caption: `A second worker, "${chooser}", opens an extension dialog. The chat shows it as a modal over the open session, as before the inbox existed; the orchestrator leaves it to the owner and the header counts two waiting decisions.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'type', selector: composer, value: 'CHOOSE' }, { type: 'press', key: 'Enter' }, { type: 'wait', selector: chatDialog }, { type: 'wait', text: 'I leave that dialog to you.' }, { type: 'wait', selector: waitingTwo }],
+      evidence: [{ selector: chatDialog, text: license.options[1] }, { text: 'I leave that dialog to you.' }, { selector: waitingTwo }] },
+    { caption: `The owner picks ${license.options[1]} in the chat dialog and opens the control center. It shows the question as its title with the context, three options as answer buttons with their consequence, the recommended one marked, and what the worker does until then; next to it the chooser's next dialog, and both workers under their orchestrator with slots and host load.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: license.options[1] }, { type: 'wait', ms: 1000 }, { type: 'click', selector: desktopEntry },
+        { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'wait', text: badge.title }, { type: 'wait', selector: chooserRow }],
       evidence: [{ selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }, { selector: option, text: 'Recommended' },
-        { selector: `${inbox} [data-inbox-option]`, index: 2, text: LAB_ASKER_OPTIONS[2].consequence }, { text: 'Until then:' },
-        { selector: '[aria-label="Slots and host"]' }, { selector: row }] },
+        { selector: `${inbox} [data-inbox-option]`, index: 2, text: LAB_ASKER_OPTIONS[2].consequence }, { text: 'Until then:' }, { selector: inboxDialog, text: badge.title },
+        { selector: '[aria-label="Slots and host"]' }, { selector: row }, { selector: chooserRow }] },
+    { caption: `The owner picks "${badge.options[0]}" in the inbox without opening the chooser. Only the question is left.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: badge.options[0] }, { type: 'wait', selector: closeOne }],
+      evidence: [{ selector: closeOne }, { selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }] },
     { caption: 'On the phone the same question stacks its options full width, each with its consequence, so one tap answers.', viewport: 'mobile', theme: 'light',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
         { type: 'wait', selector: option }],
@@ -375,10 +391,13 @@ export function controlCenterTour(manifest) {
     { caption: 'Opening the worker from the control center shows the option answer in its transcript.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: row }, { type: 'wait', text: `Got your answer (${choice}).` }],
       evidence: [{ text: `Got your answer (${choice}).` }] },
+    { caption: 'Opening the chooser from the control center shows both answers in its transcript, the one from the chat and the one from the inbox.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: desktopEntry }, { type: 'wait', selector: chooserRow }, { type: 'click', selector: chooserRow }, { type: 'wait', ...chosen }],
+      evidence: [chosen] },
     { caption: 'The session list filter shows only workers.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: '[data-testid="worker-filter-trigger"]' }, { type: 'wait', selector: '[data-worker-filter="only"]' },
         { type: 'click', selector: '[data-worker-filter="only"]' }, { type: 'wait', selector: 'button[aria-label="Workers: only workers"]' }],
-      evidence: [{ selector: 'button[aria-label="Workers: only workers"]' }, { selector: item(worker) }] },
+      evidence: [{ selector: 'button[aria-label="Workers: only workers"]' }, { selector: item(worker) }, { selector: item(chooser) }] },
     { caption: 'The control center in dark theme, with the blocker open.', viewport: 'desktop', theme: 'dark',
       actions: [{ type: 'click', selector: waiting }, { type: 'wait', selector: `${inbox} [data-inbox-question]` }],
       evidence: [{ selector: `html.dark ${inbox} [data-inbox-question]`, text: LAB_ASKER_BLOCKER }, { selector: row }] },
