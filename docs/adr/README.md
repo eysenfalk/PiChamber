@@ -14,10 +14,11 @@ One record per architecture or process decision: why it was made, what was decid
 | [0006](0006-intent-as-the-primitive.md) | Intent as the primitive: work organized by accepted intents, not by sessions | Proposed |
 | [0007](0007-ideas-as-issues.md) | Ideas as records of their own, kept as issues of the tracker | Accepted |
 | [0008](0008-dev-integration-branch.md) | Work merges into `dev`; `main` only fast-forwards to stable states | Accepted |
-| [0009](0009-spec-folder-for-multi-pr-features.md) | A feature delivered in several pull requests gets a temporary spec folder | Accepted |
+| [0009](0009-spec-folder-for-multi-pr-features.md) | A feature delivered in several pull requests gets a temporary spec folder | Superseded by 0013 |
 | [0010](0010-orchestration-through-daemon-tools.md) | Orchestration through daemon-owned tools, an in-process adapter and a session-scoped MCP endpoint | Proposed |
 | [0011](0011-fixed-orchestrator.md) | Fixed orchestrator: registry, wakes and proven-merge cleanup | Proposed |
 | [0012](0012-phone-browser-as-remote-view.md) | The phone browser is a remote view of a page the laptop renders in the PiChamber browser profile | Accepted |
+| [0013](0013-one-pull-request-with-slices.md) | One pull request with slices, a draft at the first plan, a fast and a slow lane | Accepted |
 
 ## Rules
 
