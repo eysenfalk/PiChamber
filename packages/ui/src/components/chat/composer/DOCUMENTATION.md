@@ -57,6 +57,15 @@ copy.
   active, with precedence `command > snippet > mention`. Slash autocomplete
   opens only when `/` is the first character of the message; a `/` after any
   other text (including whitespace or a newline) never opens a picker.
+  The palette's search follows Pi's slash autocomplete (pi-tui
+  `CombinedAutocompleteProvider`): `filterAndSortCommands` matches the
+  executable name, ranked by the `piFuzzyFilter` port in
+  `../../../lib/search/piFuzzy.ts`; a `skill:` command matches by its bare name
+  first, then by its full name. Commands that match only by description or
+  search alias (a PiChamber extension, Pi has none) follow all name matches in
+  catalog order, when the query starts a word there (case-insensitive, no
+  scattered letters). Keep the name part
+  identical to Pi's behavior; change it together with Pi, not on its own.
   The command palette (`../../CommandAutocomplete.tsx`) renders the rich
   categorized list on desktop and a compact one-line-per-command list on
   mobile with the same catalog, tap-vs-scroll guards, and listbox semantics.
