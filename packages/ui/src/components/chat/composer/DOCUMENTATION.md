@@ -62,8 +62,9 @@ copy.
   executable name, ranked by the `piFuzzyFilter` port in
   `../../../lib/search/piFuzzy.ts`; a `skill:` command matches by its bare name
   first, then by its full name. Commands that match only by description or
-  search alias (a PiChamber extension, Pi has none) follow all name matches,
-  ranked by the same fuzzy function (`piFuzzyFilterAny`). Keep the name part
+  search alias (a PiChamber extension, Pi has none) follow all name matches in
+  catalog order, when the query starts a word there (case-insensitive, no
+  scattered letters). Keep the name part
   identical to Pi's behavior; change it together with Pi, not on its own.
   The command palette (`../../CommandAutocomplete.tsx`) renders the rich
   categorized list on desktop and a compact one-line-per-command list on

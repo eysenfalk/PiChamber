@@ -1,4 +1,4 @@
-import { piFuzzyFilter, piFuzzyFilterAny } from "@/lib/search/piFuzzy";
+import { piFuzzyFilter } from "@/lib/search/piFuzzy";
 
 export type CommandAutocompleteCategory =
   "all" | "system" | "skills" | "extensions" | "prompts";
@@ -123,15 +123,40 @@ export function commandMatchesCategory(
 
 const SKILL_PREFIX = "skill:";
 
+const isWordChar = (char: string | undefined) => char !== undefined && /[\p{L}\p{N}]/u.test(char);
+
+/** True when `token` starts a word in `text` (case-insensitive). */
+function startsAWord(text: string, token: string): boolean {
+  const haystack = text.toLowerCase();
+  const needle = token.toLowerCase();
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    if (!isWordChar(haystack[at - 1])) return true;
+  }
+  return false;
+}
+
+/**
+ * Description or alias match: every whitespace- or slash-separated query token
+ * starts a word in the same text. No fuzzy matching, so a long description
+ * cannot match on scattered letters.
+ */
+function commandMetadataMatches(command: CommandAutocompleteSearchItem, query: string): boolean {
+  const tokens = query.split(/[\s/]+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  const texts = [command.description, ...(command.searchAliases ?? [])];
+  return texts.some((text) => Boolean(text) && tokens.every((token) => startsAWord(text as string, token)));
+}
+
 /**
  * Filter a merged catalog by category and free-text query. The name matches
  * and their order are Pi's slash autocomplete (pi-tui
  * `CombinedAutocompleteProvider`): ranked by `piFuzzyFilter`, a `skill:`
  * command by its bare name first, then those that match only their full name
- * (for example `skill:pro`). Commands that do not match by name but by
- * description or search alias (a PiChamber extension, Pi has none) come last,
- * ranked by the same fuzzy function. Pure so the desktop rich list and the
- * mobile compact list share one per-keystroke path; the mobile list always
+ * (for example `skill:pro`). Commands that do not match by name but whose
+ * description or search alias contains the query as the start of a word come
+ * last (a PiChamber extension, Pi has none), in catalog order; scattered
+ * letters do not match there. Pure so the desktop rich list and the mobile
+ * compact list share one per-keystroke path; the mobile list always
  * passes `all` to keep the full catalog without category chrome.
  */
 export function filterAndSortCommands<T extends CommandAutocompleteSearchItem>(
@@ -158,10 +183,8 @@ export function filterAndSortCommands<T extends CommandAutocompleteSearchItem>(
   );
   const nameMatches = [...bareNameMatches, ...fullNameOnlyMatches];
   const nameMatchSet = new Set(nameMatches);
-  const metadataMatches = piFuzzyFilterAny(
-    inCategory.filter((command) => !nameMatchSet.has(command)),
-    normalizedQuery,
-    (command) => [command.description, ...(command.searchAliases ?? [])].filter((text): text is string => Boolean(text)),
+  const metadataMatches = inCategory.filter(
+    (command) => !nameMatchSet.has(command) && commandMetadataMatches(command, normalizedQuery),
   );
   return [...nameMatches, ...metadataMatches];
 }
