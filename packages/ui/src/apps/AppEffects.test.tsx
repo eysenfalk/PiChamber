@@ -19,9 +19,14 @@ const piStore = {
 
 let currentDirectory = 'C:/repo';
 let setDirectoryCalls = 0;
+const directoryWrites: string[] = [];
+// The spelling test makes the server answer every write with another spelling.
+let echoServerSpelling = true;
 const setDirectory = (directory: string) => {
   setDirectoryCalls += 1;
+  directoryWrites.push(directory);
   currentDirectory = directory.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!echoServerSpelling) return;
   piState = {
     ...piState,
     directory: piState.directory === 'C:\\repo' ? 'C:/repo/' : 'C:\\repo',
@@ -136,6 +141,8 @@ afterEach(async () => {
   };
   currentDirectory = 'C:/repo';
   setDirectoryCalls = 0;
+  directoryWrites.length = 0;
+  echoServerSpelling = true;
   feederRenderCount = 0;
 });
 
@@ -152,6 +159,38 @@ describe('SyncAppEffects directory bridge', () => {
     });
 
     expect(setDirectoryCalls).toBe(0);
+  });
+
+  test('writes back the focus current when its effect runs, not one superseded since render', async () => {
+    const { SyncAppEffects } = await import('./AppEffects');
+    const dom = installMinimalDom();
+    restoreDom.push(dom.restore);
+    const root = createRoot(dom.container);
+    roots.push(root);
+    echoServerSpelling = false;
+    piState = { ...piState, directory: '/b' };
+    currentDirectory = '/c';
+    // A folder effect earlier in the same commit moves the Pi focus after the
+    // bridge rendered. Echoing the rendered folder would flip the directory
+    // store back to a folder nobody focuses anymore (#108).
+    const FolderEffect = () => {
+      React.useEffect(() => {
+        piState = { ...piState, directory: '/a' };
+        piListeners.forEach((listener) => listener());
+      }, []);
+      return null;
+    };
+
+    await act(async () => {
+      root.render(
+        <>
+          <FolderEffect />
+          <SyncAppEffects embeddedBackgroundWorkEnabled={false} />
+        </>,
+      );
+    });
+
+    expect(directoryWrites).toEqual(['/a']);
   });
 });
 

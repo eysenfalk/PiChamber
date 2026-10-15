@@ -618,9 +618,13 @@ export function MobileApp({ apis }: MobileAppProps) {
 
   React.useEffect(() => {
     if (!isConnected) return;
+    // Focus the folder as it is now, not as rendered: the bootstrap bridge
+    // may already have written the Pi focus back in this commit. Acting on
+    // the rendered folder would make the two swap folders forever (#108).
+    const directory = useDirectoryStore.getState().currentDirectory;
     // A null preference would let a list that is still in flight pick its
     // first row; carry only a selection that already belongs to this folder.
-    void getPiSessionStore().focusProject(currentDirectory, focusPreferenceForDirectory(currentDirectory));
+    void getPiSessionStore().focusProject(directory, focusPreferenceForDirectory(directory));
   }, [currentDirectory, isConnected]);
 
   React.useEffect(() => {

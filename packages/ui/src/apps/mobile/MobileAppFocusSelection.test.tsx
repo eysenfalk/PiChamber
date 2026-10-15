@@ -398,6 +398,36 @@ describe('MobileApp directory focus keeps the user-owned selection (mounted)', (
     expect(sessionUIStore.getState().currentSessionId).toBe('y');
   });
 
+  test('a folder change and a Pi focus change in the same commit converge instead of looping', async () => {
+    installPiStubs();
+    const store = attachStoreAt('/other');
+    listHandler = async (directory) => listed(directory, []);
+    await mountMobileApp();
+
+    const directoryWrites: string[] = [];
+    const setDirectory = directoryStore.getState().setDirectory;
+    directoryStore.setState({
+      setDirectory: (directory: string) => {
+        directoryWrites.push(directory);
+        setDirectory(directory);
+      },
+    });
+
+    // Two writers landing in one commit (#108): the directory store names one
+    // folder while the Pi focus moves to another. The focus effect and the
+    // bootstrap bridge must settle on one folder, not swap them every render.
+    await act(async () => {
+      directoryStore.getState().setDirectory('/a');
+      void store.focusProject('/b', null);
+    });
+    await flush();
+
+    // The test's own write plus at most one write back; the loop made dozens.
+    expect(directoryWrites.length).toBeLessThan(3);
+    expect(['/a', '/b']).toContain(store.getState().directory);
+    expect(directoryStore.getState().currentDirectory).toBe(store.getState().directory);
+  });
+
   test('an open draft keeps its blank-chat intent across the folder focus', async () => {
     installPiStubs();
     const store = attachStoreAt('/other');

@@ -79,13 +79,17 @@ const PiSessionBootstrapBridge: React.FC = () => {
   const { selectedSessionId, directory, connection, focusPending } = snapshot;
 
   React.useEffect(() => {
-    if (!directory) return;
+    // Write back the focus as it is now, not as rendered: a folder effect may
+    // already have moved it in this commit, and echoing the rendered folder
+    // would make the two swap folders forever (#108).
+    const focusedDirectory = store.getState().directory;
+    if (!focusedDirectory) return;
     const currentDirectory = useDirectoryStore.getState().currentDirectory;
-    if (normalizePath(currentDirectory) !== normalizePath(directory)) {
-      useDirectoryStore.getState().setDirectory(directory, { showOverlay: false });
+    if (normalizePath(currentDirectory) !== normalizePath(focusedDirectory)) {
+      useDirectoryStore.getState().setDirectory(focusedDirectory, { showOverlay: false });
     }
-    void useConfigStore.getState().activateDirectory(directory);
-  }, [directory]);
+    void useConfigStore.getState().activateDirectory(focusedDirectory);
+  }, [directory, store]);
 
   // The composer still reads the restored session UI store. Keep its complete
   // identity synchronized, including project switches and the no-project state.
