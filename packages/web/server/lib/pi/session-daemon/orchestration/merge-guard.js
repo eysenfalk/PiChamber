@@ -2,7 +2,8 @@
 // that merges a pull request whose base is `main` or pushes to `main` is
 // refused. `dev` and every other branch stay open, since workers merge into
 // `dev` under the owner's standing approval. It reads command text only, so a
-// script or another tool gets past it; the real enforcement is #199. Pure: the
+// script or another tool gets past it; it is a best effort second layer, and
+// the hard barrier is GitHub's rules for main and dev. Pure: the
 // caller gathers the facts a verdict needs and asks again.
 //
 // A push also goes where the repository's configuration says: a push without
@@ -13,7 +14,10 @@
 // goes to is configuration as well. Configuration a push brings along changes
 // what that read sees (`git -c` with any key, include.path and includeIf
 // among them, `--config-env`, GIT_CONFIG_* variables), so every such push is
-// blocked: its target is unclear. The guard never asks git itself with
+// blocked: its target is unclear. The facts are read before the whole command
+// runs, so a command that also changes git configuration or remotes, or
+// pushes from another directory than the session's, is blocked as well.
+// The guard never asks git itself with
 // `git push --dry-run`: that contacts the remote and would run the agent's
 // own `--receive-pack`/`--exec` programs.
 
@@ -44,6 +48,13 @@ const POWERSHELLS = new Set(['pwsh', 'powershell']);
 const GIT_GLOBAL_VALUES = new Set(['--namespace', '--super-prefix']);
 // A GIT_CONFIG_* variable assigned, exported or set in PowerShell.
 const GIT_CONFIG_ENV = /^(\$env:)?GIT_CONFIG\w*(=|$)/i;
+// A configuration file inside a .git directory, worktrees' included.
+const GIT_CONFIG_FILE = /(^|[\\/])\.git[\\/](.*[\\/])?config(\.worktree)?$/i;
+// `git config` options and subcommands that only read.
+const CONFIG_READS = /^(--get(-\w+)?|--list|-l|get|list)$/;
+const REMOTE_READS = new Set([undefined, 'show', 'get-url']);
+// Git commands that create a repository, and with it a configuration.
+const REPOSITORY_CREATES = new Set(['clone', 'init']);
 const GIT_REPOSITORY_OPTIONS = new Set(['--git-dir', '--work-tree']);
 const PUSH_VALUES = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec']);
 const PR_MERGE_VALUES = new Set(['-b', '--body', '-F', '--body-file', '-t', '--subject', '-A', '--author-email', '--match-head-commit']);
@@ -91,6 +102,7 @@ const tokenize = (text, shell) => {
   const backticks = shell !== 'powershell';
   const items = [];
   const nested = [];
+  const targets = [];
   let heredocs = [];
   let word = null;
   let redirect = null;
@@ -98,6 +110,7 @@ const tokenize = (text, shell) => {
   const flush = () => {
     if (!word) return;
     if (redirect?.heredoc) heredocs.push({ delimiter: word.value, strip: redirect.strip });
+    else if (redirect) targets.push(word);
     if (!redirect) items.push(word);
     redirect = null;
     word = null;
@@ -203,7 +216,7 @@ const tokenize = (text, shell) => {
     }
   }
   flush();
-  return { items, nested };
+  return { items, nested, targets };
 };
 
 const changeDir = (dir, word) => {
@@ -296,6 +309,10 @@ const checkPush = (args, dir, out, configOverridden) => {
       out.push(block(`git push ${refspec.value} updates main.`));
     }
   }
+  if (dir !== null && dir !== out.cwd) {
+    out.push(block('git push runs in another directory than the session (cd, git -C), possibly another repository, so its configuration is unclear.'));
+    return;
+  }
   out.push({ need: { fact: 'pushConfig', dir }, judge: (config) => judgePushConfig(config, bare) });
 };
 
@@ -319,8 +336,17 @@ const checkGit = (args, dir, out) => {
     else if (!value.startsWith('-')) break;
   }
   const command = args[index]?.value;
-  if (command === 'push') checkPush(args.slice(index + 1), gitDir, out, configOverridden);
-  else if (BRANCH_CHANGES.has(command)) out.branchChanged = true;
+  const rest = args.slice(index + 1);
+  if (command === 'push') {
+    out.pushes = true;
+    checkPush(rest, gitDir, out, configOverridden);
+    return;
+  }
+  if (BRANCH_CHANGES.has(command)) out.branchChanged = true;
+  const subcommand = rest.find((word) => !word.value.startsWith('-'))?.value;
+  if ((command === 'config' && !rest.some((word) => CONFIG_READS.test(word.value)))
+    || (command === 'remote' && !REMOTE_READS.has(subcommand))
+    || REPOSITORY_CREATES.has(command)) out.configChanged = true;
 };
 
 const checkPrMerge = (args, dir, out) => {
@@ -437,6 +463,7 @@ const invocation = (words, dir, shell, depth, out) => {
   let index = 0;
   // A GIT_CONFIG_* variable configures every later git command.
   if (words.some((word) => GIT_CONFIG_ENV.test(word.value))) out.configEnv = true;
+  if (words.some((word) => GIT_CONFIG_FILE.test(word.value))) out.configChanged = true;
   while (index < words.length) {
     const value = words[index].value;
     if (ASSIGNMENT.test(value) || KEYWORDS.has(value)) {
@@ -489,7 +516,8 @@ const walk = (text, cwd, shell, depth, out) => {
     out.push(block('The command nests shells too deeply to check.'));
     return;
   }
-  const { items, nested } = tokenize(text, shell);
+  const { items, nested, targets } = tokenize(text, shell);
+  if (targets.some((word) => GIT_CONFIG_FILE.test(word.value))) out.configChanged = true;
   for (const inner of nested) walk(inner, cwd, shell, depth + 1, out);
   let dir = cwd;
   const scopes = [];
@@ -519,7 +547,11 @@ const walk = (text, cwd, shell, depth, out) => {
  */
 export const judgeCommand = (command, { cwd, shell = 'bash', facts = {} }) => {
   const checks = [];
+  checks.cwd = cwd;
   walk(command, cwd, shell, 0, checks);
+  if (checks.pushes && checks.configChanged) {
+    return { decision: 'block', reason: `The command changes git configuration or remotes (git config, git remote, git clone or init, a config file in .git) and pushes; the push target is read before the command runs, so it is unclear. ${POLICY}` };
+  }
   const needs = new Map();
   for (const check of checks) {
     if (check.reason) return { decision: 'block', reason: `${check.reason} ${POLICY}` };

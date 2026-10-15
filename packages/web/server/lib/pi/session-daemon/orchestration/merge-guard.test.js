@@ -70,6 +70,16 @@ describe('judgeCommand', () => {
     ['push configuration from GIT_CONFIG_* variables', 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=matching git push origin', /brings its own configuration/],
     ['GIT_CONFIG_PARAMETERS exported before', 'export GIT_CONFIG_PARAMETERS="\'include.path\'=\'/tmp/x\'" && git push origin dev', /brings its own configuration/],
     ['a GIT_CONFIG_* variable exported without a value', 'export GIT_CONFIG_COUNT; git push origin dev', /brings its own configuration/],
+    ['a mirror set by git config before a push with --tags', 'git config remote.origin.mirror true && git push origin --tags', /changes git configuration or remotes/],
+    ['push.default set in a nested shell before a push', 'bash -c "git config push.default matching" && git push origin dev', /changes git configuration or remotes/],
+    ['a configuration change after a push', 'git push origin dev && git config remote.origin.mirror true', /changes git configuration or remotes/],
+    ['a remote added before a push', 'git remote add backup /tmp/backup.git; git push backup dev', /changes git configuration or remotes/],
+    ['a remote URL changed before a push', 'git remote set-url origin /tmp/other.git && git push origin dev', /changes git configuration or remotes/],
+    ['a clone pushed from', 'git clone /tmp/r.git copy && cd copy && git push origin dev', /changes git configuration or remotes/],
+    ['a write redirected into .git/config', 'printf "[remote \\"origin\\"]\\n\\tmirror = true\\n" >> .git/config && git push origin --tags', /changes git configuration or remotes/],
+    ['a write into a worktree configuration', 'echo x | tee ../repo/.git/worktrees/w/config.worktree; git push origin dev', /changes git configuration or remotes/],
+    ['a push from another directory', 'cd ../other && git push origin --tags', /another directory than the session/],
+    ['a push with git -C into another directory', 'git -C ../other push origin dev', /another directory than the session/],
     ['a merge commit API call into main', 'gh api repos/o/r/merges -f base=main -f head=feature', /merges into main/],
     ['a merge commit API call without a readable base', 'gh api repos/o/r/merges --input body.json', /no base this guard can read/],
     ['a GraphQL merge without a pull request id', 'gh api graphql -f query="mutation { mergePullRequest(input: $input) { clientMutationId } }"', /no pull request id/],
@@ -95,6 +105,7 @@ describe('judgeCommand', () => {
     ['a commit message', 'git commit -m "gh pr merge 12 into main"'],
     ['a comment', '# git push origin main\necho ok'],
     ['a here-document', 'cat <<EOF > notes.md\ngit push origin main\nEOF\necho ok'],
+    ['a configuration change without a push', 'git config remote.origin.mirror true'],
   ])('allows %s without any lookup', (_name, command) => {
     expect(judgeCommand(command, { cwd })).toEqual({ decision: 'allow' });
   });
@@ -106,7 +117,9 @@ describe('judgeCommand', () => {
     ['a branch whose name starts with main', 'git push origin maintenance mainline'],
     ['an upstream setting push', 'git push -u origin 20-control-center-s4'],
     ['tags only', 'git push --tags'],
-    ['a chain of feature pushes with prefixes', 'env A=1 git status && sudo git push origin HEAD:feature; git -C sub push origin x:y'],
+    ['a chain of feature pushes with prefixes', 'env A=1 git status && sudo git push origin HEAD:feature; git -C . push origin x:y'],
+    ['a push after reading the configuration', 'git config --get remote.origin.url && git config get push.default; git push origin dev'],
+    ['a push after listing the remotes', 'git remote -v && git remote get-url origin && git push origin HEAD:dev'],
   ])('allows %s once the push configuration has no mirror', (_name, command) => {
     const first = judgeCommand(command, { cwd });
     expect(first.decision).toBe('need');
@@ -122,7 +135,7 @@ describe('judgeCommand', () => {
   });
 
   it('asks for the current branch of a push without a refspec and decides by branch and upstream', () => {
-    expect(judgeCommand('git -C sub push', { cwd })).toEqual({ decision: 'need', needs: [{ fact: 'branch', dir: '/work/repo/sub' }, { fact: 'pushConfig', dir: '/work/repo/sub' }] });
+    expect(judgeCommand('git -C . push', { cwd })).toEqual({ decision: 'need', needs: [{ fact: 'branch', dir: '/work/repo' }, { fact: 'pushConfig', dir: '/work/repo' }] });
     expect(judge('git push', onBranch('main'))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/on main tracking main pushes to main/) });
     expect(judge('git push origin', onBranch('main'))).toMatchObject({ decision: 'block' });
     expect(judge('git push -u', onBranch('feature', 'main'))).toMatchObject({ decision: 'block', reason: expect.stringMatching(/on feature tracking main/) });
@@ -350,6 +363,29 @@ describe('the tool_call hook against real git', () => {
     } finally {
       git('config', '--unset', 'remote.origin.mirror');
     }
+  });
+
+  it.each([
+    ['git config remote.origin.mirror true && git push origin --tags', 'git push origin --tags'],
+    ['git config remote.origin.mirror true && git push origin', 'git push origin'],
+  ])('blocks %s, whose configuration change makes the push reach main (round 3, B1a)', async (command, push) => {
+    expect(await call(command)).toMatchObject({ block: true, reason: expect.stringMatching(/changes git configuration or remotes/) });
+    // The hook judged the text; the clone still has no mirror.
+    expect(() => git('config', '--get', 'remote.origin.mirror')).toThrow();
+    git('config', 'remote.origin.mirror', 'true');
+    try {
+      expect(gitUpdatesMain(push)).toBe(true);
+    } finally {
+      git('config', '--unset', 'remote.origin.mirror');
+    }
+  });
+
+  it.each([
+    ['git config --get remote.origin.url && git push origin dev', 'git push origin dev'],
+    ['git status && git push origin HEAD:dev', 'git push origin HEAD:dev'],
+  ])('allows %s, which only reads before pushing to dev', async (command, push) => {
+    expect(gitUpdatesMain(push)).toBe(false);
+    expect(await call(command)).toBeUndefined();
   });
 
   it('blocks a push whose -c include brings a refspec onto main (round 2, B1b)', async () => {
