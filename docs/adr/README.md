@@ -20,6 +20,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0012](0012-phone-browser-as-remote-view.md) | The phone browser is a remote view of a page the laptop renders in the PiChamber browser profile | Accepted |
 | [0013](0013-one-pull-request-with-slices.md) | One pull request with slices, a draft at the first plan, a fast and a slow lane | Accepted |
 | [0014](0014-worker-tool-profiles.md) | Worker tool profiles: a recorded tool limit per worker, enforced by the daemon, not a sandbox | Proposed |
+| [0015](0015-owner-reads-and-answers-orchestration-through-private-daemon-commands.md) | The owner reads and answers orchestration through private daemon commands | Proposed |
 
 ## Rules
 
