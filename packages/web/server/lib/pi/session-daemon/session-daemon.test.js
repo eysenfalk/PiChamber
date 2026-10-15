@@ -821,6 +821,45 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('lists the readable sessions of a directory with a broken session file and still refuses to open the broken one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-broken-file-'));
+    const cwd = join(root, 'project');
+    const other = join(root, 'other');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd: other, agentDir });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(other, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    await writeFile(join(sessionDirectory, '2026-01-01T00-00-00-000Z_pi-valid.jsonl'), `${[
+      JSON.stringify({ type: 'session', version: 3, id: 'pi-valid', timestamp, cwd: other }),
+      JSON.stringify({ type: 'message', id: 'entry-user', parentId: null, timestamp, message: { role: 'user', content: [{ type: 'text', text: 'Readable prompt' }], timestamp: 0 } }),
+    ].join('\n')}\n`);
+    await writeFile(join(sessionDirectory, '2026-01-02T00-00-00-000Z_pi-broken.jsonl'), 'not json\n');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('listing and a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const listed = await client.request('sessions.list', { directory: other });
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-valid']);
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-broken', command: 'sessions.open', payload: { sessionId: 'pi-broken', directory: other } })}\n`);
+      await expect(refused).resolves.toMatchObject({ requestId: 'open-broken', error: { code: 'INVALID_SESSION' } });
+    } finally {
+      warn.mockRestore();
+      await client.close();
+    }
+  });
+
   it('publishes session.updated when a session is first prompted', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
     const endpoint = testDaemonEndpoint(root);
@@ -1155,6 +1194,7 @@ describe('Pi session daemon spike', () => {
       cwd: root,
       listSessions: async () => {
         if (listing === 'fail') throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        if (listing === 'incomplete') return Object.assign([], { incomplete: true });
         return listing === 'empty' ? [] : [{ path: sessionFile, id: 'caller', cwd: root }];
       },
       createRuntime: async () => new FakeRuntime({ cwd: root, session: new FakeSession('caller', sessionFile) }),
@@ -1163,6 +1203,10 @@ describe('Pi session daemon spike', () => {
     const client = connectClient(endpoint);
     await client.authenticate();
 
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
+      .resolves.toMatchObject({ result: { error: { code: 'SESSION_LOOKUP_FAILED' } } });
+    // A listing that skipped a file it could not read may hide the caller.
+    listing = 'incomplete';
     await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
       .resolves.toMatchObject({ result: { error: { code: 'SESSION_LOOKUP_FAILED' } } });
     listing = 'empty';

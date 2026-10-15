@@ -99,4 +99,14 @@ describe('persisted session lookup by start operation', () => {
     });
     await expect(lookup([{ id: 'dir', path: tmpdir() }, target])).resolves.toMatchObject({ sessionId: 'target' });
   });
+
+  it('fails instead of answering "not found" when the listing skipped a session file it could not read', async () => {
+    const sessions = await sessionsIn({ plain: jsonl({ type: 'session', id: 'plain' }) });
+    await expect(lookup(Object.assign(sessions, { incomplete: true })))
+      .rejects.toMatchObject({ code: 'SESSION_LOOKUP_FAILED', incomplete: true });
+    const [target] = await sessionsIn({
+      target: jsonl({ type: 'session' }, { type: 'custom', customType: LINEAGE, data: { opId: 'op_1' } }),
+    });
+    await expect(lookup(Object.assign([target], { incomplete: true }))).resolves.toMatchObject({ sessionId: 'target' });
+  });
 });
