@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createSessionDaemon } from '../session-daemon.js';
+import { createPiSessionRuntime, createSessionDaemon } from '../session-daemon.js';
 import { resolveSessionLeaseFile } from '../session-lease.js';
 import { connectClient, credential, disableHostGate, markOrchestrator, piAiFauxUrl } from './e2e-support.js';
 import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
@@ -403,5 +403,62 @@ describe('orchestration end-to-end through the real SDK', () => {
     expect(wakesOf(parentId)).toHaveLength(4);
 
     await client.close();
+  }, 120_000);
+
+  it('delivers a wake whose send meets the owner\'s idle disposal once, to the reopened owner (#190)', async () => {
+    // Once armed, the parent's next idle disposal waits here while it still owns the runtime.
+    const gate = { sessionId: undefined, entered: undefined, release: () => {} };
+    const released = new Promise((done) => { gate.release = done; });
+    const entered = new Promise((done) => { gate.entered = done; });
+    const createRuntime = async (options, hooks) => {
+      const runtime = await createPiSessionRuntime(options, hooks);
+      const dispose = runtime.dispose.bind(runtime);
+      runtime.dispose = async () => {
+        if (gate.sessionId !== undefined && runtime.session?.sessionId === gate.sessionId) {
+          gate.sessionId = undefined;
+          gate.entered();
+          await released;
+        }
+        return dispose();
+      };
+      return runtime;
+    };
+    const { client, createSession } = await startDaemon({ coalesceMs: 0, daemonOptions: { idleTimeoutMs: 1_000, createRuntime } });
+    try {
+      const parentId = await createSession();
+      const wakesOf = (sessionId) => client.events.filter((message) => message.event === 'extension.message'
+        && message.payload?.sessionId === sessionId
+        && message.payload?.customType === 'pichamber.orchestration.events')
+        .map((message) => message.payload.details.events.map(({ sessionId: worker, kind, reason }) => ({ sessionId: worker, kind, reason })));
+      const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
+        && message.payload?.sessionId === sessionId && message.payload?.text === text).length;
+      const reached = (check) => vi.waitFor(() => expect(check(), String(check)).toBe(true), { timeout: 30_000, interval: 50 });
+
+      await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
+      await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
+      const workerId = wakesOf(parentId)[0][0].sessionId;
+
+      // The parent is idle now; its disposal starts after the idle timeout and holds.
+      gate.sessionId = parentId;
+      await entered;
+      const asked = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH BRANCH', audience: 'orchestrator' } });
+      expect(asked.result.error).toBeUndefined();
+      // Longer than the wake needs to reach the send (coalesceMs 0): the send starts while the disposal runs.
+      await new Promise((done) => { setTimeout(done, 1_000); });
+      gate.release();
+
+      await reached(() => replies(parentId, 'PARENT WOKEN') === 1);
+      expect(wakesOf(parentId)).toEqual([
+        [{ sessionId: workerId, kind: 'run_finished', reason: expect.stringContaining('WORKER DONE') }],
+        [{ sessionId: workerId, kind: 'question', reason: 'WHICH BRANCH' }],
+      ]);
+      // Exactly once: the model saw the batch in one turn, and no second message follows.
+      await new Promise((done) => { setTimeout(done, 500); });
+      expect(wakesOf(parentId)).toHaveLength(2);
+      expect((globalThis.__pichamberOrchestrationLog ?? []).filter((entry) => entry.lastText.includes('WHICH BRANCH'))).toHaveLength(1);
+    } finally {
+      gate.release();
+      await client.close();
+    }
   }, 120_000);
 });
