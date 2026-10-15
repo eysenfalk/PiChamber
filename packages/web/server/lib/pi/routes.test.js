@@ -1316,6 +1316,38 @@ describe('Pi runtime route', () => {
     expect(calls).toContainEqual({ command: 'sessions.list', payload: { directory: '/focused' } });
   });
 
+  it('archive does not call a session missing from a partial list deleted', async () => {
+    let incomplete = true;
+    const runtime = {
+      health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: [] }),
+      request: async (command) => command === 'sessions.list'
+        ? { sessions: [], ...(incomplete ? { incomplete: true } : {}) }
+        : {},
+    };
+    const archiveSets = [];
+    const app = express();
+    app.use(express.json());
+    registerPiRuntimeRoutes(app, {
+      getPiSessionDaemonRuntime: () => runtime,
+      archiveStore: { read: async () => ({}), set: async (...args) => archiveSets.push(args) },
+    });
+    server = await listen(app);
+    const url = `http://127.0.0.1:${server.address().port}/api/pi/sessions/broken-1/archive`;
+    const post = () => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ archived: true }) });
+
+    // The list skipped an unreadable file, so absence is not proven: fail visibly, not as deletion.
+    const partial = await post();
+    expect(partial.status).toBe(503);
+    await expect(partial.json()).resolves.toEqual({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+
+    // A complete list that lacks the id is a real miss.
+    incomplete = false;
+    const complete = await post();
+    expect(complete.status).toBe(404);
+    await expect(complete.json()).resolves.toEqual({ error: { code: 'INVALID_SESSION' } });
+    expect(archiveSets).toEqual([]);
+  });
+
   it('projects daemon file parts for image and attachment history instead of failing the session open', async () => {
     const detail = {
       session: { id: 'pi-session-files', directory: '/workspace', createdAt: 1, updatedAt: 2 },

@@ -722,6 +722,37 @@ describe('session deletion propagation', () => {
     });
   });
 
+  for (const code of ['MALFORMED_SESSION_JSONL', 'SESSION_JSONL_UNREADABLE']) {
+    test(`a focusProject preferred id whose file is unreadable (${code}) stays listed with a load error, never deleted`, async () => {
+      let repaired = false;
+      await withStore({
+        listSessions: async () => ({ sessions: [listItem('active', '/repo-b'), listItem('broken', '/repo-b')] }),
+        getSession: async (id: string) => {
+          if (id === 'broken' && !repaired) throw new PiRequestError(code, 'unreadable');
+          return detail(id, '/repo-b');
+        },
+      }, async (store) => {
+        seed(store, { sessions: ['other'], selectedSessionId: 'other' });
+
+        await store.focusProject('/repo-b', 'broken');
+
+        expect(store.isDeleted('broken')).toBe(false);
+        expect(store.getState().selectedSessionId).toBe('broken');
+        expect(store.getState().sessionLoadErrorById.get('broken')?.code).toBe(code);
+        expect(store.getState().sessions.map((item) => item.session.id)).toContain('broken');
+        // A broken file is one failed session, not a failed runtime.
+        expect(store.getState().connection).toBe('ready');
+        expect(store.getState().error).toBeNull();
+
+        // After the file is repaired, opening it again works without a restart.
+        repaired = true;
+        await store.focusProject('/repo-b', 'broken');
+        expect(await waitFor(() => store.getState().hydratedSessionIds.has('broken'))).toBe(true);
+        expect(store.getState().sessionLoadErrorById.has('broken')).toBe(false);
+      });
+    });
+  }
+
   test('bootstrap INVALID_SESSION replays buffered live events for survivors in order', async () => {
     await withStore({
       getSession: async (id: string) => detail(id, '/repo-a'),

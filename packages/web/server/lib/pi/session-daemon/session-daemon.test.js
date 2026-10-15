@@ -855,10 +855,59 @@ describe('Pi session daemon spike', () => {
       expect(listed.result.incomplete).toBe(true);
       const refused = client.next((message) => message.kind === 'error');
       client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-broken', command: 'sessions.open', payload: { sessionId: 'pi-broken', directory: other } })}\n`);
-      await expect(refused).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+      // The file exists but cannot be read: that is not "does not exist".
+      await expect(refused).resolves.toMatchObject({ error: { code: 'MALFORMED_SESSION_JSONL' } });
     } finally {
       warn.mockRestore();
       await client.close();
+    }
+  });
+
+  it('reports a listed session with a broken transcript line as unreadable, and a missing id as not found', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-broken-body-'));
+    const cwd = join(root, 'project');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd, agentDir });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    await writeFile(join(sessionDirectory, '2026-01-01T00-00-00-000Z_pi-body-broken.jsonl'), `${[
+      JSON.stringify({ type: 'session', version: 3, id: 'pi-body-broken', timestamp, cwd }),
+      JSON.stringify({ type: 'message', id: 'entry-user', parentId: null, timestamp, message: { role: 'user', content: [{ type: 'text', text: 'Readable prompt' }], timestamp: 0 } }),
+      'not json',
+    ].join('\n')}\n`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const listed = await client.request('sessions.list', { directory: cwd });
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-body-broken']);
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-body-broken', command: 'sessions.open', payload: { sessionId: 'pi-body-broken', directory: cwd } })}\n`);
+      await expect(refused).resolves.toMatchObject({ error: { code: 'MALFORMED_SESSION_JSONL' } });
+    } finally {
+      warn.mockRestore();
+      await client.close();
+    }
+
+    // A genuinely absent id still answers INVALID_SESSION on a fresh connection.
+    const second = connectClient(testDaemonEndpoint(root));
+    await second.authenticate();
+    try {
+      const absent = second.next((message) => message.kind === 'error');
+      second.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: cwd } })}\n`);
+      await expect(absent).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+    } finally {
+      await second.close();
     }
   });
 
