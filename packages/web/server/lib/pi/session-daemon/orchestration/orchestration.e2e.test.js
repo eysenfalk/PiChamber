@@ -107,7 +107,17 @@ describe('orchestration end-to-end through the real SDK', () => {
       if (orchestrator) markOrchestrator(process.env.PICHAMBER_DATA_DIR, sessionId);
       return sessionId;
     };
-    return { root, projectDir, workerDir, client, createSession };
+    // A new daemon on the same endpoint, agent and data directory, as after a PiChamber restart.
+    const restart = async (current) => {
+      await current.close();
+      await daemon.stop();
+      daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir, ...daemonOptions });
+      await daemon.start();
+      const next = connectClient(endpoint);
+      await next.authenticate();
+      return next;
+    };
+    return { root, projectDir, workerDir, client, createSession, restart };
   };
 
   it('spawns a worker without spawn rights and wakes the parent when its run ends', async () => {
@@ -279,9 +289,11 @@ describe('orchestration end-to-end through the real SDK', () => {
 
   it('stops a finished worker whose directory was removed, frees its slot and keeps its session (#177)', async () => {
     // Leases on, like a real daemon, so another instance's claim on the worker counts.
-    const { root, workerDir, client, createSession } = await startDaemon({
-      daemonOptions: { idleTimeoutMs: 300, profileKey: 'e2e-profile', serverInstanceId: 'e2e-server', daemonId: 'e2e-daemon' },
+    const started = await startDaemon({
+      daemonOptions: { profileKey: 'e2e-profile', serverInstanceId: 'e2e-server', daemonId: 'e2e-daemon' },
     });
+    const { root, workerDir, createSession, restart } = started;
+    let { client } = started;
     const parentId = await createSession();
     const call = async (sessionId, tool, args) => (await client.request('orchestration.call', { sessionId, tool, args })).result;
     const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
@@ -293,8 +305,9 @@ describe('orchestration end-to-end through the real SDK', () => {
     await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
     await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
     const [{ sessionId: workerId }] = (await digest()).workers;
-    // A finished worker's runtime is disposed once idle, so the stop has to open it from disk.
-    await vi.waitFor(async () => expect((await digest()).workers[0].live).toBe('dormant'), { timeout: 10_000, interval: 100 });
+    // After a restart the finished worker is not resident, so the stop has to open it from disk.
+    client = await restart(client);
+    expect((await digest()).workers[0]).toMatchObject({ sessionId: workerId, live: 'dormant' });
     const { sessionFile } = JSON.parse(await readFile(registryFile, 'utf8')).workers[workerId];
     expect(sessionFile).toBeTruthy();
     await rm(workerDir, { recursive: true, force: true });
