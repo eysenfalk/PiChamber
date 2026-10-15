@@ -12,6 +12,7 @@ lab/run record fork-rename   # renamed large fork listed by a fresh daemon, in .
 lab/run record add-device    # Add a device dialog without Tailscale, in .proof/add-device/
 lab/run record sidebar-tree  # Workspace tree: Chats, worktrees, fork chain, other folders, in .proof/sidebar-tree/
 lab/run record orchestration # Orchestrator spawns a worker on the faux model (#107), in .proof/orchestration/
+lab/run record worktree-worker # A worker spawned in a linked worktree sits under that worktree (#179), in .proof/worktree-worker/
 lab/run record extension-messages # Custom messages as compact grouped rows (#147), in .proof/extension-messages/
 lab/run record html-render  # The faux model calls html_render; page inline, maximized, reloaded, mobile (#155), in .proof/html-render/
 lab/run record tool-profiles # REVIEW starts a read-only review worker; edit and write blocked, README unchanged (#151), in .proof/tool-profiles/

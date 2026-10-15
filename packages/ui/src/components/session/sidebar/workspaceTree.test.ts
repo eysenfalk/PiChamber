@@ -140,31 +140,39 @@ describe('buildWorkspaceTree', () => {
     ].join('\n'));
   });
 
-  test('nests workers under their parent across directories, including their own workers', () => {
+  test('places a worker in another worktree under that worktree and nests workers in the same directory', () => {
     const sessions = [
       ...baseSessions,
+      session('worker-main', '/src/PiChamber', 0.5, { parentID: 'main-1' }),
       session('worker-a', '/wt/45-permissions', 1, { parentID: 'main-1' }),
-      session('worker-a-review', '/tmp/scratch', 1.5, { parentID: 'worker-a' }),
+      session('worker-a-review', '/wt/45-permissions', 1.5, { parentID: 'worker-a' }),
       session('worker-b', '/src/notes', 2.5, { parentID: 'chat-a' }),
     ];
     const tree = buildWorkspaceTree(world({ sessions }));
-    expect(render(tree, ['chats', 's:chat-a', 'p:pichamber', 'w:/src/PiChamber', 's:main-1', 's:worker-a'])).toBe([
-      '▾ Chats  3',
-      '  ▾ chat-a  ⑂1',
-      '    worker-b',
+    const expanded: NodeKey[] = ['chats', 'p:pichamber', 'w:/src/PiChamber', 's:main-1', 'w:/wt/45-permissions', 's:worker-a', 'p:notes'];
+    expect(render(tree, expanded)).toBe([
+      '▾ Chats  2',
+      '  chat-a',
       '  chat-b',
-      '▾ PiChamber  9',
-      '  ▾ main  4',
+      '▾ PiChamber  10',
+      '  ▾ main  3',
       '    ▾ main-1  ⑂1',
-      '      ▾ worker-a  ⑂1',
-      '        worker-a-review',
+      '      worker-main',
       '    main-2',
+      '  ▾ 45-permissions  3',
+      '    ▾ worker-a  ⑂1',
+      '      worker-a-review',
+      '    perm',
       '  ▸ 39-reload-restart  4',
-      '  ▸ 45-permissions  1',
-      '▸ notes  1',
+      '▾ notes  2',
+      '  worker-b',
+      '  note',
       '▸ Other folders  1',
     ].join('\n'));
-    expect(tree.placement.get('worker-a-review')).toBe('w:/src/PiChamber');
+    expect(tree.placement.get('worker-main')).toBe('w:/src/PiChamber');
+    expect(tree.placement.get('worker-a')).toBe('w:/wt/45-permissions');
+    expect(tree.placement.get('worker-a-review')).toBe('w:/wt/45-permissions');
+    expect(tree.placement.get('worker-b')).toBe('p:notes');
   });
 
   test('keeps Chats first even when it is empty, and drops Other folders when nothing is ownerless', () => {
@@ -279,7 +287,7 @@ describe('buildWorkspaceTree', () => {
           session('cycle-a', '/src/notes', 3, { parentID: 'cycle-b' }),
           session('cycle-b', '/src/notes', 4, { parentID: 'cycle-a' }),
           session('self', '/src/notes', 5, { parentID: 'self' }),
-          // A worker whose parent lives in another worktree follows its parent.
+          // A worker whose parent lives in another worktree stays in its own.
           session('cross', '/wt/45-permissions', 2, { parentID: 'main-1' }),
           session('cross-chat', '/src/notes', 2, { parentID: 'chat-a' }),
           ...Array.from({ length: 9 }, (_, index) => session(`bulk${index}`, '/wt/45-permissions', 60 + index)),

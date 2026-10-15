@@ -16,6 +16,9 @@ export function resolveFauxUrl() {
 }
 
 export const LAB_WORKER_TITLE = 'Lab: worker';
+// Issue #179: a second worker, started in a linked worktree of the orchestrator's project.
+// Short enough for the narrow mobile drawer, which would cut a longer title.
+export const LAB_WORKTREE_WORKER = { title: 'Lab: wt worker', worktree: 'fetch-me' };
 // Issue #155: the html-render session answers RENDER with a real html_render call.
 export const LAB_HTML_RENDER_PROMPT = 'Scripted lab model: send RENDER for the build report page.';
 export const LAB_HTML_RENDER_TITLE = 'Lab: build report';
@@ -42,7 +45,7 @@ export const LAB_REVIEW_WORKER_TITLE = 'Lab: reviewer';
 const WORKER_THINK_MS = 10000;
 
 /** Source of the extension module the seed writes into the lab agent directory. */
-export function fauxOrchestrationExtension({ fauxUrl, workerCwd }) {
+export function fauxOrchestrationExtension({ fauxUrl, workerCwd, worktreeWorkerCwd }) {
   return `import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(fauxUrl)};
 
 const textOf = (message) => typeof message?.content === 'string'
@@ -94,7 +97,13 @@ const respond = async (context) => {
       clientRequestId: 'lab-review-' + Date.now(),
     })], { stopReason: 'toolUse' });
   }
-  if (last?.role === 'toolResult') return fauxAssistantMessage('The worker "${LAB_WORKER_TITLE}" is running. I stay available while it works.');
+  if (last?.role === 'toolResult') {
+    // The spawn call this result answers names the worker.
+    const call = (context.messages ?? []).filter((message) => message.role === 'assistant').at(-1)?.content?.find?.((part) => part.type === 'toolCall');
+    return fauxAssistantMessage(call?.arguments?.title === ${JSON.stringify(LAB_WORKTREE_WORKER.title)}
+      ? 'The worker "${LAB_WORKTREE_WORKER.title}" runs in the worktree ${LAB_WORKTREE_WORKER.worktree}.'
+      : 'The worker "${LAB_WORKER_TITLE}" is running. I stay available while it works.');
+  }
   // A finished worker reaches its orchestrator as a wake: "A worker event: ... run_finished: <reply>".
   if (text.startsWith('A worker event') && text.includes('run_finished: REVIEW DONE')) {
     return fauxAssistantMessage('The reviewer could not change README.md: its read-only tool profile kept edit and write away from it.');
@@ -111,10 +120,11 @@ const respond = async (context) => {
   if (text === 'GO') return fauxAssistantMessage('WORKER DONE: the README check passed and is recorded.');
   if (text.includes('STATUS')) return fauxAssistantMessage('The worker is still working on the README check. I can answer you meanwhile.');
   if (text.includes('ORCHESTRATE')) {
+    const inWorktree = text.includes('WORKTREE');
     return fauxAssistantMessage([fauxToolCall('mcp__pichamber__session_spawn', {
-      cwd: ${JSON.stringify(workerCwd)},
+      cwd: inWorktree ? ${JSON.stringify(worktreeWorkerCwd)} : ${JSON.stringify(workerCwd)},
       task: 'WORKER TASK: check the README of this project.',
-      title: ${JSON.stringify(LAB_WORKER_TITLE)},
+      title: inWorktree ? ${JSON.stringify(LAB_WORKTREE_WORKER.title)} : ${JSON.stringify(LAB_WORKER_TITLE)},
       model: { providerId: 'faux', modelId: 'faux-1' },
       clientRequestId: 'lab-spawn-' + Date.now(),
     })], { stopReason: 'toolUse' });

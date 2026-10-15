@@ -1,4 +1,4 @@
-import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
+import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -325,6 +325,38 @@ export function toolProfilesTour(manifest) {
       evidence: [done, { text: 'git: README.md unchanged' }, { text: 'Tools sent to me (review worker, profile read-only)' }] },
     { caption: 'The same worker transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [data-chat-input="true"]' }, done] },
+  ] });
+}
+
+/** Issue #179: a worker the orchestrator spawns in a linked worktree sits under that worktree, not under its orchestrator in main. */
+export function worktreeWorkerTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const { title: worker, worktree } = LAB_WORKTREE_WORKER;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const worktreeRow = `[data-tree-node="w:${project.path}-worktrees/${worktree}"]`;
+  // Tree levels: project 1, worktree 2, session 3. A worker nested under its orchestrator would be at 4.
+  const placed = `${item(worker)}[aria-level="3"]`;
+  const reply = `runs in the worktree ${worktree}.`;
+  return validateTour({ name: 'worktree-worker', steps: [
+    { caption: `The orchestrator in ${label}, main, starts "${worker}" through session_spawn in the linked worktree ${worktree}.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
+        { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
+        { type: 'type', selector: composer, value: 'ORCHESTRATE WORKTREE' }, { type: 'press', key: 'Enter' }, { type: 'wait', text: reply }],
+      evidence: [{ selector: item(orchestrator.title) }, { text: reply }] },
+    { caption: `"${worker}" sits under its own worktree ${worktree}, not under the orchestrator in main.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', selector: `${worktreeRow}[aria-expanded="false"]` }, { type: 'click', selector: worktreeRow }, { type: 'wait', selector: placed }],
+      evidence: [{ selector: `${worktreeRow}[aria-expanded="true"]` }, { selector: placed }] },
+    { caption: 'The same tree in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
+      evidence: [{ selector: `html.dark ${placed}` }] },
+    { caption: 'The hosted mobile drawer places the worker under its worktree too.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
+        { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: `[data-mobile-sessions-drawer] ${item(worker)}` }],
+      evidence: [{ selector: `[data-mobile-sessions-drawer] ${placed}` }] },
   ] });
 }
 
