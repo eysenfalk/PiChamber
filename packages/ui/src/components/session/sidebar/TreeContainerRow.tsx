@@ -50,6 +50,13 @@ export const TreeGuides: React.FC<{ row: TreeRow }> = ({ row }) => {
   );
 };
 
+/** A worker waits for an answer to its question (orchestration registry, #20). */
+export const WaitingMarker: React.FC<{ label: string }> = ({ label }) => (
+  <span role="img" aria-label={label} title={label} data-testid="waiting-marker" className="inline-flex shrink-0 items-center text-status-warning">
+    <Icon name="question" className="size-3.5" />
+  </span>
+);
+
 /**
  * With `quickCreate` the slot keeps its width and fades out while the row is
  * hovered or keyboard focused; the `+` button (`QuickCreateButton`) fades in over it.
@@ -57,7 +64,8 @@ export const TreeGuides: React.FC<{ row: TreeRow }> = ({ row }) => {
  */
 const CountSlot: React.FC<{ node: TreeNode; expanded: boolean; quickCreate?: boolean }> = ({ node, expanded, quickCreate = false }) => {
   const showRunning = node.rollup.running && !expanded;
-  const showUnseen = !showRunning && node.rollup.unseen && !expanded;
+  const showWaiting = !node.rollup.running && node.rollup.waiting && !expanded;
+  const showUnseen = !showRunning && !showWaiting && node.rollup.unseen && !expanded;
   return (
     <span
       className={cn(
@@ -74,6 +82,7 @@ const CountSlot: React.FC<{ node: TreeNode; expanded: boolean; quickCreate?: boo
           className="text-primary text-xs shrink-0"
         />
       ) : null}
+      {showWaiting ? <WaitingMarker label="A worker is waiting for an answer" /> : null}
       {showUnseen ? <SessionUnreadDot label="Unread sessions" /> : null}
       {node.kind !== 'more' && node.sessionCount > 0 ? <span className="tabular-nums">{node.sessionCount}</span> : null}
     </span>

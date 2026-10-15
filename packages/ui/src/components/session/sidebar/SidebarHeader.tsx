@@ -3,6 +3,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { Icon } from "@/components/icon/Icon";
 import { ProjectVisibilityMenu, type ProjectVisibilityEntry } from './ProjectVisibilityMenu';
+import { WorkerFilterMenu } from './WorkerFilterMenu';
+import type { WorkerFilterMode } from './workspaceTree';
 
 type Props = {
   hideDirectoryControls: boolean;
@@ -28,6 +30,10 @@ type Props = {
   onSetProjectHidden: (id: string, hidden: boolean) => void;
   onShowAllProjects: () => void;
   onHideAllProjects: () => void;
+  workerFilter: WorkerFilterMode;
+  onWorkerFilterChange: (mode: WorkerFilterMode) => void;
+  /** False until the orchestration registry was read; the filter then shows every session. */
+  workersKnown: boolean;
   selectionModeEnabled: boolean;
   onToggleSelectionMode: () => void;
   /** Dedicated mobile: occupy the same header band as the chat and workspace drawers. */
@@ -58,6 +64,9 @@ export function SidebarHeader(props: Props): React.ReactNode {
     onSetProjectHidden,
     onShowAllProjects,
     onHideAllProjects,
+    workerFilter,
+    onWorkerFilterChange,
+    workersKnown,
     selectionModeEnabled,
     onToggleSelectionMode,
     mobileVariant = false,
@@ -173,6 +182,14 @@ export function SidebarHeader(props: Props): React.ReactNode {
               onSetHidden={onSetProjectHidden}
               onShowAll={onShowAllProjects}
               onHideAll={onHideAllProjects}
+              buttonClassName={actionClassName}
+              iconClassName={headerActionIconClass}
+            />
+
+            <WorkerFilterMenu
+              mode={workerFilter}
+              onChange={onWorkerFilterChange}
+              workersKnown={workersKnown}
               buttonClassName={actionClassName}
               iconClassName={headerActionIconClass}
             />
