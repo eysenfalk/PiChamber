@@ -1,8 +1,8 @@
 # 0015. A phone is decided by its physical screen, not by the viewport width
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-15
-- Waits for: the owner's choice between this record and the alternative "desktop layout with a composer height limit" (issue #148)
+- Decided by: the owner chose option A on 2026-10-15 (issue #148)
 
 ## Context
 
@@ -27,13 +27,13 @@ A viewport rule based on height would flip the layout when a tablet in portrait 
 
 Alternatives:
 
-- **A. Phone screen rule (recommended).** Keep `width <= 768` and add: touch pointer and `min(screen.width, screen.height) <= 500`. The shortest side of a phone screen does not change with rotation or keyboard. Phones are at most about 430 css px on the short side; the smallest tablets (iPad mini) are 744, so 500 leaves room on both sides. Landscape phones get the mobile surface, so the composer follows #137: capped, text scrolls inside, can be minimized, and the drawer replaces the sidebar.
+- **A. Phone screen rule (chosen).** Keep `width <= 768` and add: touch pointer and `min(screen.width, screen.height) <= 500`. The shortest side of a phone screen does not change with rotation or keyboard. Phones are at most about 430 css px on the short side; the smallest tablets (iPad mini) are 744, so 500 leaves room on both sides. Landscape phones get the mobile surface, so the composer follows #137: capped, text scrolls inside, can be minimized, and the drawer replaces the sidebar.
 - **B. Desktop layout with a composer height limit.** Leave the surface as it is and pass a bound to the composer on short viewports. Smaller change, but the 280 px sidebar and the desktop header stay on a 390 px high screen and the drawer and handle stay missing.
 - **C. Decide by viewport height or aspect ratio.** Rejected: flips with the keyboard on tablets (see above).
 
 ## Decision
 
-Proposed, pending the owner: option A.
+Option A, chosen by the owner.
 
 - `detectHostedSurface` is the single place that decides the phone surface. It treats a touch device whose shorter screen side is at most 500 css px as a phone in any orientation. The existing `width <= 768` rule stays, so nothing that is mobile today becomes desktop (an unfolded foldable at 673 px, a narrow touch window).
 - The stored layout preference (`default` opts out) and the `?surface=` override keep priority as they do now.
