@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { schemaViolation } from './contract-validator.js';
 import { reportViolation } from './report-rules.js';
+import { ORCHESTRATION_TOOLS, OWNER_QUESTION_EXAMPLE } from './tool-contracts.js';
 
 // A complete owner question and blocker (#210): one decision, understandable
 // and answerable from the decision inbox without opening anything else.
@@ -45,6 +47,13 @@ describe('worker report rules', () => {
     expect(reportViolation({ kind: 'question', summary: 'x' })).toMatch(/audience/);
     expect(reportViolation({ kind: 'progress', summary: 'x', brief: { recommendation: 'y' } })).toMatch(/brief/);
     expect(reportViolation({ kind: 'progress', summary: 'x' })).toBeNull();
+  });
+
+  it('accepts the example the worker_report description shows', () => {
+    const workerReport = ORCHESTRATION_TOOLS.find((tool) => tool.name === 'worker_report');
+    expect(workerReport.description).toContain(JSON.stringify(OWNER_QUESTION_EXAMPLE));
+    expect(schemaViolation(workerReport.parameters, OWNER_QUESTION_EXAMPLE)).toBeNull();
+    expect(reportViolation(OWNER_QUESTION_EXAMPLE)).toBeNull();
   });
 
   it('accepts a complete owner question and a complete owner blocker', () => {

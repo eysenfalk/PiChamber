@@ -17,7 +17,7 @@ import { createOrchestrationRegistryStore } from './registry-store.js';
 import { EVENTS_MESSAGE } from './wakes.js';
 import { findPersistedSessionByOperation } from './session-lookup.js';
 import { readGitBranch } from './host-info.js';
-import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
+import { ORCHESTRATION_INSTRUCTIONS, workerPreamble } from './instructions.js';
 
 const ROLES = {
   'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
@@ -2466,6 +2466,12 @@ describe('owner overview (#20)', () => {
     expect(ORCHESTRATION_INSTRUCTIONS).toContain('`resolves` set to its id');
     expect(ORCHESTRATION_INSTRUCTIONS).toContain('Questions with `audience: owner` and pending dialogs belong to the owner');
     expect(ORCHESTRATION_INSTRUCTIONS).toContain('a pending dialog');
+  });
+
+  it('tells workers and the orchestrator how to ask the owner (#210)', () => {
+    expect(workerPreamble('orch')).toContain('lands in the owner\'s decision inbox');
+    expect(workerPreamble('orch')).toContain('The daemon refuses an incomplete one and names what is missing.');
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('When you ask the owner yourself, in your chat, use the structure the owner gets from workers');
   });
 
   it('keeps an orchestrator whose mark was removed while it still owns workers', async () => {
