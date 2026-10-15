@@ -863,6 +863,45 @@ describe('Pi session daemon spike', () => {
     }
   });
 
+  it('lists every directory that holds sessions, including a folder outside every project', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-directories-'));
+    const cwd = join(root, 'daemon');
+    const project = join(root, 'project');
+    const scratch = join(root, 'folders', 'scratch');
+    const agentDir = join(root, 'agent');
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    await mkdir(cwd, { recursive: true });
+    for (const [directory, id] of [[project, 'pi-project'], [scratch, 'pi-scratch']]) {
+      const sessionDirectory = getPiSessionDirectory({ cwd: directory, agentDir });
+      await mkdir(directory, { recursive: true });
+      await mkdir(sessionDirectory, { recursive: true });
+      await writeFile(join(sessionDirectory, `2026-01-01T00-00-00-000Z_${id}.jsonl`), `${JSON.stringify({ type: 'session', version: 3, id, timestamp, cwd: directory })}\n`);
+    }
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('listing directories must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      // The daemon was never told about scratch: only the session store knows it.
+      const answered = client.next((message) => message.requestId === 'list-directories');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'list-directories', command: 'sessions.directories', payload: {} })}\n`);
+      const listed = await answered;
+      expect(listed).toMatchObject({ kind: 'response' });
+      expect(listed.result.directories.slice().sort()).toEqual([scratch, project].sort());
+      expect(listed.result.incomplete).toBeUndefined();
+    } finally {
+      // The daemon drops a connection that sends an unknown command.
+      if (!client.socket.closed) await client.close();
+    }
+  });
+
   it('reports a listed session with a broken transcript line as unreadable, and a missing id as not found', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-broken-body-'));
     const cwd = join(root, 'project');
