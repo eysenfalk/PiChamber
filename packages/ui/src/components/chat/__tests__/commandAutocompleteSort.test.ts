@@ -33,24 +33,19 @@ const names = (query: string, category: Parameters<typeof filterAndSortCommands>
   filterAndSortCommands(catalog, query, category).map((item) => item.invocationName ?? item.name);
 
 describe('filterAndSortCommands follows Pi slash autocomplete (#184)', () => {
-  test('/prototype puts skill:prototype first and drops the loose fuzzy hits', () => {
-    expect(names('prototype')[0]).toBe('skill:prototype');
-    expect(names('prototype')).not.toContain('skill:principle-exhaust-the-design-space');
+  test('/prototype lists only skill:prototype, not skill:principle-exhaust-the-design-space', () => {
+    expect(names('prototype')).toEqual(['skill:prototype']);
   });
 
   test('/protot puts skill:prototype first, not prompts that only match loosely', () => {
-    const result = names('protot');
-    expect(result.slice(0, 2)).toEqual(['skill:prototype', 'proto-thing']);
-    expect(result).not.toContain('prompt-workflow');
-    expect(result).not.toContain('sandy-context');
-    expect(result).not.toContain('skill:audit-tests');
+    expect(names('protot')).toEqual(['skill:prototype', 'proto-thing']);
   });
 
   test('a prefix of the skill: name works as in Pi', () => {
     expect(names('skill:proto').slice(0, 2)).toEqual(['skill:prototype', 'skill:principle-prove-it-works']);
   });
 
-  test('a bare name ranks a skill with that name beside the plain command', () => {
+  test('a bare name ranks a skill with that name right behind the plain command', () => {
     expect(names('rev').slice(0, 3)).toEqual(['review', 'skill:review', 'skill:principle-prove-it-works']);
     expect(names('tests').slice(0, 2)).toEqual(['skill:audit-tests', 'skill:write-tests']);
   });
@@ -62,11 +57,14 @@ describe('filterAndSortCommands follows Pi slash autocomplete (#184)', () => {
     expect(names('', 'system')).toEqual(['compact']);
   });
 
-  test('descriptions still find commands, after every name match', () => {
-    const result = names('experiment');
-    expect(result).toEqual(['skill:prototype']);
-    expect(names('proto').indexOf('skill:principle-exhaust-the-design-space')).toBeGreaterThan(
-      names('proto').indexOf('skill:principle-prove-it-works'),
-    );
+  test('only the executable name matches, as in Pi: descriptions do not', () => {
+    expect(names('experiment')).toEqual([]);
+    // Equal scores keep catalog order, as in Pi's stable sort.
+    expect(names('proto')).toEqual([
+      'proto-thing',
+      'skill:prototype',
+      'prompt-workflow',
+      'skill:principle-prove-it-works',
+    ]);
   });
 });
