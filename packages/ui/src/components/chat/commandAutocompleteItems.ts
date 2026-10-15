@@ -1,4 +1,4 @@
-import { fuzzyMatch } from "@/lib/utils";
+import { piFuzzyFilter } from "@/lib/search/piFuzzy";
 
 export type CommandAutocompleteCategory =
   "all" | "system" | "skills" | "extensions" | "prompts";
@@ -121,48 +121,70 @@ export function commandMatchesCategory(
   }
 }
 
-export function commandMatchesSearch(
-  command: CommandAutocompleteSearchItem,
-  query: string,
-): boolean {
-  return (
-    fuzzyMatch(command.name, query) ||
-    fuzzyMatch(commandInvocationName(command), query) ||
-    Boolean(command.description && fuzzyMatch(command.description, query)) ||
-    Boolean(command.searchAliases?.some((alias) => fuzzyMatch(alias, query)))
-  );
+const SKILL_PREFIX = "skill:";
+
+const isWordChar = (char: string | undefined) => char !== undefined && /[\p{L}\p{N}]/u.test(char);
+
+/** True when `token` starts a word in `text` (case-insensitive). */
+function startsAWord(text: string, token: string): boolean {
+  const haystack = text.toLowerCase();
+  const needle = token.toLowerCase();
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+    if (!isWordChar(haystack[at - 1])) return true;
+  }
+  return false;
 }
 
 /**
- * Filter a merged catalog by category and free-text query, then sort with
- * prefix matches first and the rest alphabetically by executable invocation.
- * Pure so the desktop rich list and the mobile compact list share one
- * per-keystroke path; the mobile list always passes `all` to keep the full
- * catalog without category chrome.
+ * Description or alias match: every whitespace- or slash-separated query token
+ * starts a word in the same text. No fuzzy matching, so a long description
+ * cannot match on scattered letters.
+ */
+function commandMetadataMatches(command: CommandAutocompleteSearchItem, query: string): boolean {
+  const tokens = query.split(/[\s/]+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return false;
+  const texts = [command.description, ...(command.searchAliases ?? [])];
+  return texts.some((text) => Boolean(text) && tokens.every((token) => startsAWord(text as string, token)));
+}
+
+/**
+ * Filter a merged catalog by category and free-text query. The name matches
+ * and their order are Pi's slash autocomplete (pi-tui
+ * `CombinedAutocompleteProvider`): ranked by `piFuzzyFilter`, a `skill:`
+ * command by its bare name first, then those that match only their full name
+ * (for example `skill:pro`). Commands that do not match by name but whose
+ * description or search alias contains the query as the start of a word come
+ * last (a PiChamber extension, Pi has none), in catalog order; scattered
+ * letters do not match there. Pure so the desktop rich list and the mobile
+ * compact list share one per-keystroke path; the mobile list always
+ * passes `all` to keep the full catalog without category chrome.
  */
 export function filterAndSortCommands<T extends CommandAutocompleteSearchItem>(
   commands: readonly T[],
   query: string,
   category: CommandAutocompleteCategory,
 ): T[] {
+  const inCategory = commands.filter((command) => commandMatchesCategory(command, category));
   const normalizedQuery = query.trim();
-  const queryLower = normalizedQuery.toLowerCase();
-  const filtered = normalizedQuery
-    ? commands.filter(
-        (command) =>
-          commandMatchesCategory(command, category) &&
-          commandMatchesSearch(command, normalizedQuery),
-      )
-    : commands.filter((command) => commandMatchesCategory(command, category));
-  const sorted = [...filtered];
-  sorted.sort((a, b) => {
-    const aInvocation = commandInvocationName(a).toLowerCase();
-    const bInvocation = commandInvocationName(b).toLowerCase();
-    const aStartsWith = queryLower.length > 0 && aInvocation.startsWith(queryLower);
-    const bStartsWith = queryLower.length > 0 && bInvocation.startsWith(queryLower);
-    if (aStartsWith && !bStartsWith) return -1;
-    if (!aStartsWith && bStartsWith) return 1;
-    return aInvocation.localeCompare(bInvocation);
-  });
-  return sorted;
+  if (!normalizedQuery) return inCategory;
+
+  const bareName = (command: T) => {
+    const invocation = commandInvocationName(command);
+    return invocation.startsWith(SKILL_PREFIX) ? invocation.slice(SKILL_PREFIX.length) : invocation;
+  };
+  const bareNameMatches = piFuzzyFilter(inCategory, normalizedQuery, bareName);
+  const bareNameMatchSet = new Set(bareNameMatches);
+  const fullNameOnlyMatches = piFuzzyFilter(
+    inCategory.filter(
+      (command) => commandInvocationName(command).startsWith(SKILL_PREFIX) && !bareNameMatchSet.has(command),
+    ),
+    normalizedQuery,
+    commandInvocationName,
+  );
+  const nameMatches = [...bareNameMatches, ...fullNameOnlyMatches];
+  const nameMatchSet = new Set(nameMatches);
+  const metadataMatches = inCategory.filter(
+    (command) => !nameMatchSet.has(command) && commandMetadataMatches(command, normalizedQuery),
+  );
+  return [...nameMatches, ...metadataMatches];
 }
