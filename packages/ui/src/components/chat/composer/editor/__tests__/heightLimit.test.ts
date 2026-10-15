@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { composerScrollerLimit } from '../heightLimit';
+import { composerAffordsTargetRow, composerScrollerLimit } from '../heightLimit';
 
 const el = (size: { clientHeight?: number; height?: number }) =>
     ({ clientHeight: size.clientHeight ?? 0, getBoundingClientRect: () => ({ height: size.height ?? 0 }) }) as unknown as Element;
@@ -90,5 +90,29 @@ describe('composerScrollerLimit', () => {
                 scroller: el({ height: 0 }),
             }),
         ).toBeNull();
+    });
+});
+
+describe('composerAffordsTargetRow', () => {
+    // The composer without the branch row is 152px (handle, card with its two
+    // line floor, bottom padding); the row adds 34 more. On a 200px viewport
+    // the screen container is 144px, so with the row the model row and the
+    // send button fall below the visible area (#204).
+    test('a 200px viewport leaves the container too short for the row, portrait and landscape', () => {
+        expect(composerAffordsTargetRow(el({ clientHeight: 144 }), 200)).toBe(false);
+    });
+
+    test('the shrunken visual viewport counts when the browser pans instead of resizing', () => {
+        expect(composerAffordsTargetRow(el({ clientHeight: 800 }), 200)).toBe(false);
+    });
+
+    test('a landscape phone without the keyboard and a portrait phone with it keep the row', () => {
+        expect(composerAffordsTargetRow(el({ clientHeight: 334 }), 390)).toBe(true);
+        expect(composerAffordsTargetRow(el({ clientHeight: 444 }), 500)).toBe(true);
+    });
+
+    test('an unmeasured container keeps the row', () => {
+        expect(composerAffordsTargetRow(el({ clientHeight: 0 }), undefined)).toBe(true);
+        expect(composerAffordsTargetRow(null, 200)).toBe(true);
     });
 });
