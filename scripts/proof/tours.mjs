@@ -360,7 +360,7 @@ export function controlCenterTour(manifest) {
     { caption: 'The control center shows the question as its title with the context, three options as answer buttons with their consequence, the recommended one marked, and what the worker does until then. The worker sits under its orchestrator with slots and host load.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: waiting }, { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'wait', selector: row }],
       evidence: [{ selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }, { selector: option, text: 'Recommended' },
-        { selector: `${inbox} [data-inbox-option]`, text: LAB_ASKER_OPTIONS[2].consequence }, { text: 'Until then:' },
+        { selector: `${inbox} [data-inbox-option]`, index: 2, text: LAB_ASKER_OPTIONS[2].consequence }, { text: 'Until then:' },
         { selector: '[aria-label="Slots and host"]' }, { selector: row }] },
     { caption: `One tap on "${choice}" answers: the label goes to the worker as the owner's prompt and closes the question. The worker then reports a blocker for the owner, with what it tried and what it needs.`, viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: option }, { type: 'wait', text: LAB_ASKER_BLOCKER }],
