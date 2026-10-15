@@ -31,6 +31,33 @@ interface ComposerScrollerLimitInput {
 }
 
 /**
+ * What the user can actually see of the screen container: a Capacitor shell
+ * shrinks the element itself when the keyboard opens; a mobile browser only
+ * shrinks the visual viewport. The smaller is what the user sees.
+ */
+function visibleHeightOf(bound: Element, visualViewportHeight: number | undefined): number {
+    return Math.min(bound.clientHeight, visualViewportHeight ?? Number.POSITIVE_INFINITY);
+}
+
+/**
+ * Below this visible height the composer cannot show the branch row and keep
+ * the model row and send button in view. Measured on a 200px viewport: the
+ * container is 144px, the composer 186px with the row (34px) and 152px
+ * without, whose controls end inside the container.
+ */
+const TARGET_ROW_MIN_VISIBLE_HEIGHT = 300;
+
+/**
+ * Whether the informational branch row above the composer fits. Unmeasured
+ * (no bound, or not laid out) keeps it.
+ */
+export function composerAffordsTargetRow(bound: Element | null, visualViewportHeight: number | undefined): boolean {
+    if (!bound) return true;
+    const visibleHeight = visibleHeightOf(bound, visualViewportHeight);
+    return !(visibleHeight > 0) || visibleHeight >= TARGET_ROW_MIN_VISIBLE_HEIGHT;
+}
+
+/**
  * Max height of the text scroller in px, or null while the composer is not
  * laid out (minimized), so the limit is recomputed when it comes back.
  */
@@ -44,10 +71,7 @@ export function composerScrollerLimit({
 }: ComposerScrollerLimitInput): number | null {
     const byLines = lineHeight * maxLines;
     if (!bound) return byLines;
-    // A Capacitor shell shrinks the element itself when the keyboard opens; a
-    // mobile browser only shrinks the visual viewport. The smaller is what the
-    // user sees.
-    const visibleHeight = Math.min(bound.clientHeight, visualViewportHeight ?? Number.POSITIVE_INFINITY);
+    const visibleHeight = visibleHeightOf(bound, visualViewportHeight);
     if (!(visibleHeight > 0)) return byLines;
     const scrollerHeight = scroller.getBoundingClientRect().height;
     if (scrollerHeight === 0) return null;

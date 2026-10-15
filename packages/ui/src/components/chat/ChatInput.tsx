@@ -162,6 +162,7 @@ import { ComposerFooter } from "./composer/ui/ComposerFooter";
 import { RevertedMessageDock } from "./composer/ui/RevertedMessageDock";
 import { ComposerDragOverlay } from "./composer/ui/ComposerDragOverlay";
 import { ComposerMinimizeToggle } from "./composer/ui/ComposerMinimizeToggle";
+import { useComposerTargetRowFits } from "./composer/state/useComposerTargetRowFits";
 import { ComposerAttachmentPickerInput } from "./composer/ui/ComposerAttachmentPickerInput";
 import { ComposerVoiceButton } from "./composer/ui/ComposerVoiceButton";
 import {
@@ -2280,10 +2281,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     handleWorktreeModeChange,
   } = useDraftTarget(showDraftTargetSelectors);
 
+  // The new session draft keeps its selectors; the informational branch row of
+  // a session gives way when the visible height cannot hold it with the whole
+  // composer (#204).
+  const targetRowFits = useComposerTargetRowFits(
+    composerFormRef,
+    isMobileForDraft && !newSessionDraftOpen,
+  );
   const showComposerTargetRow = Boolean(
     showDraftTargetSelectors &&
     selectedDraftProject &&
-    (newSessionDraftOpen || shouldShowDraftBranchSelector),
+    (newSessionDraftOpen || (shouldShowDraftBranchSelector && targetRowFits)),
   );
   const hasPendingChanges = React.useMemo(() => {
     if (isMiniChatSurface) {
@@ -2419,10 +2427,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 : pendingChangesBar
             }
           />
-          {!isMobileForDraft &&
-          showDraftTargetSelectors &&
-          selectedDraftProject &&
-          (newSessionDraftOpen || shouldShowDraftBranchSelector) ? (
+          {!isMobileForDraft && showComposerTargetRow && selectedDraftProject ? (
             <div
               inert={isComposerLocked || undefined}
               className={cn(
@@ -2451,10 +2456,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
               />
             </div>
           ) : null}
-          {isMobileForDraft &&
-          showDraftTargetSelectors &&
-          selectedDraftProject &&
-          (newSessionDraftOpen || shouldShowDraftBranchSelector) ? (
+          {isMobileForDraft && showComposerTargetRow && selectedDraftProject ? (
             <div
               inert={isComposerLocked || undefined}
               className={cn(

@@ -238,6 +238,11 @@ a third of the visible height of the screen container (`data-composer-bound`).
 after the measured chrome (form height minus scroller height), never less than
 two lines, and the text scrolls inside itself. On a very small visible height
 the composer can therefore exceed a third; minimizing is the way out.
+The informational branch row above the composer of a session (not the new
+session draft's selectors) is part of that stack: below 300 px of visible
+height it is dropped (`composerAffordsTargetRow`, `state/useComposerTargetRowFits.ts`),
+because with it the model row and send button fall below the visible area at a
+200 px viewport (#204); a pending changes bar then sits in the status row.
 "Visible" is the smaller of the container and `visualViewport`, because
 Capacitor shrinks the container for the keyboard while a mobile browser only
 shrinks the visual viewport. Desktop has no bound and keeps the line limit.
