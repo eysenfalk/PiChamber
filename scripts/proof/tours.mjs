@@ -365,7 +365,8 @@ export function controlCenterTour(manifest) {
     { caption: 'On the phone the same question stacks its options full width, each with its consequence, so one tap answers.', viewport: 'mobile', theme: 'light',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
         { type: 'wait', selector: option }],
-      evidence: [{ selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }, { selector: option, text: 'Recommended' },
+      // The whole card is taller than a phone, so the evidence is its title and the visible options.
+      evidence: [{ text: LAB_ASKER_QUESTION }, { selector: option, text: 'Recommended' },
         { selector: `${inbox} [data-inbox-option]`, index: 1, text: LAB_ASKER_OPTIONS[1].consequence }] },
     { caption: `One tap on "${choice}" answers: the label goes to the worker as the owner's prompt and closes the question. The worker then reports a blocker for the owner, with what it tried and what it needs.`, viewport: 'desktop', theme: 'light',
       actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: waiting }, { type: 'click', selector: waiting },

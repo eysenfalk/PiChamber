@@ -134,7 +134,8 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
               onClick={() => void sendOption(option.label)}
               disabled={draft.pending !== null}
               // An option carries its consequence, so the button grows with the text instead of a fixed height.
-              className="h-auto min-h-8 w-full flex-col items-start gap-0.5 whitespace-normal py-1.5 text-left"
+              // The text is the worker's wording (README stays README), so it keeps its case.
+              className="h-auto min-h-8 w-full flex-col items-start gap-0.5 whitespace-normal py-1.5 text-left normal-case"
             >
               <span className="flex w-full items-center gap-2 font-medium">
                 {draft.pending === 'answer' && choice === option.label ? <Icon name="loader-4" className="size-3.5 shrink-0 animate-spin" /> : null}
