@@ -1,4 +1,4 @@
-import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -295,6 +295,37 @@ export function orchestrationTour(manifest) {
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: `[data-mobile-sessions-drawer] ${item(worker)}` }],
       // The narrow drawer truncates the orchestrator title, so the nesting is proven by the worker's tree level: project 1, worktree 2, orchestrator 3.
       evidence: [{ selector: `[data-mobile-sessions-drawer] ${item(worker)}[aria-level="4"]` }] },
+  ] });
+}
+
+/** Issue #151: the orchestrator starts a review worker; its read-only tool profile keeps edit and write away, and the README stays unchanged. */
+export function toolProfilesTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const worker = LAB_REVIEW_WORKER_TITLE;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const started = { text: 'runs with the read-only profile.' };
+  const verdict = { text: 'could not change README.md' };
+  const done = { text: 'REVIEW DONE.' };
+  return validateTour({ name: 'tool-profiles', steps: [
+    { caption: `The orchestrator starts the review worker "${worker}". Its own answer lists the tools sent to it: no profile, so the full set with edit and write.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
+        { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
+        { type: 'type', selector: composer, value: 'REVIEW' }, { type: 'press', key: 'Enter' }, { type: 'wait', ...started }],
+      evidence: [started, { text: 'Tools sent to me (orchestrator, no profile, full)' }] },
+    { caption: 'The review worker ends. Its result wakes the orchestrator, which reports that the worker could not change README.md.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', ...verdict }],
+      evidence: [{ text: 'A worker event:' }, verdict] },
+    { caption: 'In the worker: edit and write fail, git reports README.md unchanged, and the tools sent to the worker lack edit and write.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: `${item(orchestrator.title)} button[aria-label="Expand forks"]` }, { type: 'wait', selector: item(worker) },
+        { type: 'click', selector: item(worker) }, { type: 'wait', ...done }],
+      evidence: [done, { text: 'git: README.md unchanged' }, { text: 'Tools sent to me (review worker, profile read-only)' }] },
+    { caption: 'The same worker transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
+      evidence: [{ selector: 'html.dark [data-chat-input="true"]' }, done] },
   ] });
 }
 

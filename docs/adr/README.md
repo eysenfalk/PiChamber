@@ -19,6 +19,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0011](0011-fixed-orchestrator.md) | Fixed orchestrator: registry, wakes and proven-merge cleanup | Proposed |
 | [0012](0012-phone-browser-as-remote-view.md) | The phone browser is a remote view of a page the laptop renders in the PiChamber browser profile | Accepted |
 | [0013](0013-one-pull-request-with-slices.md) | One pull request with slices, a draft at the first plan, a fast and a slow lane | Accepted |
+| [0014](0014-worker-tool-profiles.md) | Worker tool profiles: a recorded tool limit per worker, enforced by the daemon, not a sandbox | Proposed |
 
 ## Rules
 

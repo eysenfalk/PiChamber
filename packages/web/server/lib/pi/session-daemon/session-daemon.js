@@ -11,6 +11,7 @@ import {
   createAgentSessionFromServices,
   createAgentSessionRuntime,
   createAgentSessionServices,
+  DefaultPackageManager,
   getAgentDir,
   ProjectTrustStore,
   SessionManager,
@@ -65,6 +66,7 @@ import { createMergeLookup } from '../../github/merge-lookup.js';
 import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
+import { keptExtensionPaths } from './orchestration/tool-profiles.js';
 import { createHtmlRenderExtension } from '../html-render/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -132,15 +134,31 @@ export function isLocalSessionDaemonEndpoint(endpoint, platform = process.platfo
 
 // Hooks let the daemon thread extension bindings into every Pi runtime
 // creation (initial, new/resume/fork replacement) without coupling this
-// factory to daemon socket state.
+// factory to daemon socket state. `workerProfile` names a worker's tool
+// profile (#151) for the session a creation is for; its excluded extensions
+// are never imported. Pi chooses extensions only here, when services are built.
+// A worker profile that excludes extensions (#151) resolves Pi's extension
+// resources first and hands Pi only the kept paths, so an excluded extension
+// is never imported and registers no tool or listener. Pi's own filter hook
+// (`extensionsOverride`) runs after every factory already ran.
+async function profileExtensionOptions(profile, { cwd, agentDir, settingsManager }) {
+  if (profile === undefined || (profile !== null && profile.excludeExtensions.length === 0)) return {};
+  const { extensions } = await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve();
+  return { noExtensions: true, additionalExtensionPaths: keptExtensionPaths(extensions, profile) };
+}
+
 export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), sessionFile }, hooks) {
   const createRuntime = async ({ cwd: runtimeCwd, agentDir: runtimeAgentDir, sessionManager, sessionStartEvent }) => {
+    const profile = hooks?.workerProfile?.(sessionManager);
+    const settingsManager = SettingsManager.create(runtimeCwd, runtimeAgentDir);
     const services = await createAgentSessionServices({
       cwd: runtimeCwd,
       agentDir: runtimeAgentDir,
-      resourceLoaderOptions: hooks?.extensionFactories?.length
-        ? { extensionFactories: hooks.extensionFactories }
-        : {},
+      settingsManager,
+      resourceLoaderOptions: {
+        ...(hooks?.extensionFactories?.length ? { extensionFactories: hooks.extensionFactories } : {}),
+        ...(await profileExtensionOptions(profile, { cwd: runtimeCwd, agentDir: runtimeAgentDir, settingsManager })),
+      },
     });
 
     const result = {
@@ -623,9 +641,16 @@ export function createSessionDaemon({
   // host factories keep their single-argument contract and ignore the hooks.
   const baseCreateRuntime = injectCreateRuntime
     ?? ((runtimeOptions, runtimeHooks) => createPiSessionRuntime(runtimeOptions, runtimeHooks));
-  const createRuntime = (runtimeOptions) => baseCreateRuntime(runtimeOptions, {
+  // A new worker's lineage entry is written only after Pi built its runtime
+  // (`newSession` setup), so its profile comes with the options; a reopened
+  // session file carries its own.
+  const createRuntime = ({ profile, ...runtimeOptions }) => baseCreateRuntime(runtimeOptions, {
     createExtensionBindings: buildExtensionBindings,
     extensionFactories: [orchestrationExtension, htmlRenderExtension],
+    workerProfile: (sessionManager) => {
+      const recorded = orchestration.sessionProfile(sessionManager);
+      return recorded === undefined ? profile : recorded;
+    },
   });
 
   const getSessionState = () => runtime
@@ -1956,6 +1981,7 @@ export function createSessionDaemon({
       cwd: targetCwd,
       agentDir,
       ...(parent && !worker ? { sessionFile: parent.path } : {}),
+      ...(worker?.lineage?.profile ? { profile: worker.lineage.profile } : {}),
     });
     if (!newRuntime.cwd) newRuntime.cwd = targetCwd;
     // Apply default retry limit for new sessions. Explicit per-run overrides win.
