@@ -3,6 +3,8 @@ import type {
   PiOrchestrationOverview,
   PiOrchestrationPendingDialog,
   PiOrchestrationQuestion,
+  PiOrchestrationQuestionBrief,
+  PiOrchestrationWorker,
 } from '@/lib/pi/protocol';
 import { PiRequestError, piClient } from '@/lib/pi/client';
 import { answerExtensionDialog, type DialogAnswer } from '@/components/chat/extensionDialogResponse';
@@ -24,8 +26,14 @@ export type InboxQuestion = {
   sessionId: string;
   title: string;
   worktree: string | null;
+  /** The worker's issue and pull request, so the owner sees what the question belongs to. */
+  links: InboxLink[];
   question: PiOrchestrationQuestion;
 };
+
+export type InboxLink = { label: string; url: string | null };
+
+export type InboxOption = { label: string; consequence: string | null; recommended: boolean };
 
 export type InboxDialog = {
   kind: 'dialog';
@@ -49,6 +57,34 @@ const dialogItem = (pending: PiOrchestrationPendingDialog): InboxDialog => ({
   dialog: pending.dialog,
 });
 
+const GITHUB = 'https://github.com';
+
+/** Issue and pull request of a worker as links; a pull request without a known repository has no URL. */
+export const workLinks = (worker: Pick<PiOrchestrationWorker, 'issue' | 'pullRequest' | 'pullRequestStatus'>): InboxLink[] => {
+  const links: InboxLink[] = [];
+  if (worker.issue) {
+    links.push({ label: `Issue #${worker.issue.number}`, url: `${GITHUB}/${worker.issue.repo}/issues/${worker.issue.number}` });
+  }
+  if (worker.pullRequest) {
+    const { number, repository } = worker.pullRequest;
+    const url = worker.pullRequestStatus?.url ?? (repository ? `${GITHUB}/${repository}/pull/${number}` : null);
+    links.push({ label: `PR #${number}`, url });
+  }
+  return links;
+};
+
+/** The options of a brief in one shape; questions stored before #210 carry plain strings. */
+export const briefOptions = (brief: PiOrchestrationQuestionBrief | undefined): InboxOption[] =>
+  (brief?.options ?? []).map((option) => (typeof option === 'string'
+    ? { label: option, consequence: null, recommended: false }
+    : { label: option.label, consequence: option.consequence ?? null, recommended: option.recommended === true }));
+
+/** The answer an option button sends: the option's label, and the typed note as its own paragraph. */
+export const optionAnswerText = (label: string, note: string): string => {
+  const trimmed = note.trim();
+  return trimmed ? `${label}\n\n${trimmed}` : label;
+};
+
 export const collectInboxItems = (overview: PiOrchestrationOverview): InboxItem[] => {
   const owner: InboxQuestion[] = [];
   const orchestrator: InboxQuestion[] = [];
@@ -62,6 +98,7 @@ export const collectInboxItems = (overview: PiOrchestrationOverview): InboxItem[
         sessionId: worker.sessionId,
         title: worker.title?.trim() || worker.sessionId,
         worktree: worker.worktree,
+        links: workLinks(worker),
         question,
       };
       (question.audience === 'owner' ? owner : orchestrator).push(item);

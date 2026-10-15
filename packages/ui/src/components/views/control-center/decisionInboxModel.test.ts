@@ -124,6 +124,36 @@ describe('decision inbox model', () => {
     expect(inbox.projectLabel(null)).toBeNull();
   });
 
+  test('reads options in the #210 shape and the plain strings stored before it', () => {
+    expect(inbox.briefOptions({ recommendation: 'x', options: [{ label: 'Fail', consequence: 'Blocks the release', recommended: true }, { label: 'Warn' }] })).toEqual([
+      { label: 'Fail', consequence: 'Blocks the release', recommended: true },
+      { label: 'Warn', consequence: null, recommended: false },
+    ]);
+    expect(inbox.briefOptions({ recommendation: 'x', options: ['Keep it', 'Drop it'] })).toEqual([
+      { label: 'Keep it', consequence: null, recommended: false },
+      { label: 'Drop it', consequence: null, recommended: false },
+    ]);
+    expect(inbox.briefOptions(undefined)).toEqual([]);
+  });
+
+  test('an option answer is the label, with the typed note as its own paragraph', () => {
+    expect(inbox.optionAnswerText('Fail', '')).toBe('Fail');
+    expect(inbox.optionAnswerText('Fail', '  \n ')).toBe('Fail');
+    expect(inbox.optionAnswerText('Fail', ' but only on main ')).toBe('Fail\n\nbut only on main');
+  });
+
+  test('links the worker issue and pull request, preferring the URL the pull request watch read', () => {
+    const base = { issue: null, pullRequest: null, pullRequestStatus: null };
+    expect(inbox.workLinks(base)).toEqual([]);
+    expect(inbox.workLinks({ ...base, issue: { repo: 'acme/app', number: 7 }, pullRequest: { number: 12, repository: 'acme/app' } })).toEqual([
+      { label: 'Issue #7', url: 'https://github.com/acme/app/issues/7' },
+      { label: 'PR #12', url: 'https://github.com/acme/app/pull/12' },
+    ]);
+    const status = { status: 'open' as const, url: 'https://git.example/pr/12', head: null, checks: null };
+    expect(inbox.workLinks({ ...base, pullRequest: { number: 12, repository: null }, pullRequestStatus: status })).toEqual([{ label: 'PR #12', url: 'https://git.example/pr/12' }]);
+    expect(inbox.workLinks({ ...base, pullRequest: { number: 12, repository: null } })).toEqual([{ label: 'PR #12', url: null }]);
+  });
+
   test('counts owner questions and dialogs, not questions to the orchestrator', () => {
     expect(inbox.countOpenDecisions(overview())).toBe(4);
     expect(inbox.countOpenDecisions({ ...overview(), orchestrators: [], dialogs: [] })).toBe(0);
