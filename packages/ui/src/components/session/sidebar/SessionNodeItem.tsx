@@ -16,6 +16,8 @@ import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
 import { QuickSessionAction } from './QuickSessionAction';
 import { SessionNodeExportDialog } from './SessionNodeExportDialog';
+import { SessionRenameDialog } from './SessionRenameDialog';
+import { sessionRenameSurface } from './sessionRename';
 import { SessionNodeContextMenuContent, SessionNodeDropdownMenuContent } from './SessionNodeContextMenu';
 import { holdSessionRowPosition } from './sessionRowAnchor';
 import { collectNodeDescendantIds, useSessionExport } from './useSessionExport';
@@ -65,6 +67,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     renderSessionNode,
     secondaryMeta,
     renderContext = 'tree',
+    mobileVariant,
     subtreeContainsEditing,
     menuOpenSessionId,
     childRenderExtrasFor,
@@ -83,6 +86,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   renameDraftRef.current = renameDraft;
   const renameTargetRef = React.useRef<string | null>(null);
   const formRef = React.useRef<HTMLFormElement>(null);
+  const renameInDialog = sessionRenameSurface({ mobileVariant }) === 'dialog';
 
   const menuInstanceKey = `${renderContext}:${archivedBucket ? 'archived' : 'active'}:${node.session.id}`;
 
@@ -142,7 +146,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   }, [session.id, sessionDirectory]);
 
   React.useEffect(() => {
-    if (editingId !== session.id) return;
+    if (editingId !== session.id || renameInDialog) return;
     const handleDocMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       const withinRenameForm = target?.closest?.(`[data-session-rename-form="${CSS.escape(session.id)}"]`);
@@ -152,7 +156,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     };
     document.addEventListener('mousedown', handleDocMouseDown);
     return () => document.removeEventListener('mousedown', handleDocMouseDown);
-  }, [editingId, session.id]);
+  }, [editingId, renameInDialog, session.id]);
 
   React.useLayoutEffect(() => {
     if (editingId !== session.id) {
@@ -318,7 +322,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           >
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
               {leadingIndicators}
-              {editingId === session.id ? (
+              {editingId === session.id && !renameInDialog ? (
                 <form
                   ref={formRef}
                   data-session-rename-form={session.id}
@@ -441,6 +445,15 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           </ContextMenu.Trigger>
           {contextMenuContent}
         </ContextMenu.Root>
+      {renameInDialog && editingId === session.id ? (
+        <SessionRenameDialog
+          open
+          value={renameDraft}
+          onChange={setRenameDraft}
+          onSave={() => handleSaveEdit(renameDraft)}
+          onCancel={handleCancelEdit}
+        />
+      ) : null}
       <SessionNodeExportDialog
         open={exportDialogOpen}
         onOpenChange={setExportDialogOpen}
