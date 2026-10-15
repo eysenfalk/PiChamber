@@ -32,6 +32,7 @@ import {
   type PiProviderLoginResponse,
   type PiProviderLogoutInput,
   type PiSettingsSnapshot,
+  type PiOrchestrationOverview,
   type PiSettingsUpdateInput,
   type PiSettingsUpdateResponse,
   type PiChamberDefaultsUpdateInput,
@@ -862,6 +863,16 @@ export class PiService {
   async getSettings(scope?: PiClientScope): Promise<PiSettingsSnapshot> {
     assertRuntimeUnchanged(scope);
     return jsonRequest<undefined, PiSettingsSnapshot>('/api/pi/settings', {
+      method: 'GET', ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
+    });
+  }
+
+  // ----- Orchestration (#20) ---------------------------------------------
+
+  /** The owner's view of all orchestrators and their workers; throws when the daemon cannot read it. */
+  async getOrchestrationOverview(scope?: PiClientScope): Promise<PiOrchestrationOverview> {
+    assertRuntimeUnchanged(scope);
+    return jsonRequest<undefined, PiOrchestrationOverview>('/api/pi/orchestration/overview', {
       method: 'GET', ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
     });
   }

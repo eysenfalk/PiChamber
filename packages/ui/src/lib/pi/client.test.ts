@@ -293,6 +293,22 @@ describe("PiService", () => {
     expect(await client.setPiChamberDefaults({ defaultThinking: "high" })).toEqual({ pichamber: { version: 1, defaultThinking: "high" } })
   })
 
+  test("reads the orchestration overview and rejects a failed read instead of answering empty", async () => {
+    let fail = false
+    installFetchMock((call) => {
+      expect(call.url).toBe("/api/pi/orchestration/overview")
+      expect(call.init?.method).toBe("GET")
+      return fail
+        ? jsonResponse({ error: { code: "ORCHESTRATION_REGISTRY_INVALID" } }, { status: 503 })
+        : jsonResponse({ at: 1, limit: { workerLimit: 4, used: 0 }, host: null, orchestrators: [], dialogs: [] })
+    })
+    const client = new PiService()
+    expect(await client.getOrchestrationOverview()).toMatchObject({ orchestrators: [], dialogs: [] })
+    fail = true
+    const failed = await client.getOrchestrationOverview().then(() => null, (error: unknown) => error)
+    expect(failed).toMatchObject({ code: "ORCHESTRATION_REGISTRY_INVALID" })
+  })
+
   test("uses the typed native resource routes", async () => {
     installFetchMock((call) => {
       if (call.url === "/api/pi/resources" && call.init?.method === "GET") {
