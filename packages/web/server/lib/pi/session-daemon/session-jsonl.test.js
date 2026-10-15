@@ -208,6 +208,20 @@ describe('Pi session JSONL validation', () => {
     await expect(findPiSessionJsonlById({ sessionId: '01a019b7-ce87-7be9-8fdd-missing', agentDir })).resolves.toBeNull();
   });
 
+  it('reports a filename match with an unreadable header instead of a miss', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-jsonl-'));
+    const cwd = join(root, 'project');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd, agentDir });
+    await mkdir(sessionDirectory, { recursive: true });
+    await writeFile(join(sessionDirectory, '2026-08-19T11-13-31-038Z_broken-header.jsonl'), 'not json\n');
+
+    await expect(findPiSessionJsonlById({ sessionId: 'broken-header', agentDir })).rejects.toMatchObject({
+      code: 'MALFORMED_SESSION_JSONL',
+    });
+    await expect(findPiSessionJsonlById({ sessionId: 'someone-else', agentDir })).resolves.toBeNull();
+  });
+
   it('lists session metadata without reading a padded transcript body', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-jsonl-'));
     const cwd = join(root, 'project');

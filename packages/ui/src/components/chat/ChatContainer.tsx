@@ -65,6 +65,21 @@ type ChatContainerProps = {
     autoOpenDraft?: boolean;
 };
 
+const isUnreadableSessionCode = (code: string | undefined): boolean =>
+  code === 'MALFORMED_SESSION_JSONL' || code === 'SESSION_JSONL_UNREADABLE';
+
+const sessionLoadErrorTitle = (code: string | undefined): string => {
+  if (code === 'SESSION_IN_USE') return 'Session is open elsewhere';
+  if (isUnreadableSessionCode(code)) return 'Session file is unreadable';
+  return 'Session could not be loaded';
+};
+
+const sessionLoadErrorDescription = (code: string | undefined): string => {
+  if (code === 'SESSION_IN_USE') return 'Another PiChamber instance is using this session. Close it there, then try again.';
+  if (isUnreadableSessionCode(code)) return 'The session file is damaged or cannot be read. The session stays in your list. Repair or restore the file, then try again.';
+  return 'Check the connection and try loading this session again.';
+};
+
 export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, autoOpenDraft = true }) => {
     
     // Session UI state
@@ -499,12 +514,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
 								<Icon name="error-warning" className="size-4" />
 							</div>
 							<p className="typography-ui-label font-medium text-foreground">
-								{sessionMessageLoadState.errorCode === 'SESSION_IN_USE' ? "Session is open elsewhere" : "Session could not be loaded"}
+								{sessionLoadErrorTitle(sessionMessageLoadState.errorCode)}
 							</p>
 							<p className="typography-meta mt-1 text-muted-foreground">
-								{sessionMessageLoadState.errorCode === 'SESSION_IN_USE'
-									? "Another PiChamber instance is using this session. Close it there, then try again."
-									: "Check the connection and try loading this session again."}
+								{sessionLoadErrorDescription(sessionMessageLoadState.errorCode)}
 							</p>
 							<Button variant="outline" size="sm" className="mt-4" onClick={retrySessionLoad}>
 								{"Try again"}

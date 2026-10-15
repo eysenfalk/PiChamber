@@ -54,15 +54,26 @@ export async function deleteSessions(ids: string[], _options?: unknown): Promise
   return { deletedIds, failedIds };
 }
 
+// A rejected archive (for example a session whose file is unreadable) is a
+// reported failure for that session only; it never reads as deletion.
 export async function archiveSession(id: string): Promise<boolean> {
-  await store().archive(id, true);
-  return true;
+  try {
+    await store().archive(id, true);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function archiveSessions(ids: string[], _options?: unknown): Promise<{ archivedIds: string[]; failedIds: string[] }> {
   void _options;
-  for (const id of ids) await store().archive(id, true);
-  return { archivedIds: ids, failedIds: [] };
+  const archivedIds: string[] = [];
+  const failedIds: string[] = [];
+  for (const id of ids) {
+    if (await archiveSession(id)) archivedIds.push(id);
+    else failedIds.push(id);
+  }
+  return { archivedIds, failedIds };
 }
 
 export async function unarchiveSession(id: string): Promise<boolean> {
