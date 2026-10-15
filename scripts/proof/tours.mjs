@@ -477,6 +477,43 @@ export function recreatedWorktreeTour(manifest) {
   ] });
 }
 
+/** Issues #104, #89, #16: a start lists no session nobody prompted, and a reload reopens the last used session from another folder. */
+export function startLastSessionTour(manifest) {
+  const projects = manifest?.projects;
+  const active = projects?.[0];
+  const long = manifest?.sessions?.find(session => session.role === 'long' && session.project === active?.name);
+  const last = manifest?.sessions?.find(session => session.role === 'short' && session.project !== active?.name && nonempty(session.title));
+  const lastProject = projects?.find(project => project.name === last?.project);
+  if (!active || !nonempty(active.path) || !long || !nonempty(long.title) || !last || !lastProject || !nonempty(lastProject.path)) throw new Error('Invalid lab seed manifest');
+  const label = name => name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const main = project => `[data-tree-node="w:${project.path}"]`;
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const terminal = '.xterm-screen';
+  // The lab server starts in the first project, so its default runtime lives there; the seed marker predates both loads.
+  const count = 'echo "new session files: $(find /lab/pi-agent/sessions -name \'*.jsonl\' -newer /lab/seed.json | wc -l)"';
+  return validateTour({ name: 'start-last-session', steps: [
+    { caption: `First load on a fresh browser profile and a freshly started daemon: ${label(active.name)} main lists only its seeded sessions, no "Awaiting first prompt" row.`,
+      viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'click', text: label(active.name) },
+        { type: 'wait', selector: main(active) }, { type: 'click', selector: main(active) }, { type: 'wait', selector: item(long.title) }],
+      evidence: [{ selector: main(active) }, { selector: item(long.title) }] },
+    { caption: `Opening "${last.title}" in ${label(lastProject.name)} makes it the last used session.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: label(lastProject.name) }, { type: 'wait', selector: main(lastProject) }, { type: 'click', selector: main(lastProject) },
+        { type: 'wait', selector: item(last.title) }, { type: 'click', selector: item(last.title) }, { type: 'wait', ms: 1500 }],
+      evidence: [{ selector: 'header', text: last.title }] },
+    { caption: `After a reload without input, "${last.title}" opens again, not the newest session of ${label(active.name)}.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label(active.name) }, { type: 'wait', ms: 3000 }],
+      evidence: [{ selector: 'header', text: last.title }] },
+    { caption: 'In the terminal: Pi wrote no session file since the seed, so neither load created a session.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'nav[aria-label="Panel surfaces"] [aria-label="Terminal"]' }, { type: 'wait', selector: terminal }, { type: 'wait', ms: 2000 },
+        { type: 'type', selector: terminal, value: count }, { type: 'press', key: 'Enter' }, { type: 'wait', text: 'new session files: 0' }],
+      evidence: [{ selector: terminal }, { text: 'new session files: 0' }] },
+    { caption: `Hosted mobile opens on "${last.title}" too.`, viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', text: last.title }],
+      evidence: [{ text: last.title }] },
+  ] });
+}
+
 /** Issue #46: the create-device dialog on a server without Tailscale (the lab pod has none) keeps the home network as default. */
 export function addDeviceTour() {
   // Desktop opens Settings from the URL; hosted mobile ignores `?settings=` and goes through the drawer.

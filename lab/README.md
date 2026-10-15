@@ -17,6 +17,7 @@ lab/run record extension-messages # Custom messages as compact grouped rows (#14
 lab/run record html-render  # The faux model calls html_render; page inline, maximized, reloaded, mobile (#155), in .proof/html-render/
 lab/run record tool-profiles # REVIEW starts a read-only review worker; edit and write blocked, README unchanged (#151), in .proof/tool-profiles/
 lab/run record recreated-worktree # A session leaves with its closed worktree and returns with it, no reload (#160), in .proof/recreated-worktree/
+lab/run record start-last-session # A start lists no unprompted session and a reload reopens the last one (#104, #89, #16), in .proof/start-last-session/
 lab/run down                # removes pod, internal network and lab state volume
 ```
 
