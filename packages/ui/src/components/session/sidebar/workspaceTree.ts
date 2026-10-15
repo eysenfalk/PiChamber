@@ -64,11 +64,26 @@ export type TreeNode = {
   folderId?: string;
   /** Search only: this Chats or project root is hidden and appears because something in it matched. */
   hiddenMatch?: boolean;
+  /** Live state of this session itself; `rollup` adds its forks and workers. Session nodes only. */
+  activity?: SessionActivity;
 };
 
 export type WorkspaceTreeProject = { id: string; label: string; root: string };
 
 export type SessionActivity = 'running' | 'waiting';
+
+/**
+ * Narrows the tree to orchestration workers or hides them. Applied before the tree is built:
+ * a filtered session has no place, so `placement` and rollups only cover what is shown.
+ */
+export type WorkerFilter = { mode: 'hide' | 'only'; workerIds: ReadonlySet<string> };
+
+export type WorkerFilterMode = 'all' | WorkerFilter['mode'];
+
+/** No filter for All, and none while the worker ids are unknown: then nobody is claimed to be or not be a worker. */
+export const resolveWorkerFilter = (mode: WorkerFilterMode, workerIds: ReadonlySet<string> | null): WorkerFilter | undefined => (
+  mode === 'all' || !workerIds ? undefined : { mode, workerIds }
+);
 
 export type WorkspaceTreeInput = {
   /** Registered projects in their manual order. */
@@ -93,6 +108,8 @@ export type WorkspaceTreeInput = {
   hidden?: ReadonlySet<string>;
   /** Quick search, matched case-insensitively after trimming. A non-empty query narrows the tree to the matching paths. */
   query?: string;
+  /** Hide or show only orchestration workers. Omit to show every session. */
+  workerFilter?: WorkerFilter;
 };
 
 export type WorkspaceTree = {
@@ -241,6 +258,7 @@ const buildSessionForest = (builder: Builder, sessions: readonly Session[]): Tre
       lastActivity,
       rollup,
       session,
+      activity,
       pinned: input.isPinned(session),
     });
   };
@@ -423,7 +441,12 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   const builder: Builder = { input, parents: new Map(), placement: new Map() };
   const ownedById = input.ownership.bySessionId;
   const globalIds = new Set(input.ownership.globalSessions.map((session) => session.id));
-  const active = input.sessions.filter((session) => !session.time?.archived);
+  const workerFilter = input.workerFilter;
+  const active = input.sessions.filter((session) => {
+    if (session.time?.archived) return false;
+    if (!workerFilter) return true;
+    return workerFilter.workerIds.has(session.id) === (workerFilter.mode === 'only');
+  });
 
   type ProjectBucket = {
     project: WorkspaceTreeProject;

@@ -4086,6 +4086,7 @@ export function createSessionDaemon({
       // is still deciding) is no streaming state, but it will start a run.
       inputActive: activeSessionInputs.has(runtimeRegistry?.findBySessionId(sessionId)),
     }),
+    listPendingDialogs: () => extensionBridge.listPendingDialogs(),
     createWorkerSession: async ({ cwd: workerCwd, title, model, thinking, parentSessionPath, lineage }) => {
       const created = await createSession(
         { cwd: workerCwd, title, ...(model ? { model } : {}), ...(thinking ? { thinking } : {}) },
@@ -4126,10 +4127,12 @@ export function createSessionDaemon({
         exclude,
       });
     },
-    sendInput: ({ sessionId, text, delivery, operationId }) => sessionInput(
+    // The service's own sends write as the orchestrator; an owner's answer from
+    // the control center passes 'owner'.
+    sendInput: ({ sessionId, text, delivery, operationId, source = 'orchestrator' }) => sessionInput(
       { sessionId, text, ...(operationId ? { operationId, streamEpoch } : {}) },
       delivery === 'prompt' ? undefined : delivery,
-      'orchestrator',
+      source,
     ),
     abortSession: (sessionId) => abortSession(sessionId),
     abortRun: (sessionId, run) => abortBoundRun(runtimeRegistry?.findBySessionId(sessionId)?.session, run),
@@ -4530,6 +4533,36 @@ export function createSessionDaemon({
       }
       case 'orchestration.prWatch': {
         const result = await watchPullRequests(message.payload);
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.overview': {
+        // A failed read is an error result, never an empty overview.
+        const result = await orchestration.overview()
+          .then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.answer': {
+        // The owner's answer to a worker question (#20); a refusal is an error result.
+        const payload = message.payload ?? {};
+        const valid = [payload.sessionId, payload.questionId, payload.text].every((value) => typeof value === 'string' && value.length > 0)
+          && (payload.clientRequestId === undefined || typeof payload.clientRequestId === 'string');
+        const result = !valid
+          ? { error: { code: 'INVALID_ARGUMENT' } }
+          : await orchestration.answer({
+            sessionId: payload.sessionId, questionId: payload.questionId, text: payload.text, clientRequestId: payload.clientRequestId,
+          }).then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
+      case 'orchestration.resolve': {
+        // The owner marks a worker question answered without a prompt (#20).
+        const payload = message.payload ?? {};
+        const result = ![payload.sessionId, payload.questionId].every((value) => typeof value === 'string' && value.length > 0)
+          ? { error: { code: 'INVALID_ARGUMENT' } }
+          : await orchestration.resolve({ sessionId: payload.sessionId, questionId: payload.questionId })
+            .then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
         return;
       }

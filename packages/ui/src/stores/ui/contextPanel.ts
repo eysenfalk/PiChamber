@@ -1,6 +1,6 @@
 import { normalizeDirectoryPathKey } from '@/lib/directoryPathKey';
 
-export type MainTab = 'chat' | 'git' | 'diff' | 'terminal' | 'files' | 'context' | 'diagram';
+export type MainTab = 'chat' | 'git' | 'diff' | 'terminal' | 'files' | 'context' | 'diagram' | 'control';
 export type PendingDiffScope = 'all' | 'working' | 'staged' | 'turn' | 'branch';
 export type ContextPanelMode = 'diff' | 'file' | 'context' | 'preview' | 'browser' | 'git' | 'terminal' | 'pull-requests' | 'issues';
 

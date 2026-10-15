@@ -163,6 +163,7 @@ const reportViolation = (args) => {
   }
   if (args.kind === 'ready' && args.pullRequest === undefined) return 'A ready report needs pullRequest.';
   if ((args.kind === 'question' || args.kind === 'blocked') && !args.audience) return `A ${args.kind} report needs audience.`;
+  if (args.brief && args.kind !== 'question' && args.kind !== 'blocked') return 'Only a question or blocked report has a brief.';
   return null;
 };
 
@@ -201,6 +202,8 @@ export function createOrchestrationService(deps) {
     // The daemon's session deletion, the last cleanup step.
     deleteSession,
     getSessionActivity = () => ({}),
+    // Pending blocking dialogs of resident sessions: [{ sessionId, dialog }].
+    listPendingDialogs = () => [],
     holdSession = () => () => {},
     // 'present' | 'absent' | 'unknown' for the worker's JSONL.
     sessionFileState = async () => 'unknown',
@@ -721,6 +724,31 @@ export function createOrchestrationService(deps) {
     };
   };
 
+  /**
+   * The owner answers a worker's open question from the control center
+   * (#20): the text goes to the worker as the owner's own prompt, and the
+   * question closes only after Pi accepted it. A question that is not open
+   * changes nothing and sends nothing; a refused prompt leaves it open.
+   */
+  const answer = ({ sessionId, questionId, text, clientRequestId }) => withSession(sessionId, async () => {
+    if ((await registry.read()).workers[sessionId]?.question?.id !== questionId) {
+      throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'This question is not open.', { sessionId, questionId });
+    }
+    const receipt = await sendInput({ sessionId, text, delivery: 'prompt', operationId: clientRequestId, source: 'owner' });
+    // A report meanwhile may have closed or replaced it; then only the prompt counts.
+    const resolved = await registry.update((document) => closeQuestion(document, sessionId, questionId));
+    return { sessionId, questionId, accepted: true, resolved, ...(receipt?.deduplicated ? { deduplicated: true } : {}) };
+  });
+
+  // The owner marks a question answered without prompting the worker (#20),
+  // for an answer given in the worker's chat, which does not close it.
+  const resolve = ({ sessionId, questionId }) => withSession(sessionId, async () => {
+    if (!(await registry.update((document) => closeQuestion(document, sessionId, questionId)))) {
+      throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'This question is not open.', { sessionId, questionId });
+    }
+    return { sessionId, questionId, resolved: true };
+  });
+
   // Moves an idle worker of the caller back to an earlier entry and, with a
   // prompt, runs it again from there. A run, a retry, a start and an open
   // dialog all refuse: navigating under them would change a live transcript.
@@ -1023,6 +1051,12 @@ export function createOrchestrationService(deps) {
     return { live: null, liveSince: null };
   };
 
+  // The first pending blocking dialog of a session, in short.
+  const dialogOf = (sessionId) => {
+    const pending = listPendingDialogs().find((entry) => entry.sessionId === sessionId)?.dialog;
+    return pending ? { requestId: pending.requestId, method: pending.method, title: pending.title ?? null } : null;
+  };
+
   const digestWorker = async (sessionId, worker) => {
     const runtime = getLiveRuntime(sessionId);
     const settled = worker.snapshot;
@@ -1043,6 +1077,7 @@ export function createOrchestrationService(deps) {
       lastInputAt: worker.lastInputAt ?? null,
       report: worker.report ? report : null,
       question: worker.question ?? null,
+      dialog: dialogOf(sessionId),
       lastError: settled?.lastError ?? null,
       usage: settled?.usage ? { settled: settled.usage, settledAt: settled.at } : null,
     };
@@ -1066,8 +1101,47 @@ export function createOrchestrationService(deps) {
     const workers = await Promise.all(workersOf(document, callerSessionId)
       .filter(([sessionId]) => !wanted || wanted.has(sessionId))
       .map(([sessionId, worker]) => digestWorker(sessionId, worker)));
+    return { at: now(), ...capacity(document, workerLimit), operations, workers };
+  };
+
+  const capacity = (document, workerLimit) => {
     const used = slotsInUse(document);
-    return { at: now(), limit: { workerLimit, used }, host: { ...hostGateNumbers(hostStatus()), workers: used, limit: workerLimit }, operations, workers };
+    return { limit: { workerLimit, used }, host: { ...hostGateNumbers(hostStatus()), workers: used, limit: workerLimit } };
+  };
+
+  /**
+   * The owner's view (#20): every orchestrator, marked or still owning
+   * workers, with its workers, the slot use, the host and the pending
+   * dialogs of resident sessions. Reads the registry and the live channels
+   * only and activates nothing; a failed registry or settings read rejects.
+   */
+  const overview = async () => {
+    const [document, { workerLimit, orchestrators: marked = [] }] = await Promise.all([registry.read(), readSettings()]);
+    const owners = new Set(marked);
+    for (const worker of Object.values(document.workers)) {
+      if (worker.state !== 'removed' && worker.orchestratorSessionId) owners.add(worker.orchestratorSessionId);
+    }
+    const titleOf = (runtime) => runtime?.session?.sessionManager?.getSessionName?.() ?? null;
+    const orchestrators = await Promise.all([...owners].map(async (sessionId) => ({
+      sessionId,
+      marked: marked.includes(sessionId),
+      title: titleOf(getLiveRuntime(sessionId)),
+      workers: await Promise.all(workersOf(document, sessionId).map(async ([workerId, worker]) => ({
+        ...await digestWorker(workerId, worker),
+        pullRequestStatus: prWatch.statusOf(workerId, worker.pullRequest),
+      }))),
+    })));
+    const dialogs = listPendingDialogs().map(({ sessionId, dialog }) => {
+      const runtime = getLiveRuntime(sessionId);
+      return {
+        sessionId,
+        title: titleOf(runtime),
+        directory: runtime?.cwd ?? null,
+        orchestratorSessionId: document.workers[sessionId]?.orchestratorSessionId ?? null,
+        dialog,
+      };
+    });
+    return { at: now(), ...capacity(document, workerLimit), orchestrators, dialogs };
   };
 
   // Removes a worker after the proven merge of its pull request (#118):
@@ -1805,6 +1879,9 @@ export function createOrchestrationService(deps) {
     // An extension dialog opened in a session; in a worker it is a question.
     onDialogOpened: (sessionId, title) => wakes.emit(sessionId, 'question', `dialog: ${title ?? 'input requested'}`),
     prWatch,
+    overview,
+    answer,
+    resolve,
     startWakes: wakes.start,
     stopWakes: wakes.stop,
     verifyCaller,

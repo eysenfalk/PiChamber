@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -191,6 +191,28 @@ describe('Pi session daemon extension bridging', () => {
     await daemon?.stop();
     daemon = undefined;
     sessions = [];
+  });
+
+  it('lists a pending dialog in the owner overview until it is answered (#20)', async () => {
+    // The overview reads the orchestration registry from the data dir; keep it out of the host's.
+    vi.stubEnv('PICHAMBER_DATA_DIR', await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-ext-data-')));
+    try {
+      const { client, session } = await startWithExtensibleSession();
+      const answer = session.boundBindings.uiContext.select('Pick one:', ['A', 'B']);
+      const opened = await client.next((message) => message.kind === 'event' && message.event === 'extension.dialog');
+      const listed = await client.request('orchestration.overview', {});
+      expect(listed.result.value.dialogs).toEqual([expect.objectContaining({
+        sessionId: 'pi-session-ext',
+        orchestratorSessionId: null,
+        dialog: expect.objectContaining({ requestId: opened.payload.requestId, method: 'select', title: 'Pick one:', options: ['A', 'B'] }),
+      })]);
+      await client.request('extensions.respond', { requestId: opened.payload.requestId, value: 'A' });
+      await expect(answer).resolves.toBe('A');
+      expect((await client.request('orchestration.overview', {})).result.value.dialogs).toEqual([]);
+      await client.close();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('binds extensions into every created runtime and resolves blocking dialogs via extensions.respond', async () => {

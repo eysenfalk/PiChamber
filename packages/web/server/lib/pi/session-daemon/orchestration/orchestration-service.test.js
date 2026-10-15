@@ -17,6 +17,7 @@ import { createOrchestrationRegistryStore } from './registry-store.js';
 import { EVENTS_MESSAGE } from './wakes.js';
 import { findPersistedSessionByOperation } from './session-lookup.js';
 import { readGitBranch } from './host-info.js';
+import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
 
 const ROLES = {
   'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
@@ -157,7 +158,7 @@ const createHarness = ({ workerLimit = 4, activity = new Map(), now, file = regi
       return { sessionId: runtime.session.sessionId, cwd, sessionFile: runtime.session.sessionFile };
     }),
     // The orchestration service's own sends (spawn task, session_send) are the orchestrator's writes.
-    sendInput: vi.fn(async ({ sessionId }) => input(sessionId, { source: 'orchestrator' })),
+    sendInput: vi.fn(async ({ sessionId, source = 'orchestrator' }) => input(sessionId, { source })),
     abortSession: vi.fn(async (sessionId) => { states.set(sessionId, 'idle'); }),
     abortRun: vi.fn(() => true),
     readSettings: async () => ({ workerLimit, gate, roles: ROLES, wakes: { coalesceMs: 0 }, orchestrators }),
@@ -2171,6 +2172,75 @@ describe('worker reports and digest', () => {
     expect((await harness.workers())['worker-1'].question).toBeUndefined();
   });
 
+  it('lets the owner answer an open question: an owner prompt, closed only after Pi accepted it', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const brief = { options: ['v1', 'v2'], recommendation: 'v2, it is maintained', counterargument: 'v1 is already wired', revisit: 'when v1 gets a fix' };
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief })).openQuestion;
+    expect((await harness.workers())['worker-1'].question).toMatchObject({ id, brief });
+    const sends = () => deps.sendInput.mock.calls.length;
+    const before = sends();
+
+    // Another id, another session or a non worker change nothing and send nothing.
+    await expectCode(service.answer({ sessionId: 'worker-1', questionId: 'q-other', text: 'v2' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    await expectCode(service.answer({ sessionId: 'orch', questionId: id, text: 'v2' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect(sends()).toBe(before);
+
+    // A prompt Pi refuses leaves the question open.
+    deps.sendInput.mockImplementationOnce(async () => { throw Object.assign(new Error('busy'), { code: 'SESSION_BUSY' }); });
+    await expectCode(service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' }), 'SESSION_BUSY');
+    expect((await harness.workers())['worker-1'].question?.id).toBe(id);
+
+    await expect(service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' }))
+      .resolves.toEqual({ sessionId: 'worker-1', questionId: id, accepted: true, resolved: true });
+    expect(deps.sendInput).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 'worker-1', text: 'v2', delivery: 'prompt', source: 'owner' }));
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    await harness.settle('worker-1', 'used v2');
+    // Answered once: the closed id is no longer open.
+    await expectCode(service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+  });
+
+  it('keeps a question that replaced the answered one while the answer was sent', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner' })).openQuestion;
+    let replaced;
+    deps.sendInput.mockImplementationOnce(async ({ sessionId, source }) => {
+      replaced = (await report(harness, { kind: 'blocked', summary: 'need a key', audience: 'owner', resolves: id })).openQuestion;
+      return harness.input(sessionId, { source });
+    });
+    await expect(service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' })).resolves.toMatchObject({ accepted: true, resolved: false });
+    expect((await harness.workers())['worker-1'].question?.id).toBe(replaced);
+  });
+
+  it('marks an open question answered without a prompt, and nothing else', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'orchestrator' })).openQuestion;
+    const before = deps.sendInput.mock.calls.length;
+    await expectCode(service.resolve({ sessionId: 'worker-1', questionId: 'q-other' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect((await harness.workers())['worker-1'].question?.id).toBe(id);
+    await expect(service.resolve({ sessionId: 'worker-1', questionId: id })).resolves.toEqual({ sessionId: 'worker-1', questionId: id, resolved: true });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect(deps.sendInput.mock.calls.length).toBe(before);
+    await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+  });
+
+  it('takes a brief only with a question or blocker, and only with a recommendation', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await expectCode(report(harness, { kind: 'progress', summary: 'x', brief: { recommendation: 'y' } }), 'INVALID_ARGUMENT');
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'owner', brief: { options: ['a'] } }), 'INVALID_ARGUMENT');
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'owner', brief: { recommendation: 'y', extra: 1 } }), 'INVALID_ARGUMENT');
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+  });
+
   it('does not repeat a report retried with the same clientRequestId', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
@@ -2296,6 +2366,88 @@ describe('worker reports and digest', () => {
     }
     const size = JSON.stringify(await digest(harness)).length;
     expect(size).toBeLessThan(transcripts / 10);
+  });
+});
+
+describe('owner overview (#20)', () => {
+  const dialog = (id, title = 'Pick one') => ({ id, method: 'select', title, options: ['a', 'b'] });
+
+  it('groups every worker under its orchestrator with slots, host, pull request status and pending dialogs, activating nothing', async () => {
+    const pending = [];
+    const harness = createHarness({ overrides: { listPendingDialogs: () => pending } });
+    const { service, deps } = harness;
+    harness.add(createRuntime({ sessionId: 'orch-2' }));
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await service.call('orch-2', 'session_spawn', { cwd: '/work/b', task: 'two' });
+    await harness.settle('worker-1', 'first');
+    await service.call('worker-1', 'worker_report', { kind: 'question', summary: 'Which API?', audience: 'owner' });
+    await service.call('worker-2', 'worker_report', { kind: 'ready', summary: 'PR up', pullRequest: 12 });
+    await service.prWatch.apply([{ sessionId: 'worker-2', repository: 'acme/app', number: 12, read: {
+      state: 'open', headSha: 'abc1234def', url: 'https://github.com/acme/app/pull/12', comments: 0, checks: { total: 2, pending: 1, state: 'pending' },
+    } }]);
+    pending.push({ sessionId: 'worker-2', dialog: dialog('d-1') }, { sessionId: 'loose', dialog: dialog('d-2', 'Trust?') });
+    deps.activateSession.mockClear();
+
+    const overview = await service.overview();
+
+    expect(deps.activateSession).not.toHaveBeenCalled();
+    expect(overview.limit).toEqual({ workerLimit: 4, used: 2 });
+    expect(overview.host).toEqual({ load1: 1, cores: 8, availableBytes: 16 * GIB, workers: 2, limit: 4 });
+    const byId = Object.fromEntries(overview.orchestrators.map((group) => [group.sessionId, group]));
+    // Every marked session is listed, with or without workers.
+    expect(Object.keys(byId).sort()).toEqual([...MARKED].sort());
+    expect(byId.orch).toMatchObject({ marked: true, title: 'title orch' });
+    expect(byId.other).toMatchObject({ marked: true, title: null, workers: [] });
+    expect(byId.orch.workers).toEqual([expect.objectContaining({
+      sessionId: 'worker-1',
+      question: expect.objectContaining({ kind: 'question', audience: 'owner', summary: 'Which API?' }),
+      pullRequestStatus: null,
+    })]);
+    expect(byId['orch-2'].workers).toEqual([expect.objectContaining({
+      sessionId: 'worker-2',
+      pullRequest: { number: 12, repository: 'acme/app' },
+      pullRequestStatus: { status: 'open', url: 'https://github.com/acme/app/pull/12', head: 'abc1234def', checks: { state: 'pending', total: 2, pending: 1 } },
+    })]);
+    expect(overview.dialogs).toEqual([
+      { sessionId: 'worker-2', title: 'title worker-2', directory: '/work/b', orchestratorSessionId: 'orch-2', dialog: dialog('d-1') },
+      { sessionId: 'loose', title: null, directory: null, orchestratorSessionId: null, dialog: dialog('d-2', 'Trust?') },
+    ]);
+  });
+
+  it('names a pending dialog of a worker in the digest (S8)', async () => {
+    const pending = [];
+    const harness = createHarness({ overrides: { listPendingDialogs: () => pending } });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const digest = () => harness.service.call('orch', 'orchestration_digest', {});
+    expect((await digest()).workers[0].dialog).toBeNull();
+    pending.push({ sessionId: 'other-session', dialog: dialog('d-0') }, { sessionId: 'worker-1', dialog: { requestId: 'd-1', method: 'confirm', title: 'Allow push?', message: 'long text' } });
+    expect((await digest()).workers[0].dialog).toEqual({ requestId: 'd-1', method: 'confirm', title: 'Allow push?' });
+  });
+
+  it('tells the orchestrator to answer with resolves and to leave owner questions and dialogs to the owner (S8)', () => {
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('`resolves` set to its id');
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('Questions with `audience: owner` and pending dialogs belong to the owner');
+    expect(ORCHESTRATION_INSTRUCTIONS).toContain('a pending dialog');
+  });
+
+  it('keeps an orchestrator whose mark was removed while it still owns workers', async () => {
+    let orchestrators = ['orch'];
+    const harness = createHarness();
+    const readSettings = harness.deps.readSettings;
+    const unmarked = createHarness({ file: harness.file, overrides: { readSettings: async () => ({ ...await readSettings(), orchestrators }) } });
+    await unmarked.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    orchestrators = [];
+    const overview = await unmarked.service.overview();
+    expect(overview.orchestrators).toEqual([expect.objectContaining({ sessionId: 'orch', marked: false, workers: [expect.objectContaining({ sessionId: 'worker-1' })] })]);
+  });
+
+  it('rejects when the registry or the settings cannot be read, never an empty overview', async () => {
+    const broken = Object.assign(new Error('unreadable'), { code: 'ORCHESTRATION_REGISTRY_INVALID' });
+    const registryFails = createHarness();
+    registryFails.registry.read = async () => { throw broken; };
+    await expectCode(registryFails.service.overview(), 'ORCHESTRATION_REGISTRY_INVALID');
+    const settingsFail = createHarness({ overrides: { readSettings: async () => { throw broken; } } });
+    await expectCode(settingsFail.service.overview(), 'ORCHESTRATION_REGISTRY_INVALID');
   });
 });
 

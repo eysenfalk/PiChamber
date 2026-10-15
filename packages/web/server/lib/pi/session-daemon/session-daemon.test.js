@@ -1384,6 +1384,34 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('answers the private overview command, and a broken registry is an error result, not an empty overview', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-overview-'));
+    vi.stubEnv('PICHAMBER_DATA_DIR', root);
+    const endpoint = testDaemonEndpoint(root);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir: join(root, 'agent'),
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.overview', {})).resolves.toMatchObject({
+      result: { value: { orchestrators: [], dialogs: [], limit: { used: 0 }, host: expect.any(Object) } },
+    });
+    await mkdir(join(root, 'pi'), { recursive: true });
+    await writeFile(join(root, 'pi', 'orchestration-registry.json'), '{ broken');
+    const broken = await client.request('orchestration.overview', {});
+    expect(broken.result).toEqual({ error: { code: expect.any(String) } });
+    // The connection survives the failed read.
+    await expect(client.request('runtime.health', {})).resolves.toMatchObject({ result: { state: 'ready' } });
+    await client.close();
+  });
+
   it('keeps live message aliases across idle disposal and runtime reopening', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-message-alias-idle-'));
     const endpoint = testDaemonEndpoint(root);

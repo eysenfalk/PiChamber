@@ -9,6 +9,7 @@ import {
   defaultExpanded,
   folderScopesByProject,
   formatTreeAsText,
+  resolveWorkerFilter,
   sessionsByProject,
   visibleRows,
   type NodeKey,
@@ -199,6 +200,73 @@ describe('buildWorkspaceTree', () => {
       '  pinned  [pinned]',
       '  fresh',
     ].join('\n'));
+  });
+
+  describe('worker filter', () => {
+    const sessions = [
+      ...baseSessions,
+      session('orchestrator', '/src/notes', 0.2),
+      session('worker-a', '/src/notes', 0.5, { parentID: 'orchestrator' }),
+      session('worker-b', '/wt/45-permissions', 1, { parentID: 'orchestrator' }),
+      session('worker-b-fork', '/wt/45-permissions', 1.5, { parentID: 'worker-b' }),
+    ];
+    const workerIds = new Set(['worker-a', 'worker-b']);
+
+    test('hide workers drops the workers and keeps everything else, a worker\'s fork included', () => {
+      const tree = buildWorkspaceTree(world({ sessions, workerFilter: { mode: 'hide', workerIds } }));
+      const ids = sessionIdsInTree(tree);
+      expect(ids).not.toContain('worker-a');
+      expect(ids).not.toContain('worker-b');
+      expect(ids).toContain('orchestrator');
+      expect(ids).toContain('worker-b-fork');
+      expect(tree.placement.has('worker-a')).toBe(false);
+      expect(render(tree, ['p:notes'])).toContain(['▾ notes  2', '  orchestrator', '  note'].join('\n'));
+    });
+
+    test('only workers keeps just the workers, as roots in the container of their own directory', () => {
+      const tree = buildWorkspaceTree(world({ sessions, workerFilter: { mode: 'only', workerIds } }));
+      expect(sessionIdsInTree(tree).sort()).toEqual(['worker-a', 'worker-b']);
+      expect(render(tree, ['p:pichamber', 'p:notes'])).toBe([
+        'Chats  0',
+        '▾ PiChamber  1',
+        '  main  0',
+        '  ▸ 45-permissions  1',
+        '  39-reload-restart  0',
+        '▾ notes  1',
+        '  worker-a',
+      ].join('\n'));
+    });
+
+    test('while the worker ids are unknown every mode shows all sessions', () => {
+      const all = sessionIdsInTree(buildWorkspaceTree(world({ sessions })));
+      for (const mode of ['all', 'hide', 'only'] as const) {
+        const tree = buildWorkspaceTree(world({ sessions, workerFilter: resolveWorkerFilter(mode, null) }));
+        expect(sessionIdsInTree(tree)).toEqual(all);
+      }
+      expect(resolveWorkerFilter('all', workerIds)).toBeUndefined();
+      expect(resolveWorkerFilter('only', workerIds)).toEqual({ mode: 'only', workerIds });
+    });
+
+    test('only workers with no known worker leaves an empty tree', () => {
+      const tree = buildWorkspaceTree(world({ sessions, workerFilter: { mode: 'only', workerIds: new Set() } }));
+      expect(tree.sessionCount).toBe(0);
+    });
+
+    test('the filter and the quick search combine', () => {
+      const tree = buildWorkspaceTree(world({ sessions, query: 'worker', workerFilter: { mode: 'only', workerIds } }));
+      expect(tree.matchCount).toBe(2);
+      expect(sessionIdsInTree(tree).sort()).toEqual(['worker-a', 'worker-b']);
+    });
+
+    test('a waiting worker marks itself and rolls up to its collapsed parent and container', () => {
+      const activity = new Map<string, SessionActivity>([['worker-a', 'waiting']]);
+      const tree = buildWorkspaceTree(world({ sessions, activity }));
+      expect(render(tree, ['p:notes'])).toContain('▾ notes  3  [waiting]\n  ▸ orchestrator  ⑂1  [waiting]');
+      expect(render(tree, ['p:notes', 's:orchestrator'])).toContain('    worker-a  [waiting]');
+      const orchestrator = tree.roots.find((root) => root.key === 'p:notes')?.children.find((child) => child.key === 's:orchestrator');
+      expect(orchestrator?.activity).toBeUndefined();
+      expect(orchestrator?.children[0]?.activity).toBe('waiting');
+    });
   });
 
   test('cuts a container after five sessions and reveals the rest only on request', () => {
