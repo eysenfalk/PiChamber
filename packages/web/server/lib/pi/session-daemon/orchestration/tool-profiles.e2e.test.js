@@ -36,6 +36,7 @@ const respond = async (context) => {
   const results = messages.slice(userIndex + 1).filter((message) => message.role === 'toolResult');
   const last = results.at(-1);
   log.push({ task, tools, result: last ? { toolName: last.toolName, isError: last.isError, text: textOf(last) } : undefined });
+  if (task.startsWith('A worker event')) return fauxAssistantMessage('PARENT WOKEN');
   if (task.includes('ORCHESTRATE')) {
     if (last) return fauxAssistantMessage('PARENT SPAWNED');
     return call('mcp__pichamber__session_spawn', {
@@ -130,7 +131,9 @@ describe('worker tool profiles through the real daemon', () => {
     await writeFile(join(agentDir, 'extensions', 'faux-profiles.ts'), fauxExtension(piAiFauxUrl(), { workerDir, target }));
     await writeFile(join(agentDir, 'extensions', 'notes-tool.ts'), notesExtension);
     process.env.PICHAMBER_DATA_DIR = join(root, 'data');
-    disableHostGate(process.env.PICHAMBER_DATA_DIR);
+    // Wakes without delay, so the orchestrator's wake turn runs and ends
+    // before the restart instead of racing the daemon stop.
+    disableHostGate(process.env.PICHAMBER_DATA_DIR, { wakes: { coalesceMs: 0 } });
     const endpoint = join(root, 'daemon.sock');
     const start = async () => {
       daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir });
@@ -139,16 +142,23 @@ describe('worker tool profiles through the real daemon', () => {
       await client.authenticate();
       return client;
     };
+    // A missing answer fails with what the model saw, not only a timeout.
     const answer = (client, text) => client.next((message) => message.event === 'assistant.message.end'
-      && message.payload?.text === text, 60_000);
+      && message.payload?.text === text, 60_000).catch((error) => {
+      const seen = (globalThis.__pichamberProfileLog ?? []).map(({ task, result }) => ({ task: task.slice(0, 80), result }));
+      const ends = client.events.filter((message) => message.event === 'assistant.message.end').map((message) => message.payload?.text);
+      throw new Error(`${error.message} (${text}); model requests: ${JSON.stringify(seen)}; answers: ${JSON.stringify(ends)}`);
+    });
 
     let client = await start();
     const created = await client.request('sessions.create', { cwd: projectDir, model: { providerId: 'faux', modelId: 'faux-1' } });
     const parentId = created.result.session.id;
     markOrchestrator(process.env.PICHAMBER_DATA_DIR, parentId);
     const workerDone = answer(client, 'WORKER DONE');
+    const parentWoken = answer(client, 'PARENT WOKEN');
     await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE a review' });
     const workerId = (await workerDone).payload.sessionId;
+    expect((await parentWoken).payload.sessionId).toBe(parentId);
 
     const log = globalThis.__pichamberProfileLog;
     const parentTools = log.find((entry) => entry.task.includes('ORCHESTRATE')).tools;
