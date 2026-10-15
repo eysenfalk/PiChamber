@@ -72,7 +72,14 @@ export function connectClient(endpoint) {
     request(command, payload = {}) {
       const requestId = `request-${Math.random()}`;
       socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId, command, payload })}\n`);
-      return next((message) => (message.kind === 'response' && message.requestId === requestId) || message.kind === 'error');
+      const sent = messages.length;
+      // A failed request gets an error frame without its requestId, and the
+      // daemon closes the connection; fail with the code instead of returning it.
+      return next((message) => (message.kind === 'response' && message.requestId === requestId)
+        || (message.kind === 'error' && messages.indexOf(message) >= sent)).then((message) => {
+        if (message.kind === 'error') throw new Error(`The daemon rejected ${command}: ${message.error?.code}`);
+        return message;
+      });
     },
     next,
     events: messages,

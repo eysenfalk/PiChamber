@@ -8,6 +8,7 @@ import { workerPreamble } from './instructions.js';
 import { authorize, needsOwnership } from './policy.js';
 import { PROCESS_INSTANCE, createProcessIdentity, isPidAlive, readProcessStartTime } from './process-identity.js';
 import { ORCHESTRATION_TOOL_NAMES, ORCHESTRATION_TOOLS } from './tool-contracts.js';
+import { ROLE_PROFILES, TOOL_PROFILES, recordedProfile, resolveProfile } from './tool-profiles.js';
 import { createPrWatch } from './pr-watch.js';
 import { createWakes } from './wakes.js';
 import {
@@ -75,6 +76,10 @@ const customEntries = (runtime, customType) => {
 };
 
 const lineageOf = (runtime) => customEntries(runtime, LINEAGE_ENTRY).at(-1)?.data;
+
+// What a worker reports as its profile; one without a record runs `full`,
+// null is a record that cannot be read (the worker runs fail closed).
+const profileView = (profile) => (profile === undefined ? resolveProfile({ profile: 'full' }) : profile);
 
 /** Worker records of a parent, in spawn order, with their stopped flag. */
 const childRecordsOf = (runtime) => {
@@ -356,6 +361,7 @@ export function createOrchestrationService(deps) {
       title: worker.title,
       cwd: worker.cwd,
       role: worker.role,
+      profile: profileView(worker.profile),
       branch: await resolveBranch(worker.cwd).catch(() => undefined),
       state,
       lifecycle: worker.state,
@@ -398,6 +404,8 @@ export function createOrchestrationService(deps) {
       workerLimit: settings.workerLimit,
       freeSlots: Math.max(0, settings.workerLimit - slotsInUse(document)),
       roles: settings.roles,
+      profiles: TOOL_PROFILES,
+      roleProfiles: ROLE_PROFILES,
       models: await listModels(),
       workers,
       ...(operations.length ? { operations } : {}),
@@ -457,6 +465,7 @@ export function createOrchestrationService(deps) {
                 parentDirectory: runtime.cwd,
                 opId,
                 ...(intent.role ? { role: intent.role } : {}),
+                ...(intent.profile ? { profile: intent.profile } : {}),
               },
             });
           } catch (error) {
@@ -541,12 +550,14 @@ export function createOrchestrationService(deps) {
     // The registry holds the directory with the slot; spellings fold here.
     const cwd = await canonicalDirectory(args.cwd);
     const { model, thinking } = await resolveModel(args, settings);
+    const profile = resolveProfile(args);
     const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
     const intent = {
       cwd,
       title,
       brief: `${workerPreamble(callerSessionId)}${args.task}`,
       ...(args.role ? { role: args.role } : {}),
+      profile,
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
       ...(args.issue ? { issue: args.issue } : {}),
@@ -590,6 +601,7 @@ export function createOrchestrationService(deps) {
       cwd: worker?.cwd,
       title: worker?.title,
       ...(worker?.role ? { role: worker.role } : {}),
+      profile: profileView(worker?.profile).name,
       ...(worker?.model ? { model: worker.model } : {}),
       ...(outcome.deduplicated ? { deduplicated: true } : {}),
     };
@@ -613,6 +625,8 @@ export function createOrchestrationService(deps) {
       role: args.role,
       ...(args.model ? { model: args.model } : {}),
       ...(args.thinking ? { thinking: args.thinking } : {}),
+      ...(args.profile ? { profile: args.profile } : {}),
+      ...(args.excludeExtensions ? { excludeExtensions: args.excludeExtensions } : {}),
       issue: { repo: args.issue.repo, number: args.issue.number },
       branch,
     }, options, context);
@@ -681,7 +695,7 @@ export function createOrchestrationService(deps) {
       ...snapshot(args.sessionId, runtime),
       cwd: runtime.cwd,
       title: runtime.session.sessionManager?.getSessionName?.(),
-      ...(lineage ? { parentSessionId: lineage.parentSessionId } : {}),
+      ...(lineage ? { parentSessionId: lineage.parentSessionId, profile: profileView(recordedProfile(lineage)) } : {}),
       messages,
     };
   };
@@ -1015,6 +1029,7 @@ export function createOrchestrationService(deps) {
       sessionId,
       title: worker.title ?? null,
       role: worker.role ?? null,
+      profile: profileView(worker.profile),
       issue: worker.issue ?? null,
       branch: (await resolveBranch(worker.cwd).catch(() => undefined)) ?? worker.branch ?? null,
       worktree: worker.cwd ?? null,
@@ -1793,6 +1808,9 @@ export function createOrchestrationService(deps) {
     verifyCaller,
     // 'worker' | 'orchestrator' | 'unmarked'; decides tools and instructions.
     sessionKind: (sessionManager) => kindOf(sessionManager.getSessionId(), { session: { sessionManager } }),
+    // The recorded profile of a session (see `recordedProfile`); read on
+    // every tool call and runtime build, so a restart keeps it.
+    sessionProfile: (sessionManager) => recordedProfile(lineageOf({ session: { sessionManager } })),
     toolNames: ORCHESTRATION_TOOL_NAMES,
   };
 }
