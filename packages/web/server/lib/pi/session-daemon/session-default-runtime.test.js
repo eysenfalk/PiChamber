@@ -474,7 +474,6 @@ describe('default runtime after session deletion', () => {
 
     expect(await request('sessions.abort', { sessionId: 'session-no-dir' })).toMatchObject({ ok: true });
     expect((await request('sessions.open', { sessionId: 'session-no-dir' })).error?.code).toBe('SESSION_DIRECTORY_MISSING');
-    // No lease is left and the session stays on disk.
     expect(await readSessionLeaseOwner({ agentDir, cwd: worktree, sessionId: 'session-no-dir' })).toBeNull();
     expect(existsSync(file)).toBe(true);
   });
