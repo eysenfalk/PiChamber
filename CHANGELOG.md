@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-10-15
+
+Mobile fixes and an orchestrator wake fix since 1.0.11.
+
+- **Android navigation bar (#41, #145, #195).** On phones the composer, the sessions drawer and the Add folder dialog end above the system navigation bar, and the scroll to bottom button no longer covers the last message.
+- **Rename on the phone (#143, #196).** Renaming a session in the mobile drawer opens a dialog with a full width name field. Desktop keeps the inline rename.
+- **Landscape phones (#148, #197).** A phone turned to landscape keeps the mobile layout (drawer, composer capped at a third of the height, minimize handle) instead of switching to the desktop layout when it is 768 px or wider. Tablets and desktops keep their layout.
+- **Orchestrator wakes (#190, #198).** A worker report that arrives while an idle orchestrator session is being closed now waits for it, reopens the orchestrator and is delivered once instead of being lost.
+
 ## [1.0.11] - 2026-10-15
 
 Worker tool profiles, Pi style slash search and session list and daemon fixes since 1.0.10.
