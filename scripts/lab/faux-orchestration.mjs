@@ -41,10 +41,32 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;b
 </body></html>`;
 // Issue #151: REVIEW starts a review worker (tool profile read-only) that tries to change the README.
 export const LAB_REVIEW_WORKER_TITLE = 'Lab: reviewer';
-// Issue #20: ASK starts a worker that asks the owner a question with a brief; the control center answers it.
+// Issue #20, #210: ASK starts a worker that asks the owner a question with a full brief. The owner
+// answers it with an option button; the answer arrives as the option's label, and the worker then
+// reports a blocker for the owner, which the owner answers with free text.
 export const LAB_ASKER_TITLE = 'Lab: asker';
 export const LAB_ASKER_QUESTION = 'Should the README check fail when the license section is missing?';
-export const LAB_ASKER_FOLLOW_UP = 'Should the check also cover the CHANGELOG?';
+export const LAB_ASKER_OPTIONS = [
+  { label: 'Fail the check', consequence: 'A README without a license blocks the release; three old branches turn red at once.', recommended: true },
+  { label: 'Warn only', consequence: 'Everything stays green; a missing license shows up only in review.' },
+  { label: 'Fail on new branches only', consequence: 'Old branches stay green; the check needs a list of exempt branches that someone keeps.' },
+];
+export const LAB_ASKER_BLOCKER = 'The license check cannot read the license list from the CI cache.';
+const LAB_ASKER_QUESTION_BRIEF = {
+  context: 'I tighten the README check of this project. Three old branches have no license section, so how strict the check is decides which of them turn red.',
+  options: LAB_ASKER_OPTIONS,
+  recommendation: 'Fail the check: a missing license blocks every release anyway, and the three old branches are easy to fix.',
+  counterargument: 'Old branches turn red at once and someone has to fix them before their next release.',
+  revisit: 'When a project ships without a license on purpose.',
+  meanwhile: 'I keep the title and install checks going; the license part waits for your answer.',
+};
+const LAB_ASKER_BLOCKER_BRIEF = {
+  context: 'The license check reads the list of allowed licenses from the shared CI cache. The lab runner has no access to that cache, so the check cannot run at all.',
+  tried: 'Rebuilt the cache key and ran the check without the cache; both fail with "permission denied" on the cache bucket.',
+  needed: 'Read access for the lab runner to the CI cache, or your OK to keep a copy of the license list in the repository.',
+  recommendation: 'Keep the copy: it is 40 lines and changes about once a year.',
+  meanwhile: 'The license part of the check stays off; the title and install checks run.',
+};
 // Long enough for the owner to ask the orchestrator something while the worker runs.
 const WORKER_THINK_MS = 10000;
 
@@ -91,28 +113,22 @@ const respond = async (context) => {
   if (/^(A|\\d+) worker events?:/.test(text) && text.includes(${JSON.stringify(LAB_ASKER_TITLE)})) {
     return fauxAssistantMessage('The asker has a question for the owner. I leave that question to you.');
   }
-  // The first question comes with the task, the follow-up with the owner's answer.
-  const asks = task.includes('QUESTION TASK') ? ${JSON.stringify(LAB_ASKER_QUESTION)} : task.startsWith('ANSWER') ? ${JSON.stringify(LAB_ASKER_FOLLOW_UP)} : null;
-  if (asks && last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__worker_report') {
-    return fauxAssistantMessage(last.isError ? 'The question was refused: ' + textOf(last)
-      : (task.startsWith('ANSWER') ? 'Got your answer (' + task + '). ' : '') + 'I asked the owner and wait for the answer.');
+  // The question comes with the task. A tap on an option answers with its label (and a note as a new
+  // paragraph); then the worker is blocked and tells the owner. A free text answer starts with ANSWER.
+  const chosen = ${JSON.stringify(LAB_ASKER_OPTIONS.map((option) => option.label))}.find((label) => task === label || task.startsWith(label + '\\n\\n'));
+  const asking = task.includes('QUESTION TASK') || chosen !== undefined;
+  if (asking && last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__worker_report') {
+    return fauxAssistantMessage(last.isError ? 'The report was refused: ' + textOf(last)
+      : chosen ? 'Got your answer (' + task + '). I am blocked and told the owner what I need.' : 'I asked the owner and wait for the answer.');
   }
-  if (asks && last?.role === 'user') {
-    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__worker_report', {
-      kind: 'question', audience: 'owner', summary: asks,
-      brief: {
-        context: 'I tighten the README check of this project. Old branches have no license section, so how strict the check is decides which of them turn red.',
-        options: [
-          { label: 'Fail the check', consequence: 'A README without a license blocks the release; old branches turn red at once.', recommended: true },
-          { label: 'Warn only', consequence: 'Everything stays green; a missing license shows up only in review.' },
-        ],
-        meanwhile: 'I keep the title and install checks going; the license part waits.',
-        recommendation: 'Fail the check: a missing license blocks every release anyway.',
-        counterargument: 'Old branches without a license would turn red at once.',
-        revisit: 'When a project ships without a license on purpose.',
-      },
-      clientRequestId: 'lab-question-' + Date.now(),
-    })], { stopReason: 'toolUse' });
+  if (asking && last?.role === 'user') {
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__worker_report', chosen
+      ? { kind: 'blocked', audience: 'owner', summary: ${JSON.stringify(LAB_ASKER_BLOCKER)}, brief: ${JSON.stringify(LAB_ASKER_BLOCKER_BRIEF)}, clientRequestId: 'lab-blocked-' + Date.now() }
+      : { kind: 'question', audience: 'owner', summary: ${JSON.stringify(LAB_ASKER_QUESTION)}, brief: ${JSON.stringify(LAB_ASKER_QUESTION_BRIEF)}, clientRequestId: 'lab-question-' + Date.now() },
+    )], { stopReason: 'toolUse' });
+  }
+  if (task.startsWith('ANSWER') && last?.role === 'user') {
+    return fauxAssistantMessage('Got your answer (' + task + '). I go on with the license check.');
   }
   if (task.includes('REVIEW TASK') && !/^(A|\\d+) worker events?:/.test(text)) {
     const resultOf = (name) => textOf(results.find((result) => result.toolName === name)).trim();

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
 import { EVENTS_MESSAGE } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
-import { LAB_ASKER_FOLLOW_UP, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -107,16 +107,17 @@ describe('tours.mjs format', () => {
     expect(() => toolProfilesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
 
-  test('control-center answers the asker from the inbox, marks the follow-up answered and covers both themes and mobile', () => {
+  test('control-center answers the question with an option and the blocker with free text, in both themes and on mobile', () => {
     const tour = controlCenterTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
     expect(tour.name).toBe('control-center');
     const actions = tour.steps.flatMap(step => step.actions);
-    expect(actions.filter(action => action.type === 'type').map(action => action.value)).toEqual(['ASK', 'ANSWER: fail the check']);
+    expect(actions.filter(action => action.type === 'type').map(action => action.value)).toEqual(['ASK', 'ANSWER: keep the copy']);
+    expect(actions).toContainEqual({ type: 'click', selector: '[aria-label="Decision inbox"] [data-inbox-option="Fail the check"]' });
     expect(actions).toContainEqual({ type: 'click', text: 'Send answer' });
-    expect(actions).toContainEqual({ type: 'click', text: 'Mark answered' });
     const evidence = tour.steps.flatMap(step => step.evidence);
     expect(evidence).toContainEqual({ selector: '[aria-label="Decision inbox"] [data-inbox-question]', text: LAB_ASKER_QUESTION });
-    expect(evidence).toContainEqual({ selector: '[aria-label="Decision inbox"] [data-inbox-question]', text: LAB_ASKER_FOLLOW_UP });
+    expect(evidence).toContainEqual({ selector: '[aria-label="Decision inbox"] [data-inbox-question]', text: LAB_ASKER_BLOCKER });
+    expect(evidence).toContainEqual({ text: 'Until then:' });
     expect(evidence).toContainEqual({ selector: `button[aria-label="Open ${LAB_ASKER_TITLE}"]` });
     expect(new Set(tour.steps.map(step => `${step.viewport}/${step.theme}`))).toEqual(new Set(['desktop/light', 'desktop/dark', 'mobile/light', 'mobile/dark']));
     expect(() => controlCenterTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
