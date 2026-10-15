@@ -257,7 +257,8 @@ export function orchestrationTour(manifest) {
   const composer = '[data-chat-input="true"] .cm-content';
   const say = value => [{ type: 'type', selector: composer, value }, { type: 'press', key: 'Enter' }];
   const item = title => `[role="treeitem"][aria-label="${title}"]`;
-  const card = '[data-orchestration-result]';
+  // The daemon wakes the orchestrator with one pichamber.orchestration.events message per burst.
+  const wake = '[data-extension-type="pichamber.orchestration.events"]';
   const limit = '[data-settings-item="sessions.orchestration-worker-limit"]';
   const picker = role => `[aria-label="${role} model"]`;
   return validateTour({ name: 'orchestration', steps: [
@@ -276,19 +277,19 @@ export function orchestrationTour(manifest) {
     { caption: 'While the worker still runs, the owner asks the orchestrator and gets an answer right away.', viewport: 'desktop', theme: 'light',
       actions: [...say('STATUS?'), { type: 'wait', text: 'I can answer you meanwhile.' }],
       evidence: [{ text: 'I can answer you meanwhile.' }] },
-    { caption: 'The worker sits under its orchestrator in the sidebar. Its question returns as a compact result card.', viewport: 'desktop', theme: 'light',
+    { caption: 'The worker sits under its orchestrator in the sidebar. Its question wakes the orchestrator as one compact row.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: `${item(orchestrator.title)} button[aria-label="Expand forks"]` }, { type: 'wait', selector: item(worker) },
-        { type: 'wait', selector: card }, { type: 'wait', text: 'Write GO in its session.' }],
-      evidence: [{ selector: item(worker) }, { selector: card }, { text: 'Write GO in its session.' }] },
-    { caption: 'The owner opens the worker from the card and writes into it directly.', viewport: 'desktop', theme: 'light',
-      actions: [{ type: 'click', selector: `button[aria-label="Open worker ${worker}"]` }, { type: 'wait', text: 'I need your go: reply GO.' },
+        { type: 'wait', selector: wake }, { type: 'wait', text: 'Write GO in its session.' }],
+      evidence: [{ selector: item(worker) }, { selector: wake }, { text: 'Write GO in its session.' }] },
+    { caption: 'The owner opens the worker from the sidebar and writes into it directly.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: item(worker) }, { type: 'wait', text: 'I need your go: reply GO.' },
         ...say('GO'), { type: 'wait', text: 'WORKER DONE' }],
       evidence: [{ text: 'I need your go: reply GO.' }, { text: 'WORKER DONE' }] },
-    { caption: 'Back in the orchestrator, the second result card carries the finished work.', viewport: 'desktop', theme: 'light',
+    { caption: 'Back in the orchestrator, the worker reports done and wakes it a second time.', viewport: 'desktop', theme: 'light',
       actions: [{ type: 'click', selector: item(orchestrator.title) }, { type: 'wait', text: 'Nothing else is open.' }],
-      evidence: [{ selector: card, index: 1 }, { text: 'Nothing else is open.' }] },
+      evidence: [{ selector: wake, index: 1 }, { text: 'Nothing else is open.' }] },
     { caption: 'The same transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
-      evidence: [{ selector: `html.dark ${card}` }, { text: 'Nothing else is open.' }] },
+      evidence: [{ selector: `html.dark ${wake}` }, { text: 'Nothing else is open.' }] },
     { caption: 'The hosted mobile drawer nests the worker under the orchestrator too.', viewport: 'mobile', theme: 'dark',
       actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: 'button[aria-label="Open sessions and projects"]' },
         { type: 'click', selector: 'button[aria-label="Open sessions and projects"]' }, { type: 'wait', selector: `[data-mobile-sessions-drawer] ${item(worker)}` }],

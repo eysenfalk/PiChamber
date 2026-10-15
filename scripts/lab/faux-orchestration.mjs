@@ -71,7 +71,7 @@ const respond = async (context) => {
   if (text === 'RENDER') {
     return fauxAssistantMessage([fauxToolCall('html_render', { title: ${JSON.stringify(LAB_HTML_RENDER_TITLE)}, html: ${JSON.stringify(LAB_HTML_RENDER_PAGE)} })], { stopReason: 'toolUse' });
   }
-  if (task.includes('REVIEW TASK') && !text.startsWith('Worker "')) {
+  if (task.includes('REVIEW TASK') && !/^(A|\\d+) worker events?:/.test(text)) {
     const resultOf = (name) => textOf(results.find((result) => result.toolName === name)).trim();
     if (last?.role !== 'toolResult') {
       return fauxAssistantMessage([fauxToolCall('edit', { path: 'README.md', edits: [{ oldText: 'Synthetic proof lab project.', newText: 'Reviewed.' }] })], { stopReason: 'toolUse' });
@@ -97,6 +97,7 @@ const respond = async (context) => {
       clientRequestId: 'lab-review-' + Date.now(),
     })], { stopReason: 'toolUse' });
   }
+  if (last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__worker_report') return fauxAssistantMessage('WORKER DONE: the README check passed and is recorded.');
   if (last?.role === 'toolResult') {
     // The spawn call this result answers names the worker.
     const call = (context.messages ?? []).filter((message) => message.role === 'assistant').at(-1)?.content?.find?.((part) => part.type === 'toolCall');
@@ -104,11 +105,12 @@ const respond = async (context) => {
       ? 'The worker "${LAB_WORKTREE_WORKER.title}" runs in the worktree ${LAB_WORKTREE_WORKER.worktree}.'
       : 'The worker "${LAB_WORKER_TITLE}" is running. I stay available while it works.');
   }
-  // A finished worker reaches its orchestrator as a wake: "A worker event: ... run_finished: <reply>".
-  if (text.startsWith('A worker event') && text.includes('run_finished: REVIEW DONE')) {
+  // The daemon's wake: "A worker event:" or "N worker events:" (orchestration/wakes.js).
+  // A finished worker's reply follows "run_finished:".
+  if (/^(A|\\d+) worker events?:/.test(text) && text.includes('run_finished: REVIEW DONE')) {
     return fauxAssistantMessage('The reviewer could not change README.md: its read-only tool profile kept edit and write away from it.');
   }
-  if (text.startsWith('Worker "')) {
+  if (/^(A|\\d+) worker events?:/.test(text)) {
     return fauxAssistantMessage(text.includes('WORKER DONE')
       ? 'The worker finished: the README check passed. Nothing else is open.'
       : 'The worker waits for your go. Write GO in its session.');
@@ -117,7 +119,12 @@ const respond = async (context) => {
     await sleep(${WORKER_THINK_MS});
     return fauxAssistantMessage('I checked the README. Before I record the result, I need your go: reply GO.');
   }
-  if (text === 'GO') return fauxAssistantMessage('WORKER DONE: the README check passed and is recorded.');
+  // A run the owner starts sends no wake; the done report does, so the orchestrator hears about the result.
+  if (text === 'GO') {
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__worker_report', {
+      kind: 'done', summary: 'README check passed.', evidence: ['README checked'], noPullRequest: 'lab task', clientRequestId: 'lab-done-' + Date.now(),
+    })], { stopReason: 'toolUse' });
+  }
   if (text.includes('STATUS')) return fauxAssistantMessage('The worker is still working on the README check. I can answer you meanwhile.');
   if (text.includes('ORCHESTRATE')) {
     const inWorktree = text.includes('WORKTREE');
