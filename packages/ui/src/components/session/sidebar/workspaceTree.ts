@@ -194,31 +194,9 @@ const linkChildren = (builder: Builder, node: TreeNode): TreeNode => {
 };
 
 /**
- * The session whose container a session lives in: its topmost active ancestor.
- * Forks and orchestration workers follow their parent even when they run in
- * another directory, so a worker tree stays in one place. A parent cycle
- * anchors at the session where the walk meets it again.
+ * Session nodes with forks and workers nested under their parent. A child whose parent is in another
+ * container stays a root here: every session lives in the container of its own directory.
  */
-const sessionAnchors = (sessions: readonly Session[]): ((session: Session) => Session) => {
-  const byId = new Map(sessions.map((session) => [session.id, session]));
-  const anchors = new Map<string, Session>();
-  return (session) => {
-    const known = anchors.get(session.id);
-    if (known) return known;
-    const seen = new Set<string>([session.id]);
-    let anchor = session;
-    for (;;) {
-      const parent = anchor.parentID ? byId.get(anchor.parentID) : undefined;
-      if (!parent || seen.has(parent.id)) break;
-      seen.add(parent.id);
-      anchor = parent;
-    }
-    anchors.set(session.id, anchor);
-    return anchor;
-  };
-};
-
-/** Session nodes with forks nested under their parent; forks whose parent is outside the container stay roots. */
 const buildSessionForest = (builder: Builder, sessions: readonly Session[]): TreeNode[] => {
   const { input } = builder;
   const ids = new Set(sessions.map((session) => session.id));
@@ -446,7 +424,6 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   const ownedById = input.ownership.bySessionId;
   const globalIds = new Set(input.ownership.globalSessions.map((session) => session.id));
   const active = input.sessions.filter((session) => !session.time?.archived);
-  const anchorOf = sessionAnchors(active);
 
   type ProjectBucket = {
     project: WorkspaceTreeProject;
@@ -473,8 +450,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   const chats: Session[] = [];
   const unowned: Session[] = [];
   for (const session of active) {
-    const anchor = anchorOf(session);
-    const owner = ownedById.get(anchor.id);
+    const owner = ownedById.get(session.id);
     const bucket = owner ? buckets.get(owner.projectId) : undefined;
     if (owner && bucket) {
       const scope = normalizePath(owner.scopeDirectory) ?? owner.scopeDirectory;
@@ -484,7 +460,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
       else bucket.sessionsByScope.set(scope, [session]);
       continue;
     }
-    if (globalIds.has(anchor.id)) chats.push(session);
+    if (globalIds.has(session.id)) chats.push(session);
     else unowned.push(session);
   }
 
@@ -493,7 +469,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   // While discovery is incomplete, an ownerless session stays in the container it was in before.
   const stillOther: Session[] = [];
   for (const session of unowned) {
-    const container = input.discoveryComplete ? undefined : input.previous?.placement.get(anchorOf(session).id);
+    const container = input.discoveryComplete ? undefined : input.previous?.placement.get(session.id);
     let projectKey: NodeKey | undefined = container;
     while (projectKey && !projectKey.startsWith('p:')) projectKey = input.previous?.parents.get(projectKey);
     const bucketForPrevious = projectKey ? buckets.get(projectKey.slice(2)) : undefined;
@@ -596,7 +572,7 @@ export const buildWorkspaceTree = (input: WorkspaceTreeInput): WorkspaceTree => 
   if (stillOther.length > 0) {
     const byDirectory = new Map<string, Session[]>();
     for (const session of stillOther) {
-      const directory = sessionDirectory(anchorOf(session)) ?? '';
+      const directory = sessionDirectory(session) ?? '';
       const list = byDirectory.get(directory);
       if (list) list.push(session);
       else byDirectory.set(directory, [session]);

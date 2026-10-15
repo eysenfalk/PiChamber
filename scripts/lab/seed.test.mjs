@@ -61,6 +61,7 @@ test('SDK-written fixtures round trip, list per project, link a subsession and k
     const extension = await readFile(join(root, 'pi-agent/extensions/faux-orchestration.js'), 'utf8');
     expect(extension).toContain('pi.registerProvider(faux.provider)');
     expect(extension).toContain(JSON.stringify(orchestrator.directory));
+    expect(extension).toContain(JSON.stringify(join(root, 'projects', 'lab-alpha-worktrees', 'fetch-me')));
     // The pod's memory is below the host gate's minimum, so the seed switches the gate off for the lab server,
     // and it marks the orchestrator, since only a marked session orchestrates (#136).
     expect(JSON.parse(await readFile(join(root, 'pichamber/pi/settings.json'), 'utf8'))).toEqual({

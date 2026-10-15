@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, validateTour, VIEWPORTS } from './tours.mjs';
-import { LAB_WORKER_TITLE } from '../lab/faux-orchestration.mjs';
+import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
+import { LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -93,6 +93,18 @@ describe('tours.mjs format', () => {
     expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toContain('mobile/dark');
     expect(() => orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
+  test('worktree-worker spawns a worker in a linked worktree and proves it sits under that worktree', () => {
+    const tour = worktreeWorkerTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
+    expect(tour.name).toBe('worktree-worker');
+    const actions = tour.steps.flatMap(step => step.actions);
+    expect(actions.filter(action => action.type === 'type').map(action => action.value)).toEqual(['ORCHESTRATE WORKTREE']);
+    expect(actions).toContainEqual({ type: 'click', selector: `[data-tree-node="w:/one-worktrees/${LAB_WORKTREE_WORKER.worktree}"]` });
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ selector: `[role="treeitem"][aria-label="${LAB_WORKTREE_WORKER.title}"][aria-level="3"]` });
+    expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toEqual(['desktop/light', 'desktop/light', 'desktop/dark', 'mobile/dark']);
+    expect(() => worktreeWorkerTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+
   test('extension-messages opens the seeded session and proves the grouped rows and their Markdown', () => {
     const tour = extensionMessagesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Extensions', role: 'extensions' }] });
     expect(tour.name).toBe('extension-messages');
