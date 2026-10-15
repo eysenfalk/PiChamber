@@ -218,8 +218,22 @@ describe('default runtime after session deletion', () => {
     });
     await daemon.start();
     const request = (command, payload) => daemonRequest(endpoint, command, payload);
-    return { agentDir, runtimes, hold, request };
+    return { home, agentDir, runtimes, hold, request };
   };
+
+  // The UI asks for providers and settings on every load. The fresh session the
+  // default runtime starts for them was never asked for, so the listing must
+  // not show it as an untitled row that the UI then opens (#104, #89).
+  it('does not list the session the default runtime started for itself (#104, #89)', async () => {
+    const { home, runtimes, request } = await setup();
+
+    expectProviders(await request('providers.list', {}));
+    expect(runtimes.map((entry) => entry.sessionId)).toEqual(['fresh-1']);
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.error).toBeUndefined();
+    expect(listed.result.sessions).toEqual([]);
+  });
 
   // A second daemon with its own identity on the same agent directory, like
   // another PiChamber instance. It may open session-a only when the lease is
