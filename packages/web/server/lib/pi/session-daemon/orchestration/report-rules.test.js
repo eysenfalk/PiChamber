@@ -95,6 +95,19 @@ describe('worker report rules', () => {
 
   it('keeps an owner question to one line, one decision', () => {
     expect(reportViolation({ ...ownerQuestion(), summary: 'Lizenz pflicht?\nUnd der CHANGELOG?' })).toMatch(/one line/);
+    expect(reportViolation({ ...ownerQuestion(), summary: '   ' })).toMatch(/summary is empty/);
+  });
+
+  it('refuses a blank option label in any brief', () => {
+    const [first, second] = ownerQuestion().brief.options;
+    expect(reportViolation({ ...ownerQuestion(), brief: { ...ownerQuestion().brief, options: [first, { ...second, label: ' ' }] } })).toMatch(/brief\.options\[1\]\.label/);
+    expect(reportViolation({ kind: 'question', audience: 'orchestrator', summary: 'x', brief: { options: [{ label: ' ' }], recommendation: 'y' } })).toMatch(/brief\.options\[0\]\.label/);
+  });
+
+  it('asks a brief of the owner only for a question or blocker', () => {
+    expect(reportViolation({ kind: 'progress', summary: 'Tests written', audience: 'owner' })).toBeNull();
+    expect(reportViolation({ kind: 'ready', summary: 'Ready', audience: 'owner', pullRequest: 211 })).toBeNull();
+    expect(reportViolation({ kind: 'done', summary: 'Done', audience: 'owner', noPullRequest: 'read-only review', evidence: ['probe'] })).toBeNull();
   });
 
   it('needs what was tried and what is needed for an owner blocker; its options are optional', () => {

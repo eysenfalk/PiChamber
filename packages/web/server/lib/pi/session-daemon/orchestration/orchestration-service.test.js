@@ -2279,6 +2279,50 @@ describe('worker reports and digest', () => {
     await expect(report(harness, { kind: 'question', summary: 'Which API?', audience: 'orchestrator' })).resolves.toMatchObject({ openQuestion: expect.any(String) });
   });
 
+  // Round 1 review of #211: these go through the service entry point, so the contract and the rules run together.
+  it('refuses blank option labels and a blank summary of an owner question (Round 1, B1)', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const refusal = (args) => report(harness, args).then(() => null, (failure) => failure);
+    const [first, second] = OWNER_QUESTION.options;
+    const blankLabel = await refusal({ kind: 'question', summary: 'Which API?', audience: 'owner', brief: { ...OWNER_QUESTION, options: [{ ...first, label: '   ' }, second] } });
+    expect(blankLabel?.code).toBe('INVALID_ARGUMENT');
+    expect(blankLabel.message).toContain('brief.options[0].label');
+    const blankSummary = await refusal({ kind: 'question', summary: '   ', audience: 'owner', brief: OWNER_QUESTION });
+    expect(blankSummary?.code).toBe('INVALID_ARGUMENT');
+    expect(blankSummary.message).toContain('summary');
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+  });
+
+  it('keeps progress, ready and done for the owner valid without a brief (Round 1, B2)', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    await expect(report(harness, { kind: 'progress', summary: 'Tests written', audience: 'owner' })).resolves.toBeTruthy();
+    await expect(report(harness, { kind: 'ready', summary: 'Ready', audience: 'owner', pullRequest: 211 })).resolves.toBeTruthy();
+    await expect(report(harness, { ...done, audience: 'owner' })).resolves.toBeTruthy();
+  });
+
+  it('names every missing brief field of an owner report at once and still refuses wrong types (Round 1, S1)', async () => {
+    const harness = createHarness();
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    const refusal = (args) => report(harness, args).then(() => null, (failure) => failure);
+    const empty = await refusal({ kind: 'question', summary: 'Which API?', audience: 'owner', brief: {} });
+    expect(empty?.code).toBe('INVALID_ARGUMENT');
+    for (const field of ['brief.context', 'brief.options', 'brief.recommendation', 'brief.meanwhile']) expect(empty.message).toContain(field);
+    const blocker = await refusal({ kind: 'blocked', summary: 'need a key', audience: 'owner', brief: {} });
+    for (const field of ['brief.context', 'brief.tried', 'brief.needed', 'brief.recommendation', 'brief.meanwhile']) expect(blocker.message).toContain(field);
+    const unlabeled = await refusal({ kind: 'question', summary: 'Which API?', audience: 'owner', brief: { ...OWNER_QUESTION, options: [{ consequence: 'x', recommended: true }, OWNER_QUESTION.options[0]] } });
+    expect(unlabeled.message).toContain('brief.options[0].label');
+    for (const brief of [{ ...OWNER_QUESTION, context: 5 }, { ...OWNER_QUESTION, options: 'v2' }, { ...OWNER_QUESTION, options: [null, null] }, 'v2']) {
+      await expectCode(report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief }), 'INVALID_ARGUMENT');
+    }
+    // A brief for the orchestrator still needs a recommendation and labeled options.
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'orchestrator', brief: {} }), 'INVALID_ARGUMENT');
+    await expectCode(report(harness, { kind: 'question', summary: 'x', audience: 'orchestrator', brief: { options: [{}], recommendation: 'a' } }), 'INVALID_ARGUMENT');
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+  });
+
   it('does not repeat a report retried with the same clientRequestId', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });

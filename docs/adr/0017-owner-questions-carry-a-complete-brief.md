@@ -16,14 +16,14 @@ Alternatives considered: guidance only (the state before, which produced the pro
 
 ## Decision
 
-- A `worker_report` with `audience: owner` must carry a complete `brief`, and the daemon refuses an incomplete one with `INVALID_ARGUMENT` naming every missing part, before anything is stored.
-- A question needs: a one line `summary` (the one decision), `context`, at least two `options` as `{ label, consequence, recommended }` with a consequence each, distinct labels and exactly one recommended, a `recommendation` and `meanwhile`.
+- A `worker_report` of kind `question` or `blocked` with `audience: owner` must carry a complete `brief`, and the daemon refuses an incomplete one with `INVALID_ARGUMENT` naming every missing part, before anything is stored.
+- A question needs: a one line `summary` (the one decision), `context`, at least two `options` as `{ label, consequence, recommended }` with a non-empty label and a consequence each, distinct labels and exactly one recommended, a `recommendation` and `meanwhile`.
 - A blocker needs: a one line `summary`, `context` (with the cause), `tried`, `needed`, a `recommendation` and `meanwhile`; options are optional and follow the question's rules when given.
 - `options` are objects for every audience; a question for the orchestrator keeps an optional brief. `tried` and `needed` belong only to a blocker.
 - The daemon checks structure. Whether the context is self-contained and free of shorthand, and that one report holds one decision, is carried by the guidance (the `worker_report` description with an example, the worker preamble, the orchestrator instructions and skill) and seen by the owner.
 - The decision inbox shows the brief and answers an option with one tap through `orchestration.answer`: the option's label, followed by the typed note when there is one. Free text and "Mark answered" stay.
 - Questions stored before this record keep string options; the inbox reads them as options without a consequence. No migration.
-- This amends ADR 0016's optional brief for the owner audience.
+- This amends ADR 0016's optional brief for owner questions and blockers. Other reports for the owner (`progress`, `ready`, `done`) carry no brief and stay as they were.
 
 ## Consequences
 

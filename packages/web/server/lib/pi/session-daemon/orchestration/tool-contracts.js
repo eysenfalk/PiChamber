@@ -270,7 +270,8 @@ export const ORCHESTRATION_TOOLS = [
         brief: {
           type: 'object',
           additionalProperties: false,
-          required: ['recommendation'],
+          // Which fields a brief needs (recommendation always, more for the owner) is checked by
+          // report-rules.js, so one refusal names all of them; this schema checks types and bounds.
           description: 'Only for question and blocked: the decision laid out for whoever answers.',
           properties: {
             context: { type: 'string', minLength: 1, maxLength: 2000, description: 'What you are doing, where it stands and why the decision is needed now, understandable without anything else; for a blocker, its cause.' },
@@ -282,15 +283,14 @@ export const ORCHESTRATION_TOOLS = [
               items: {
                 type: 'object',
                 additionalProperties: false,
-                required: ['label'],
                 properties: {
-                  label: { type: 'string', minLength: 1, maxLength: 120, description: 'The answer as a short phrase.' },
+                  label: { type: 'string', minLength: 1, maxLength: 120, description: 'Required: the answer as a short phrase.' },
                   consequence: { type: 'string', minLength: 1, maxLength: 500, description: 'What happens if this option is chosen.' },
                   recommended: { type: 'boolean', description: 'True for the one option you recommend.' },
                 },
               },
             },
-            recommendation: { type: 'string', minLength: 1, maxLength: 500, description: 'What you recommend and why.' },
+            recommendation: { type: 'string', minLength: 1, maxLength: 500, description: 'Required: what you recommend and why.' },
             counterargument: { type: 'string', minLength: 1, maxLength: 500, description: 'The strongest argument against your recommendation.' },
             revisit: { type: 'string', minLength: 1, maxLength: 300, description: 'When the decision should be looked at again.' },
             meanwhile: { type: 'string', minLength: 1, maxLength: 500, description: 'What you do, or what stays blocked, until the answer comes.' },
