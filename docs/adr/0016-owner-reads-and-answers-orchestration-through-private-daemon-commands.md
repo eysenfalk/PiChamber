@@ -1,4 +1,4 @@
-# 0015. The owner reads and answers orchestration through private daemon commands
+# 0016. The owner reads and answers orchestration through private daemon commands
 
 - Status: Proposed
 - Date: 2026-10-15

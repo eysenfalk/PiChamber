@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { OverlayScrollbar } from '@/components/ui/OverlayScrollbar';
 import { Icon } from "@/components/icon/Icon";
 import { cn } from '@/lib/utils';
+import { MOBILE_BOTTOM_SPACER_HEIGHT } from '@/hooks/autoFollow/autoFollowHelpers';
 import { isFullySyntheticMessage } from '@/lib/messages/synthetic';
 import { normalizeUserDisplayParts } from './message/normalizeUserDisplayParts';
 import { findShellCommandForMessage, isUserShellMarkerMessage } from './lib/shellBridge';
@@ -284,7 +285,7 @@ export const ChatViewport = React.memo(
                 className="flex-shrink-0"
                 style={{
                   height: isMobile
-                    ? 'calc(40px + var(--oc-safe-area-bottom, 0px))'
+                    ? MOBILE_BOTTOM_SPACER_HEIGHT
                     : 'calc(10vh + var(--oc-safe-area-bottom, 0px))',
                 }}
                 aria-hidden="true"

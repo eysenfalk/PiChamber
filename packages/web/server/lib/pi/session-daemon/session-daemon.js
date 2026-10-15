@@ -4040,7 +4040,12 @@ export function createSessionDaemon({
       const guard = acquireSessionAccess(sessionId);
       return () => releaseSessionAccess(guard);
     },
-    getLiveRuntime: (sessionId) => runtimeRegistry?.findBySessionId(sessionId),
+    // A runtime whose idle disposal already runs is not live: the guard
+    // (`holdSession`) only keeps a disposal from starting, so a user that
+    // adopted it would send into a runtime being torn down and lose that
+    // turn (#190). Its users go through `activateSession`, which waits for
+    // the disposal and reopens the session from JSONL.
+    getLiveRuntime: (sessionId) => (disposingSessionIds.has(sessionId) ? undefined : runtimeRegistry?.findBySessionId(sessionId)),
     listLiveRuntimes: () => runtimeRegistry?.listAll() ?? [],
     getSessionState: (sessionId) => {
       if (retryStateBySession.has(sessionId)) return 'retry';
