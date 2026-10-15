@@ -621,7 +621,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ active = true, aut
                 <ExtensionWidgetStrip sessionId={currentSessionId} placement="belowEditor" />
             </div>
 
-            <ExtensionDialogOverlay />
+            <ExtensionDialogOverlay sessionId={currentSessionId} />
             <ExtensionNoticeToasts sessionId={currentSessionId} />
 
             <TimelineDialog
