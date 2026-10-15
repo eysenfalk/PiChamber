@@ -23,7 +23,7 @@ Measured on 2026-10-15 in the lab, hosted web, touch emulation, 844x390 viewport
 
 So the bug depends on what `screen.width` reports in landscape. The first row is the issue. The second row was emulated, not measured on an iPhone; that iOS reports a portrait fixed `screen.width` is from memory and is not verified here. On Android Chrome `screen.width` follows the rotation, so the first row is the expected case there; not verified on a device either. Since the surface is stamped at boot, the same phone can get a different surface depending on its orientation when the page was loaded.
 
-A viewport rule based on height would flip the layout when a tablet in portrait opens its keyboard (768x1024 becomes 768x400), so the viewport cannot tell a phone from a tablet.
+A viewport rule based on height would flip the layout when a tablet opens its keyboard (a 1024x768 landscape tablet becomes 1024x400, the same shape as a phone in landscape), so the viewport cannot tell a phone from a tablet.
 
 Alternatives:
 
