@@ -19,6 +19,8 @@ import { readSessionLeaseOwner, resolveSessionLeaseFile } from './session-lease.
  * gets a runtime instead of SESSION_RUNTIME_CONFLICT or
  * SESSION_JSONL_UNREADABLE.
  *
+ * A session whose working directory is gone can still be aborted (#177).
+ *
  * The fake runtime factory rejects a working directory that does not exist,
  * like the Pi SDK does ("Stored session working directory does not exist").
  * The daemon has a real identity, so session leases are taken for real.
@@ -460,5 +462,20 @@ describe('default runtime after session deletion', () => {
     await rm(worktree, { recursive: true, force: true });
 
     expectProviders(await request('providers.list', {}));
+  });
+
+  // session_stop aborts a finished worker whose worktree was removed (#177).
+  // This daemon never opened the session, as after a restart, so only the
+  // stored directory in its file locates it.
+  it('aborts a session whose working directory was removed without opening it (#177)', async () => {
+    const { agentDir, request } = await setup();
+    const worktree = join(tempRoot, 'removed-worktree');
+    const file = await writeSessionFile({ agentDir, cwd: worktree, sessionId: 'session-no-dir' });
+
+    expect(await request('sessions.abort', { sessionId: 'session-no-dir' })).toMatchObject({ ok: true });
+    expect((await request('sessions.open', { sessionId: 'session-no-dir' })).error?.code).toBe('SESSION_DIRECTORY_MISSING');
+    // No lease is left and the session stays on disk.
+    expect(await readSessionLeaseOwner({ agentDir, cwd: worktree, sessionId: 'session-no-dir' })).toBeNull();
+    expect(existsSync(file)).toBe(true);
   });
 });

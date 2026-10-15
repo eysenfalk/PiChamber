@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionDaemon } from '../session-daemon.js';
+import { resolveSessionLeaseFile } from '../session-lease.js';
 import { connectClient, credential, disableHostGate, markOrchestrator, piAiFauxUrl } from './e2e-support.js';
 import { ORCHESTRATION_TOOLS, qualifiedToolName } from './tool-contracts.js';
 
@@ -82,7 +83,7 @@ describe('orchestration end-to-end through the real SDK', () => {
     delete globalThis.__pichamberOrchestrationLog;
   });
 
-  const startDaemon = async ({ coalesceMs } = {}) => {
+  const startDaemon = async ({ coalesceMs, daemonOptions = {} } = {}) => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-orchestration-e2e-'));
     const projectDir = join(root, 'project');
     const workerDir = join(root, 'worker');
@@ -95,7 +96,7 @@ describe('orchestration end-to-end through the real SDK', () => {
     disableHostGate(process.env.PICHAMBER_DATA_DIR, coalesceMs === undefined ? {} : { wakes: { coalesceMs } });
 
     const endpoint = join(root, 'daemon.sock');
-    daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir });
+    daemon = createSessionDaemon({ endpoint, credential, cwd: projectDir, agentDir, ...daemonOptions });
     await daemon.start();
     const client = connectClient(endpoint);
     await client.authenticate();
@@ -272,6 +273,49 @@ describe('orchestration end-to-end through the real SDK', () => {
     const kept = (await call(parentId, 'session_read', { sessionId: workerId })).value;
     expect(kept.messages.map((message) => message.text)).toEqual(after.messages.map((message) => message.text));
     expect(replies(workerId, 'WORKER RAN AGAIN')).toBe(1);
+
+    await client.close();
+  }, 120_000);
+
+  it('stops a finished worker whose directory was removed, frees its slot and keeps its session (#177)', async () => {
+    // Leases on, like a real daemon, so another instance's claim on the worker counts.
+    const { root, workerDir, client, createSession } = await startDaemon({
+      daemonOptions: { idleTimeoutMs: 300, profileKey: 'e2e-profile', serverInstanceId: 'e2e-server', daemonId: 'e2e-daemon' },
+    });
+    const parentId = await createSession();
+    const call = async (sessionId, tool, args) => (await client.request('orchestration.call', { sessionId, tool, args })).result;
+    const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === sessionId && message.payload?.text === text).length;
+    const reached = (check) => vi.waitFor(() => expect(check(), String(check)).toBe(true), { timeout: 30_000, interval: 50 });
+    const digest = async () => (await call(parentId, 'orchestration_digest', {})).value;
+    const registryFile = join(root, 'data', 'pi', 'orchestration-registry.json');
+
+    await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
+    await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
+    const [{ sessionId: workerId }] = (await digest()).workers;
+    // A finished worker's runtime is disposed once idle, so the stop has to open it from disk.
+    await vi.waitFor(async () => expect((await digest()).workers[0].live).toBe('dormant'), { timeout: 10_000, interval: 100 });
+    const { sessionFile } = JSON.parse(await readFile(registryFile, 'utf8')).workers[workerId];
+    expect(sessionFile).toBeTruthy();
+    await rm(workerDir, { recursive: true, force: true });
+
+    // Another live PiChamber instance may still run the worker: the stop fails and the worker keeps its slot.
+    const { file: leaseFile } = resolveSessionLeaseFile({ agentDir: join(root, 'agent'), cwd: workerDir, sessionId: workerId });
+    await mkdir(dirname(leaseFile), { recursive: true });
+    await writeFile(leaseFile, JSON.stringify({ profileKey: 'e2e-profile', serverInstanceId: 'other-server', daemonId: 'other-daemon', daemonPid: process.pid, sessionId: workerId }));
+    const refused = await call(parentId, 'session_stop', { sessionId: workerId });
+    expect(refused.error).toMatchObject({ code: 'ORCHESTRATION_STOP_FAILED', details: { failed: [{ sessionId: workerId, code: 'SESSION_IN_USE' }] } });
+    expect((await digest()).limit.used).toBe(1);
+
+    // Without that claim nothing can run the worker any more: the stop succeeds and frees the slot.
+    await rm(leaseFile);
+    const stopped = await call(parentId, 'session_stop', { sessionId: workerId });
+    expect(stopped.error).toBeUndefined();
+    expect(stopped.value).toMatchObject({ sessionId: workerId, stopped: [workerId] });
+    expect((await digest()).limit.used).toBe(0);
+    expect(JSON.parse(await readFile(registryFile, 'utf8')).workers[workerId]).toMatchObject({ state: 'stopped' });
+    // A stop is no deletion: the transcript stays.
+    await expect(stat(sessionFile)).resolves.toBeTruthy();
 
     await client.close();
   }, 120_000);

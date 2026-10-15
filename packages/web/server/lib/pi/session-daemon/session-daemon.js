@@ -838,6 +838,15 @@ export function createSessionDaemon({
     }
   };
 
+  // A stored working directory that was removed still locates its session, so
+  // opening it reports SESSION_DIRECTORY_MISSING instead of an absent session.
+  // Only an existing directory is validated and becomes a known project.
+  const resolveStoredDirectory = async (storedCwd) => (
+    typeof storedCwd === 'string' && isAbsolute(storedCwd) && (await isMissingPath(storedCwd))
+      ? storedCwd
+      : resolveDirectory(storedCwd)
+  );
+
   // Starts the default runtime by reopening the dormant session. A dormant
   // session that is live again is adopted instead of opened a second time, and
   // one whose JSONL or working directory is gone is forgotten, so the default
@@ -1472,8 +1481,7 @@ export function createSessionDaemon({
       const named = await findPiSessionJsonlById({ sessionId, agentDir });
       if (named?.path && named.cwd) {
         await validatePiSessionJsonlFile(named.path);
-        const directory = await resolveDirectory(named.cwd);
-        knownDirectories.add(directory);
+        const directory = await resolveStoredDirectory(named.cwd);
         return { target: { id: sessionId, path: named.path }, directory };
       }
     } catch {
@@ -1494,13 +1502,10 @@ export function createSessionDaemon({
       agentDir,
       accept: async ({ path, cwd: headerCwd }) => {
         await validatePiSessionJsonlFile(path);
-        return { target: { id: sessionId, path }, directory: await resolveDirectory(headerCwd) };
+        return { target: { id: sessionId, path }, directory: await resolveStoredDirectory(headerCwd) };
       },
     });
-    if (scanned.match) {
-      knownDirectories.add(scanned.match.directory);
-      return scanned.match;
-    }
+    if (scanned.match) return scanned.match;
     if (scanned.incomplete) incomplete = true;
 
     throw Object.assign(
@@ -1540,6 +1545,11 @@ export function createSessionDaemon({
     await acquireResidentLease({ cwd: directory, sessionId });
     let newRuntime;
     try {
+      // Pi refuses to open a session whose working directory was removed. The
+      // lease above proved that no other daemon holds it, so nothing runs it.
+      if (await isMissingPath(directory)) {
+        throw new SessionDaemonProtocolError('SESSION_DIRECTORY_MISSING', 'The working directory of this Pi session no longer exists.');
+      }
       newRuntime = await createRuntime({ cwd: directory, agentDir, sessionFile: target.path });
       if (!newRuntime.cwd) newRuntime.cwd = directory;
       if (newRuntime.session?.sessionId !== sessionId && typeof newRuntime.switchSession === 'function') {
@@ -3942,7 +3952,15 @@ export function createSessionDaemon({
   };
 
   const abortSession = async (sessionId, directory) => {
-    const activeRuntime = await activateSession(sessionId, directory);
+    let activeRuntime;
+    try {
+      activeRuntime = await activateSession(sessionId, directory);
+    } catch (error) {
+      // Not resident here, held by no other daemon and no longer openable: no
+      // run of the session is left to abort (#177).
+      if (error?.code === 'SESSION_DIRECTORY_MISSING') return;
+      throw error;
+    }
     const streaming = activeRuntime.session.isStreaming;
     await activeRuntime.session.abort();
     if (streaming) publish('session.interrupted', { reason: 'user-abort', streaming: true }, sessionId, activeRuntime.cwd);
