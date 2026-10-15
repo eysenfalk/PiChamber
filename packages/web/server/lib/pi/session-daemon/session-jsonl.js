@@ -257,6 +257,68 @@ export async function scanPiSessionJsonlHeaders({ sessionId, agentDir, accept = 
   return { match: null, incomplete };
 }
 
+/**
+ * Every existing directory that holds Pi sessions, so folders no project names
+ * can be listed too. Pi keeps one store per cwd under `<agentDir>/sessions/`,
+ * but the store name encodes the cwd lossily, so the cwd comes from the newest
+ * readable session header in each store. Listing any cwd that maps to a store
+ * reads the whole store, so one header per store reaches all its sessions. A
+ * directory that no longer exists is left out: the daemon can neither list
+ * nor continue a session there. A missing sessions root is an empty, complete
+ * answer. A store, or a store's only headers, that cannot be read set
+ * `incomplete`, because a directory may sit behind them. Only a failure to
+ * read the sessions root itself rejects.
+ *
+ * @param {{ agentDir: string, readDirectory?: typeof readdir }} options
+ * @returns {Promise<{ directories: string[], incomplete: boolean }>}
+ */
+export async function listPiSessionDirectories({ agentDir, readDirectory = readdir }) {
+  const sessionsRoot = join(agentDir, 'sessions');
+  let stores;
+  try {
+    stores = await readDirectory(sessionsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return { directories: [], incomplete: false };
+    throw unreadable();
+  }
+  let incomplete = false;
+  const readStoreDirectory = async (storePath) => {
+    let files;
+    try {
+      files = await readDirectory(storePath, { withFileTypes: true });
+    } catch (error) {
+      if (!isMissing(error)) incomplete = true;
+      return undefined;
+    }
+    // Pi names session files `<timestamp>_<id>.jsonl`, so this is newest first.
+    const names = files
+      .filter((file) => file.name.endsWith('.jsonl') && !file.isDirectory())
+      .map((file) => file.name)
+      .sort()
+      .reverse();
+    let failed = false;
+    for (const name of names) {
+      let header;
+      try {
+        header = await readFirstJsonlEntry(join(storePath, name));
+      } catch (error) {
+        // A header that is not JSON is no session file.
+        if (!(error instanceof SyntaxError) && !isMissing(error)) failed = true;
+        continue;
+      }
+      if (isSessionHeader(header) && header.cwd.length > 0) return header.cwd;
+    }
+    if (failed) incomplete = true;
+    return undefined;
+  };
+  const storeDirectories = stores.filter((store) => store.isDirectory());
+  const found = await mapWithConcurrency(storeDirectories, LIST_FILE_CONCURRENCY, (store) => readStoreDirectory(join(sessionsRoot, store.name)));
+  const existing = await mapWithConcurrency([...new Set(found.filter(Boolean))], LIST_FILE_CONCURRENCY, async (directory) => (
+    await stat(directory).then((entry) => entry.isDirectory(), () => false) ? directory : undefined
+  ));
+  return { directories: existing.filter(Boolean).sort(), incomplete };
+}
+
 export async function validatePiSessionJsonlFile(filePath) {
   let sawHeader = false;
   const input = createReadStream(filePath, { encoding: 'utf8' });

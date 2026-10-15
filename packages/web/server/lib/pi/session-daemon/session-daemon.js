@@ -53,6 +53,7 @@ import {
   getPiSessionDirectory,
   scanPiSessionJsonlHeaders,
   createPiSessionListCache,
+  listPiSessionDirectories,
   listPiSessionJsonlDirectory,
   validatePiSessionJsonlDirectory,
   validatePiSessionJsonlFile,
@@ -4223,7 +4224,7 @@ export function createSessionDaemon({
               // responses stamp it so clients can reject stale-epoch data.
               'events.streamEpoch',
               'runtime.claim', 'runtime.shutdown',
-              'projects.list', 'projects.select', 'sessions.list', 'sessions.create', 'sessions.open', 'sessions.messages', 'sessions.rename', 'sessions.delete',
+              'projects.list', 'projects.select', 'sessions.list', 'sessions.directories', 'sessions.create', 'sessions.open', 'sessions.messages', 'sessions.rename', 'sessions.delete',
               'sessions.tree', 'sessions.navigate', 'sessions.fork', 'sessions.clone', 'sessions.prompt',
               'sessions.steer', 'sessions.followUp', 'sessions.sendReceipt', 'sessions.abort', 'sessions.setModel',
               'sessions.setThinking', 'sessions.compact', 'providers.list', 'providers.refresh', 'providers.config.get', 'providers.models.set', 'providers.models.add', 'providers.status', 'providers.login',
@@ -4450,6 +4451,17 @@ export function createSessionDaemon({
           // Stamp the stream lifetime so clients can reject a listing that a
           // previous daemon process generated after an epoch change.
           result: { sessions: items, ...(incomplete ? { incomplete: true } : {}), streamEpoch },
+        });
+        return;
+      }
+      case 'sessions.directories': {
+        // Every directory with sessions, for folders outside every project.
+        const { directories, incomplete } = await listPiSessionDirectories({ agentDir });
+        writeFrame(socket, {
+          protocolVersion: PROTOCOL_VERSION,
+          kind: 'response',
+          requestId: message.requestId,
+          result: { directories, ...(incomplete ? { incomplete: true } : {}) },
         });
         return;
       }
