@@ -309,6 +309,24 @@ describe("PiService", () => {
     expect(failed).toMatchObject({ code: "ORCHESTRATION_REGISTRY_INVALID" })
   })
 
+  test("answers a worker question and rejects a refused answer", async () => {
+    let status = 200
+    installFetchMock((call) => {
+      expect(call.url).toBe("/api/pi/orchestration/questions/worker%201/q-1/answer")
+      expect(call.init?.method).toBe("POST")
+      expect(JSON.parse(call.init?.body as string)).toEqual({ text: "use v2", clientRequestId: "a-1" })
+      return status === 200
+        ? jsonResponse({ sessionId: "worker 1", questionId: "q-1", accepted: true, resolved: true })
+        : jsonResponse({ error: { code: "ORCHESTRATION_QUESTION_UNKNOWN" } }, { status })
+    })
+    const client = new PiService()
+    const input = { text: "use v2", clientRequestId: "a-1" }
+    expect(await client.answerOrchestrationQuestion("worker 1", "q-1", input)).toMatchObject({ accepted: true, resolved: true })
+    status = 409
+    const failed = await client.answerOrchestrationQuestion("worker 1", "q-1", input).then(() => null, (error: unknown) => error)
+    expect(failed).toMatchObject({ code: "ORCHESTRATION_QUESTION_UNKNOWN" })
+  })
+
   test("uses the typed native resource routes", async () => {
     installFetchMock((call) => {
       if (call.url === "/api/pi/resources" && call.init?.method === "GET") {

@@ -572,12 +572,37 @@ export type PiOrchestrationWorkerLifecycle = 'starting' | 'active' | 'done' | 's
 /** Live state from the live channels; `dormant` when no runtime is resident. */
 export type PiOrchestrationLiveState = 'dormant' | 'idle' | 'busy' | 'retry' | 'waiting_input';
 
+/** The decision a worker lays out with its question (#20). */
+export interface PiOrchestrationQuestionBrief {
+  options?: string[];
+  recommendation: string;
+  counterargument?: string;
+  revisit?: string;
+}
+
 export interface PiOrchestrationQuestion {
   id: string;
   kind: 'question' | 'blocked';
   audience: 'owner' | 'orchestrator';
   summary: string;
   at: number;
+  brief?: PiOrchestrationQuestionBrief;
+}
+
+/** `POST /api/pi/orchestration/questions/:sessionId/:questionId/answer`. */
+export interface PiOrchestrationAnswerInput {
+  text: string;
+  /** Makes a retry return the first receipt instead of prompting twice. */
+  clientRequestId?: string;
+}
+
+export interface PiOrchestrationAnswerResponse {
+  sessionId: string;
+  questionId: string;
+  accepted: true;
+  /** False when a report closed or replaced the question while the answer was sent. */
+  resolved: boolean;
+  deduplicated?: true;
 }
 
 export interface PiOrchestrationReport {

@@ -33,6 +33,8 @@ import {
   type PiProviderLogoutInput,
   type PiSettingsSnapshot,
   type PiOrchestrationOverview,
+  type PiOrchestrationAnswerInput,
+  type PiOrchestrationAnswerResponse,
   type PiSettingsUpdateInput,
   type PiSettingsUpdateResponse,
   type PiChamberDefaultsUpdateInput,
@@ -875,6 +877,20 @@ export class PiService {
     return jsonRequest<undefined, PiOrchestrationOverview>('/api/pi/orchestration/overview', {
       method: 'GET', ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
     });
+  }
+
+  /** Answers a worker's open question as the owner; throws when the question is not open or Pi refused the prompt. */
+  async answerOrchestrationQuestion(
+    sessionId: string,
+    questionId: string,
+    input: PiOrchestrationAnswerInput,
+    scope?: PiClientScope,
+  ): Promise<PiOrchestrationAnswerResponse> {
+    assertRuntimeUnchanged(scope);
+    return jsonRequest<PiOrchestrationAnswerInput, PiOrchestrationAnswerResponse>(
+      `/api/pi/orchestration/questions/${encodeURIComponent(sessionId)}/${encodeURIComponent(questionId)}/answer`,
+      { method: 'POST', body: input, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}) },
+    );
   }
 
   async setPiSettings(input: PiSettingsUpdateInput, scope?: PiClientScope): Promise<PiSettingsUpdateResponse> {

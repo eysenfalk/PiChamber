@@ -1828,6 +1828,45 @@ export const registerPiRuntimeRoutes = (app, {
     }
   });
 
+  // The owner answers a worker's open question from the control center (#20).
+  // The daemon prompts the worker as the owner and closes the question only
+  // after Pi accepted the prompt; a question that is not open changes nothing.
+  const ANSWER_ERROR_STATUS = {
+    INVALID_ARGUMENT: 400,
+    INVALID_PROMPT: 400,
+    ORCHESTRATION_QUESTION_UNKNOWN: 409,
+    SESSION_BUSY: 409,
+    OPERATION_PAYLOAD_MISMATCH: 409,
+    SESSION_NOT_FOUND: 404,
+  };
+  app.post('/api/pi/orchestration/questions/:sessionId/:questionId/answer', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { sessionId, questionId } = req.params;
+    const { text, clientRequestId } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || (clientRequestId !== undefined && typeof clientRequestId !== 'string')) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.answer', {
+        sessionId, questionId, text, ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+      });
+      if (result?.error) {
+        const code = typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED';
+        res.status(ANSWER_ERROR_STATUS[code] ?? 503).json({ error: { code } });
+        return;
+      }
+      const value = result?.value;
+      if (!value || value.accepted !== true || typeof value.resolved !== 'boolean') {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {
     const { sessionId } = req.params;
     const { archived } = req.body || {};

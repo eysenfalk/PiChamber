@@ -161,6 +161,7 @@ const reportViolation = (args) => {
   }
   if (args.kind === 'ready' && args.pullRequest === undefined) return 'A ready report needs pullRequest.';
   if ((args.kind === 'question' || args.kind === 'blocked') && !args.audience) return `A ${args.kind} report needs audience.`;
+  if (args.brief && args.kind !== 'question' && args.kind !== 'blocked') return 'Only a question or blocked report has a brief.';
   return null;
 };
 
@@ -720,6 +721,22 @@ export function createOrchestrationService(deps) {
       state: stateOf(args.sessionId),
     };
   };
+
+  /**
+   * The owner answers a worker's open question from the control center
+   * (#20): the text goes to the worker as the owner's own prompt, and the
+   * question closes only after Pi accepted it. A question that is not open
+   * changes nothing and sends nothing; a refused prompt leaves it open.
+   */
+  const answer = ({ sessionId, questionId, text, clientRequestId }) => withSession(sessionId, async () => {
+    if ((await registry.read()).workers[sessionId]?.question?.id !== questionId) {
+      throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'This question is not open.', { sessionId, questionId });
+    }
+    const receipt = await sendInput({ sessionId, text, delivery: 'prompt', operationId: clientRequestId, source: 'owner' });
+    // A report meanwhile may have closed or replaced it; then only the prompt counts.
+    const resolved = await registry.update((document) => closeQuestion(document, sessionId, questionId));
+    return { sessionId, questionId, accepted: true, resolved, ...(receipt?.deduplicated ? { deduplicated: true } : {}) };
+  });
 
   // Moves an idle worker of the caller back to an earlier entry and, with a
   // prompt, runs it again from there. A run, a retry, a start and an open
@@ -1852,6 +1869,7 @@ export function createOrchestrationService(deps) {
     onDialogOpened: (sessionId, title) => wakes.emit(sessionId, 'question', `dialog: ${title ?? 'input requested'}`),
     prWatch,
     overview,
+    answer,
     startWakes: wakes.start,
     stopWakes: wakes.stop,
     verifyCaller,
