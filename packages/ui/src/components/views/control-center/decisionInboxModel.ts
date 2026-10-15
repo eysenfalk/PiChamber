@@ -33,7 +33,7 @@ export type InboxQuestion = {
 
 export type InboxLink = { label: string; url: string | null };
 
-export type InboxOption = { label: string; consequence: string | null; recommended: boolean };
+type InboxOption = { label: string; consequence: string | null; recommended: boolean };
 
 export type InboxDialog = {
   kind: 'dialog';
