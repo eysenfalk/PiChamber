@@ -1,4 +1,7 @@
+import { execFile } from 'node:child_process';
+
 import { ORCHESTRATION_INSTRUCTIONS } from './instructions.js';
+import { factKey, judgeCommand } from './merge-guard.js';
 import { ORCHESTRATION_NAMESPACE, ORCHESTRATION_TOOLS, qualifiedToolName, toolsForKind } from './tool-contracts.js';
 import { toolAllowed } from './tool-profiles.js';
 
@@ -11,6 +14,59 @@ import { toolAllowed } from './tool-profiles.js';
 const ORCHESTRATION_EXTENSION_NAME = 'pichamber-orchestration';
 
 const ALL_TOOLS = new Set(ORCHESTRATION_TOOLS.map((tool) => qualifiedToolName(tool.name)));
+
+// The merge guard's lookups (#20) run with a deadline and never prompt; their
+// output is a branch or base name, and only the first line of an error is kept.
+const LOOKUP_TIMEOUT_MS = 10_000;
+const SHELL_TOOLS = new Set(['bash', 'powershell']);
+const PULL_BASE_BY_ID_QUERY = 'query($id: ID!) { node(id: $id) { ... on PullRequest { baseRefName } } }';
+
+/**
+ * @typedef {(file: string, args: string[], cwd: string) => Promise<{ code: number | string, stdout: string, stderr: string }>} RunLookup
+ * @type {RunLookup}
+ */
+const runLookupCommand = (file, args, cwd) => new Promise((done) => {
+  execFile(file, args, {
+    cwd,
+    timeout: LOOKUP_TIMEOUT_MS,
+    windowsHide: true,
+    env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', NO_COLOR: '1' },
+  }, (error, stdout, stderr) => {
+    const code = !error ? 0 : error.killed ? 'timed out' : (error.code ?? 'failed');
+    done({ code, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+  });
+});
+
+const lookupError = ({ code, stderr }) => {
+  const line = stderr.split('\n').map((text) => text.trim()).find(Boolean);
+  return (line ?? (typeof code === 'number' ? `exit ${code}` : String(code))).slice(0, 200);
+};
+
+/** Answers one need of `judgeCommand` as `{ value }` or `{ error }`; never throws. */
+const lookupFact = async (need, cwd, run) => {
+  try {
+    if (need.fact === 'branch') {
+      const head = await run('git', ['symbolic-ref', '--quiet', '--short', 'HEAD'], need.dir);
+      // Exit 1 without output: a detached HEAD, which tracks nothing.
+      if (head.code === 1 && !head.stdout.trim()) return { value: { branch: null, upstream: null } };
+      if (head.code !== 0) return { error: lookupError(head) };
+      const branch = head.stdout.trim();
+      const tracked = await run('git', ['for-each-ref', '--format=%(upstream:remoteref)', `refs/heads/${branch}`], need.dir);
+      if (tracked.code !== 0) return { error: lookupError(tracked) };
+      return { value: { branch, upstream: tracked.stdout.trim().replace(/^refs\/heads\//, '') || null } };
+    }
+    const read = need.fact === 'pullBase'
+      ? await run('gh', ['pr', 'view', ...(need.selector ? [need.selector] : []), ...(need.repo ? ['--repo', need.repo] : []),
+        '--json', 'baseRefName', '--jq', '.baseRefName'], need.dir)
+      : await run('gh', ['api', 'graphql', '-f', `query=${PULL_BASE_BY_ID_QUERY}`, '-f', `id=${need.id}`,
+        '--jq', '.data.node.baseRefName'], cwd);
+    if (read.code !== 0) return { error: lookupError(read) };
+    const base = read.stdout.trim();
+    return base ? { value: base } : { error: 'no base branch was returned' };
+  } catch (error) {
+    return { error: (error instanceof Error ? error.message : String(error)).slice(0, 200) };
+  }
+};
 
 const formatResult = (value) => ({
   content: [{ type: 'text', text: JSON.stringify(value, null, 2) }],
@@ -28,8 +84,10 @@ const toToolError = (error) => {
 /**
  * @param {{ call: Function, sessionKind: (sessionManager) => Promise<'worker' | 'orchestrator' | 'unmarked'>,
  *   sessionProfile: (sessionManager) => object | null | undefined }} service
+ * @param {{ runLookup?: RunLookup }} [options] `runLookup` runs the merge guard's
+ *   `git` and `gh` lookups; tests replace it.
  */
-export const createOrchestrationExtension = (service) => ({
+export const createOrchestrationExtension = (service, { runLookup = runLookupCommand } = {}) => ({
   name: ORCHESTRATION_EXTENSION_NAME,
   hidden: true,
   factory: (pi) => {
@@ -79,19 +137,42 @@ export const createOrchestrationExtension = (service) => ({
       await applyKind(ctx);
     });
 
+    // The merge guard (#20, `merge-guard.js`): a worker or marked orchestrator
+    // may not merge into or push to main through a shell command. Most
+    // commands pass the pure check without any read; only a command it cannot
+    // decide reads the session kind and then the facts it names. A failed kind
+    // read guards too (fail closed), and so does a failed fact lookup.
+    const guardMerges = async (event, ctx) => {
+      const command = event.input?.command;
+      if (!SHELL_TOOLS.has(event.toolName) || typeof command !== 'string') return undefined;
+      const options = { cwd: ctx.cwd, shell: event.toolName };
+      let verdict = judgeCommand(command, options);
+      if (verdict.decision === 'allow') return undefined;
+      const kind = await service.sessionKind(ctx.sessionManager).catch(() => 'unknown');
+      if (kind === 'unmarked') return undefined;
+      if (verdict.decision === 'need') {
+        // Every need gets a value or an error, so this verdict is final.
+        const answers = await Promise.all(verdict.needs.map(async (need) => [factKey(need), await lookupFact(need, ctx.cwd, runLookup)]));
+        verdict = judgeCommand(command, { ...options, facts: Object.fromEntries(answers) });
+      }
+      return verdict.decision === 'block' ? { block: true, reason: `Merge guard: ${verdict.reason}` } : undefined;
+    };
+
     // The enforcement: every tool call, from the model or nested in another
     // tool (`ctx.executeTool`, Fabric's captured tools), passes this hook.
     // A tool activated after `applyKind` is still blocked, and a throw here
-    // blocks the call too.
+    // blocks the call too. The merge guard runs after the profile check.
     pi.on('tool_call', async (event, ctx) => {
       const profile = service.sessionProfile(ctx.sessionManager);
-      if (toolAllowed(profile, event.toolName)) return undefined;
-      return {
-        block: true,
-        reason: profile
-          ? `This worker runs with the tool profile "${profile.name}", which excludes ${event.toolName}.`
-          : `This worker's tool profile cannot be read, so only reading tools run; ${event.toolName} is blocked.`,
-      };
+      if (!toolAllowed(profile, event.toolName)) {
+        return {
+          block: true,
+          reason: profile
+            ? `This worker runs with the tool profile "${profile.name}", which excludes ${event.toolName}.`
+            : `This worker's tool profile cannot be read, so only reading tools run; ${event.toolName} is blocked.`,
+        };
+      }
+      return guardMerges(event, ctx);
     });
 
     // Like t3code's Pi bridge: the base instructions extend the system prompt
