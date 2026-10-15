@@ -1487,18 +1487,25 @@ export function createSessionDaemon({
     for (const d of knownDirectories) candidateDirs.add(d);
 
     const findInDirectory = async (directory) => {
+      let target;
       try {
         const sessions = await listSessions({ cwd: directory, agentDir });
-        const target = Array.isArray(sessions) ? sessions.find((session) => session?.id === sessionId) : undefined;
-        if (target && typeof target.path === 'string' && target.path.length > 0) {
-          await validatePiSessionJsonlFile(target.path);
-          return { target, directory };
-        }
+        target = Array.isArray(sessions) ? sessions.find((session) => session?.id === sessionId) : undefined;
         // The listing skipped a file it could not read, which may be this session.
         if (sessions?.incomplete === true) incomplete = true;
-      } catch (error) {
-        noteLookupFailure(error);
-        // Continue through the remaining authoritative lookup paths.
+      } catch {
+        // The directory itself could not be listed: that says nothing about
+        // this session's file, so it is only an incomplete lookup.
+        incomplete = true;
+      }
+      if (target && typeof target.path === 'string' && target.path.length > 0) {
+        try {
+          await validatePiSessionJsonlFile(target.path);
+          return { target, directory };
+        } catch (error) {
+          noteLookupFailure(error);
+          // Continue through the remaining authoritative lookup paths.
+        }
       }
       return undefined;
     };

@@ -911,6 +911,37 @@ describe('Pi session daemon spike', () => {
     }
   });
 
+  it('does not call an absent session unreadable because a directory could not be listed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-unreadable-'));
+    const cwd = join(root, 'project');
+    const blocked = join(root, 'blocked');
+    const agentDir = join(root, 'agent');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(blocked, { recursive: true });
+    // A file where the session directory belongs makes that directory unlistable.
+    await mkdir(join(agentDir, 'sessions'), { recursive: true });
+    await writeFile(getPiSessionDirectory({ cwd: blocked, agentDir }), 'not a directory');
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: blocked } })}\n`);
+      // Nothing located this session's own file, so it is not "found but unreadable".
+      await expect(refused).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+    } finally {
+      await client.close();
+    }
+  });
+
   it('publishes session.updated when a session is first prompted', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
     const endpoint = testDaemonEndpoint(root);
