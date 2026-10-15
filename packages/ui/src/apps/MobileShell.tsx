@@ -4,6 +4,7 @@ import { AboutSettings } from '@/components/sections/pichamber/AboutSettings';
 import { ChatView } from '@/components/views/ChatView';
 import { SettingsView } from '@/components/views/SettingsView';
 import { ArchiveView } from '@/components/views/ArchiveView';
+import { ControlCenterView } from '@/components/views/ControlCenterView';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { readTabletLayout, useOrientation, useTabletLayout } from '@/lib/device';
 import { useHardwareKeyboard } from '@/lib/hardwareKeyboard';
@@ -112,6 +113,11 @@ export const MobileShell: React.FC<MobileShellProps> = ({ onActiveConnectionDele
   const setSettingsPage = useUIStore((state) => state.setSettingsPage);
   const isArchivePageOpen = useUIStore((state) => state.isArchivePageOpen);
   const setArchivePageOpen = useUIStore((state) => state.setArchivePageOpen);
+  // The control center is a main tab; the dedicated mobile shell has no tab
+  // area, so it shows it as a fullscreen surface while the tab is active.
+  const isControlCenterOpen = useUIStore((state) => state.activeMainTab === 'control');
+  const setActiveMainTab = useUIStore((state) => state.setActiveMainTab);
+  const closeControlCenter = React.useCallback(() => setActiveMainTab('chat'), [setActiveMainTab]);
   const updateAvailable = useUpdateStore((state) => state.available);
   const updateRuntimeType = useUpdateStore((state) => state.runtimeType);
   const showCapacitorOnlyFeatures = React.useMemo(() => isCapacitorMobileApp(), []);
@@ -480,6 +486,10 @@ export const MobileShell: React.FC<MobileShellProps> = ({ onActiveConnectionDele
       closeSurface();
       return true;
     }
+    if (isControlCenterOpen) {
+      closeControlCenter();
+      return true;
+    }
     if (workspaceOpen) {
       closeWorkspace();
       return true;
@@ -489,7 +499,7 @@ export const MobileShell: React.FC<MobileShellProps> = ({ onActiveConnectionDele
       return true;
     }
     return false;
-  }, [activeSurface, closeSurface, closeWorkspace, isArchivePageOpen, sessionsSheetOpen, setArchivePageOpen, setSessionsSheetOpenSafely, workspaceOpen]);
+  }, [activeSurface, closeControlCenter, closeSurface, closeWorkspace, isArchivePageOpen, isControlCenterOpen, sessionsSheetOpen, setArchivePageOpen, setSessionsSheetOpenSafely, workspaceOpen]);
 
   useNativeAndroidBackButton(handleNativeBack);
 
@@ -678,6 +688,21 @@ export const MobileShell: React.FC<MobileShellProps> = ({ onActiveConnectionDele
         )}
 
         {/* Layered above the workspace drawer's Notes tab, which opened it. */}
+
+        {isControlCenterOpen ? (
+          <MobileFullscreenSurface
+            open
+            variant={surfaceVariant}
+            dialogAlign="app"
+            onClose={closeControlCenter}
+            ariaLabel={"Control center"}
+            title={"Control center"}
+          >
+            <ErrorBoundary>
+              <ControlCenterView />
+            </ErrorBoundary>
+          </MobileFullscreenSurface>
+        ) : null}
 
         {activeSurface === 'instances' && showCapacitorOnlyFeatures ? (
           <MobileFullscreenSurface

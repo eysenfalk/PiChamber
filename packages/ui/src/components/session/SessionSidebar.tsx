@@ -33,6 +33,8 @@ import { SidebarWorkspaceTree } from './sidebar/SidebarWorkspaceTree';
 import { treeProjectLabel, useWorkspaceTreeModel } from './sidebar/hooks/useWorkspaceTreeModel';
 import { CHATS_VISIBILITY_ID, useProjectVisibilityStore } from '@/stores/useProjectVisibilityStore';
 import { useWorkspaceTreeExpansion } from './sidebar/hooks/useWorkspaceTreeExpansion';
+import { useWorkerFilter } from './sidebar/hooks/useWorkerFilter';
+import { useWorkerSessions } from './sidebar/hooks/useWorkerSessions';
 import { folderScopesByProject, sessionsByProject, type NodeKey, type TreeNode } from './sidebar/workspaceTree';
 import { focusChatInput } from '@/components/chat/composer/editor/dom';
 import { createSessionInWorkspace } from './sidebar/quickCreate';
@@ -102,6 +104,8 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   streamPerfCount(`ui.session_sidebar.render.${isVisible ? 'visible' : 'hidden'}`);
   const [isSessionSearchOpen, setIsSessionSearchOpen] = React.useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = React.useState('');
+  const [workerFilter, setWorkerFilter] = useWorkerFilter();
+  const workerSessions = useWorkerSessions(isVisible);
   const sessionSearchInputRef = React.useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const [editTitle, setEditTitle] = React.useState('');
@@ -314,6 +318,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     if (hasSessionSearchQuery) {
       return <p className="px-3 py-2 typography-ui-label text-muted-foreground">{"No matches"}</p>;
     }
+    if (workerFilter === 'only' && workerSessions.workerIds) {
+      return <p className="px-3 py-2 typography-ui-label text-muted-foreground">{"No workers"}</p>;
+    }
     if (hiddenProjectIds.size > 0) {
       return (
         <SidebarSessionLikeButton icon="eye" mobileVariant={mobileVariant} onClick={showAllProjects}>
@@ -330,7 +337,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         {"New session"}
       </SidebarSessionLikeButton>
     );
-  }, [hasSessionSearchQuery, hiddenProjectIds.size, mobileVariant, openNewSessionDraftFromTree, showAllProjects]);
+  }, [hasSessionSearchQuery, hiddenProjectIds.size, mobileVariant, openNewSessionDraftFromTree, showAllProjects, workerFilter, workerSessions.workerIds]);
 
   const editingProject = React.useMemo(
     () => projects.find((project) => project.id === editingProjectDialogId) ?? null,
@@ -508,6 +515,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     foldersByScope: foldersMap,
     pinnedSessionIds,
     runningSessionIds: activeSessionIdSet,
+    waitingSessionIds: workerSessions.waitingIds,
+    workerFilter,
+    workerIds: workerSessions.workerIds,
     unseenSessionIds: unreadSessionIdSet,
     discoveryComplete: worktreeTopologyState.complete,
     hidden: hiddenProjectIds,
@@ -844,6 +854,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         onSetProjectHidden={setProjectHidden}
         onShowAllProjects={showAllProjects}
         onHideAllProjects={handleHideAllProjects}
+        workerFilter={workerFilter}
+        onWorkerFilterChange={setWorkerFilter}
+        workersKnown={workerSessions.workerIds !== null}
         selectionModeEnabled={selectionModeEnabled}
         onToggleSelectionMode={handleToggleSelectionMode}
         mobileVariant={mobileVariant}

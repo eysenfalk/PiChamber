@@ -428,6 +428,53 @@ describe('orchestration end-to-end through the real SDK', () => {
     await client.close();
   }, 120_000);
 
+  it('lets the owner answer a worker question with an owner prompt that wakes nobody (#20)', async () => {
+    const { client, createSession } = await startDaemon();
+    const parentId = await createSession();
+    const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === sessionId && message.payload?.text === text).length;
+    const wakes = () => client.events.filter((message) => message.event === 'extension.message'
+      && message.payload?.sessionId === parentId && message.payload?.customType === 'pichamber.orchestration.events').length;
+    const reached = (check) => vi.waitFor(() => expect(check(), String(check)).toBe(true), { timeout: 30_000, interval: 50 });
+    const questionOf = async (workerId) => (await client.request('orchestration.overview', {})).result.value.orchestrators
+      .flatMap((group) => group.workers).find((worker) => worker.sessionId === workerId)?.question ?? null;
+
+    await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
+    await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
+    const workerId = (await client.request('orchestration.overview', {})).result.value.orchestrators[0].workers[0].sessionId;
+    const brief = { options: ['main', 'dev'], recommendation: 'dev, the integration branch', counterargument: 'main is what users run' };
+    const asked = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH BRANCH', audience: 'owner', brief } });
+    const questionId = asked.result.value.openQuestion;
+    expect(await questionOf(workerId)).toMatchObject({ id: questionId, audience: 'owner', brief });
+    const wakesBefore = wakes();
+
+    // A wrong id changes nothing and prompts nobody.
+    const wrong = await client.request('orchestration.answer', { sessionId: workerId, questionId: 'q-wrong', text: 'RUN AGAIN' });
+    expect(wrong.result).toEqual({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } });
+    expect(await questionOf(workerId)).toMatchObject({ id: questionId });
+
+    const answered = await client.request('orchestration.answer', { sessionId: workerId, questionId, text: 'RUN AGAIN on dev' });
+    expect(answered.result.value).toMatchObject({ sessionId: workerId, questionId, accepted: true, resolved: true });
+    await reached(() => replies(workerId, 'WORKER RAN AGAIN') === 1);
+    expect(await questionOf(workerId)).toBeNull();
+    // The owner wrote last: the end of that run is not the orchestrator's business (#156).
+    await new Promise((done) => { setTimeout(done, 500); });
+    expect(wakes()).toBe(wakesBefore);
+    const again = await client.request('orchestration.answer', { sessionId: workerId, questionId, text: 'RUN AGAIN' });
+    expect(again.result).toEqual({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } });
+
+    // An answer given in the chat: the owner marks the question answered, no prompt goes out.
+    const second = (await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH TAG', audience: 'orchestrator' } })).result.value.openQuestion;
+    const promptsBefore = client.events.filter((message) => message.event === 'assistant.message.end' && message.payload?.sessionId === workerId).length;
+    const resolved = await client.request('orchestration.resolve', { sessionId: workerId, questionId: second });
+    expect(resolved.result.value).toEqual({ sessionId: workerId, questionId: second, resolved: true });
+    expect(await questionOf(workerId)).toBeNull();
+    expect(client.events.filter((message) => message.event === 'assistant.message.end' && message.payload?.sessionId === workerId).length).toBe(promptsBefore);
+    expect((await client.request('orchestration.resolve', { sessionId: workerId, questionId: second })).result).toEqual({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } });
+
+    await client.close();
+  }, 120_000);
+
   it('delivers a wake whose send meets the owner\'s idle disposal once, to the reopened owner (#190)', async () => {
     // Once armed, the parent's next idle disposal waits here while it still owns the runtime.
     const gate = { sessionId: undefined, entered: undefined, release: () => {} };

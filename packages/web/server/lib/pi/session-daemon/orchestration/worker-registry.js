@@ -454,7 +454,12 @@ export const recordReport = (document, sessionId, args, { at, questionId, reposi
     });
   }
   if (args.resolves !== undefined) delete worker.question;
-  if (asks) worker.question = { id: questionId, kind: args.kind, audience: args.audience, summary: args.summary, at };
+  if (asks) {
+    worker.question = {
+      id: questionId, kind: args.kind, audience: args.audience, summary: args.summary, at,
+      ...(args.brief ? { brief: args.brief } : {}),
+    };
+  }
   worker.report = {
     kind: args.kind,
     summary: args.summary,
