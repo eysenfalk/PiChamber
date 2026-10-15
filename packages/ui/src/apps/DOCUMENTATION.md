@@ -111,6 +111,11 @@ leave the dirty editor intact.
 - Keep-alive follows the drawer's `visitedTabs` precedent: PRs/Issues panes stay mounted once visited (hidden with `hidden`), unlike desktop's singleton remount-on-switch. Restoration comes from staying mounted plus the stores' last-known-first snapshots; hidden cost is focus-gated revalidation only (no list polling). The `PullRequestsSurface` / `IssuesSurface` chunks lazy-load on first visit, like Files/Git.
 - Intentional v1 parity differences with desktop: PR detail is Overview + Checks (the drawer renders `PullRequestsSurface hideFilesTab`, which omits the Files tab and skips the files fetch; Files/review on mobile is a follow-up), and there is no composer link picker on mobile. Drawer tab buttons meet 44px touch targets (`min-h-[44px]`, `size-11` close); the tablet header workspace switcher uses 44px icon buttons; safe-area insets follow the existing drawer precedent. `MobileFullscreenSurface` (fullscreen variant, used for phone Settings) pads both edges with `--oc-safe-area-top` and `--oc-safe-area-bottom`, so its scroll lists end above an edge-to-edge system navigation bar.
 
+## Native Bottom Safe Area
+
+- `--oc-app-bottom-safe` is the bottom room the Capacitor app shell, the chat scroller and the terminal reserve. iOS reserves half of the inset (thin home indicator, 16px floor). Android reserves the whole inset (`:root.oc-capacitor-app.oc-platform-android` in `styles/mobile.css`, pinned by `styles/mobileSafeArea.test.ts`), because a three button navigation bar is a real bar the composer must sit above. Capacitor reports the inset only on WebView 140 or newer, so an older emulator image shows no overlap.
+- The mobile chat ends in `MOBILE_BOTTOM_SPACE_PX` (`hooks/autoFollow/autoFollowHelpers.ts`): the auto follow bottom zone plus the footprint of the scroll to bottom button, so the last row is not under the button where it first appears. The spacer adds no inset of its own; the shell padding already does.
+
 ## Tablet-Layout Subscriptions
 
 - `useTabletLayout` is now `useSyncExternalStore` with a single global `resize` listener and a single `matchMedia('(orientation: landscape)')` listener. Stable snapshots (`isSameTabletLayout`) avoid re-renders when values are equal.

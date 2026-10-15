@@ -1,5 +1,13 @@
 export const BOTTOM_SPACER_DESKTOP_VH = 0.10;
 export const BOTTOM_SPACER_MOBILE_PX = 40;
+/** Footprint of the scroll to bottom button above the composer: 32px button + 8px gap. */
+export const SCROLL_BUTTON_CLEARANCE_PX = 40;
+/**
+ * Space under the last row of a mobile chat. The button appears once the view is
+ * more than BOTTOM_SPACER_MOBILE_PX from the bottom; with the clearance on top the
+ * last row is still above the button at that point instead of under it.
+ */
+export const MOBILE_BOTTOM_SPACE_PX = BOTTOM_SPACER_MOBILE_PX + SCROLL_BUTTON_CLEARANCE_PX;
 export const TOUCH_FINGER_DOWN_THRESHOLD = 2;
 export const AUTO_MARK_TTL_MS = 1500;
 export const AUTO_MATCH_TOLERANCE_PX = 2;
