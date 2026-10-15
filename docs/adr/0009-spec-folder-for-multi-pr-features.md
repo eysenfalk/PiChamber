@@ -1,6 +1,6 @@
 # 0009. A feature delivered in several pull requests gets a temporary spec folder
 
-- Status: Accepted
+- Status: Superseded by 0013
 - Date: 2026-10-12
 
 ## Context
