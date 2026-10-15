@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
+import { addDeviceTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
+import { EVENTS_MESSAGE } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
 import { LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
@@ -79,7 +80,7 @@ describe('tours.mjs format', () => {
     expect(() => forkRenameTour({ projects: [], sessions: [{ project: 'lab-one', title: 'Renamed fork', role: 'fork' }] })).toThrow('Invalid lab seed manifest');
     expect(() => forkRenameTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
-  test('orchestration drives the seeded orchestrator and proves nesting, responsiveness and both result cards', () => {
+  test('orchestration drives the seeded orchestrator and proves nesting, responsiveness and both wake rows', () => {
     const tour = orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
     expect(tour.name).toBe('orchestration');
     expect(tour.steps[0].actions[0]).toEqual({ type: 'navigate', path: '?settings=sessions' });
@@ -89,10 +90,23 @@ describe('tours.mjs format', () => {
     expect(typed).toEqual(['ORCHESTRATE', 'STATUS?', 'GO']);
     const evidence = tour.steps.flatMap(step => step.evidence);
     expect(evidence).toContainEqual({ selector: `[role="treeitem"][aria-label="${LAB_WORKER_TITLE}"]` });
-    expect(evidence).toContainEqual({ selector: '[data-orchestration-result]', index: 1 });
+    // The rows are the daemon's wake messages, not the legacy result card.
+    expect(evidence).toContainEqual({ selector: `[data-extension-type="${EVENTS_MESSAGE}"]`, index: 1 });
     expect(tour.steps.map(step => `${step.viewport}/${step.theme}`)).toContain('mobile/dark');
     expect(() => orchestrationTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
+  test('tool-profiles sends REVIEW to the orchestrator and proves the blocked review worker', () => {
+    const tour = toolProfilesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
+    expect(tour.name).toBe('tool-profiles');
+    const typed = tour.steps.flatMap(step => step.actions).filter(action => action.type === 'type').map(action => action.value);
+    expect(typed).toEqual(['REVIEW']);
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ text: 'could not change README.md' });
+    expect(evidence).toContainEqual({ text: 'git: README.md unchanged' });
+    expect(evidence).toContainEqual({ text: 'Tools sent to me (review worker, profile read-only)' });
+    expect(() => toolProfilesTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+
   test('worktree-worker spawns a worker in a linked worktree and proves it sits under that worktree', () => {
     const tour = worktreeWorkerTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
     expect(tour.name).toBe('worktree-worker');

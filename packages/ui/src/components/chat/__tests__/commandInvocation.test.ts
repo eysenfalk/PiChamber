@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   commandInvocationName,
   commandMatchesCategory,
-  commandMatchesSearch,
+  filterAndSortCommands,
   mergeCommandAutocompleteItems,
 } from '../commandAutocompleteItems';
 
@@ -68,19 +68,22 @@ describe('command autocomplete — invocation identity', () => {
     ).toBe(true);
   });
 
-  test('search matches invocation, description, and aliases (snippets never appear here)', () => {
+  test('search matches invocation and description (snippets never appear here)', () => {
     const skill: TestItem = {
       name: 'code-review',
       invocationName: 'skill:code-review',
       source: 'skill',
       isSkill: true,
-      description: 'Review code',
+      description: 'Shows a description',
     };
-    expect(commandMatchesSearch(skill, 'skill:code')).toBe(true);
-    expect(commandMatchesSearch(skill, 'code-review')).toBe(true);
-    expect(commandMatchesSearch(skill, 'review code')).toBe(true);
+    const search = (query: string) => filterAndSortCommands([skill], query, 'all').length === 1;
+    expect(search('skill:code')).toBe(true);
+    expect(search('code-review')).toBe(true);
+    expect(search('deploy')).toBe(false);
+    expect(search('Review code')).toBe(true); // tokens match separately, as in Pi
+    expect(search('description')).toBe(true); // description match, ranked after name matches
     // Snippets use #name and must never be in the slash catalog; a # trigger
     // is not a slash invocation.
-    expect(commandMatchesSearch(skill, '#sig')).toBe(false);
+    expect(search('#sig')).toBe(false);
   });
 });

@@ -164,6 +164,7 @@ export const recordSession = (document, opId, caller, session, at) => {
     cwd: session.cwd,
     title: intent.title,
     ...(intent.role ? { role: intent.role } : {}),
+    ...(intent.profile ? { profile: intent.profile } : {}),
     ...(intent.model ? { model: intent.model } : {}),
     ...(intent.thinking ? { thinking: intent.thinking } : {}),
     ...(intent.issue ? { issue: intent.issue } : {}),

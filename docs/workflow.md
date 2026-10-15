@@ -19,12 +19,11 @@ How work moves from an idea to `dev` and from there to `main` in this repository
 | [CONTEXT.md](../CONTEXT.md) | **Live context:** open findings and questions, each with source, date and what settles it | by hand; entries are added in the pull request that learns them and removed in the one that settles them |
 | [Roadmap issue #24](https://github.com/eysenfalk/PiChamber/issues/24) | The order of upcoming work as its ordered sub-issues, and a generated order list and graph | sub-issues: people and agents; list and graph: `scripts/workflow/roadmap-sync.mjs` |
 | GitHub issues | Ideas, roadmap items (label `roadmap`) and bugs | people and agents |
-| Pull request | The plan (how), its proof, the review and the CI result | agent drafts, user approves |
-| `specs/<issue>-<name>/` | Only for a feature delivered in several pull requests: the ladder of pull requests, shared contracts and the handoff to the next agent. Deleted by the last pull request of the feature ([ADR 0009](adr/0009-spec-folder-for-multi-pr-features.md)) | agents, in the feature's pull requests |
+| Pull request | The plan (how) as slices, its proof, the review and the CI result | agent drafts it at the first plan; the user approves it in the slow lane ([ADR 0013](adr/0013-one-pull-request-with-slices.md)) |
 | Git history on `dev` | One squash commit per pull request, containing its title and full description | automatic |
 | `main` | Only stable states: a commit of `dev` the owner promoted by fast-forward ([ADR 0008](adr/0008-dev-integration-branch.md)) | the owner |
 
-There is no archive of plans and no hand-maintained catalogue; a spec folder lives only while its feature is being built. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests through the lab, is a separate roadmap item after #11.
+There is no archive of plans and no hand-maintained catalogue, and no spec folder: the plan of a finished change is its squash commit. A fact is written in one place; anywhere else links to it. A feature map of what users can do, generated from acceptance tests through the lab, is a separate roadmap item after #11.
 
 ## Configuration: `workflow.json`
 
@@ -47,9 +46,9 @@ Work is merged into `dev`, the default branch. `main` only moves when the owner 
 |---|---|---|---|
 | 1 | Write the idea down | anyone | an issue in the tracker, without the label `roadmap` |
 | 2 | Make it a roadmap item | people and agents | an issue labeled `roadmap`, placed in the roadmap issue; before work starts it has problem, requirements, acceptance |
-| 3 | Branch and draft pull request | agent | branch named after the issue; draft pull request from the template; the description is the plan |
-| 4 | Approve the plan | a person | in the pull request or in chat; nothing is implemented before |
-| 5 | Implement and prove | agent | tests and code; checks green; proof recorded; decision records; `CONTEXT.md` updated |
+| 3 | Explore, plan, draft pull request | agent | explore first, then a branch named after the issue and a draft pull request from the template at the first plan; the description is the plan, with slices and a lane |
+| 4 | Go | a person | slow lane only: in the pull request or in chat; no production code before. The fast lane builds right away |
+| 5 | Implement and prove | agent | one commit per slice; tests and code; checks green; proof recorded; decision records; `CONTEXT.md` updated |
 | 6 | Pipeline | CI | build, type check, lint, all tests, the pull request check |
 | 7 | Review | a person, supported by a review agent | the description, the proof, the diff, the CI result |
 | 8 | Merge | a person | squash merge; it closes the issue, which leaves the roadmap |
@@ -75,7 +74,9 @@ node scripts/workflow/roadmap-sync.mjs sync                    # regenerate the 
 
 Dependencies are "blocked by" relations set on the issue in GitHub; the graph draws them. The order list and graph between the markers in the roadmap issue are generated and overwritten; text outside them is kept. Bugs that need doing now can be issues without the label.
 
-### 3. Branch and draft pull request
+### 3. Explore, plan, draft pull request
+
+Explore first: read the issue, the code and the nearest docs, and put what an agent needs to resume into an issue comment. Until there is a plan there is no pull request. The draft pull request opens at the first plan ([ADR 0013](adr/0013-one-pull-request-with-slices.md)):
 
 ```bash
 git fetch origin
@@ -85,11 +86,19 @@ git push -u origin 12-short-name
 gh pr create --draft --base dev --title "<what changes>" --body-file <plan.md>
 ```
 
-Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions. It should describe one pull request that solves one problem, with roughly 100 to 600 lines to review (lock files and generated assets do not count). Larger work is split into several pull requests and roadmap items.
+Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions.
 
-### 4. Approval
+**One pull request per undertaking, with slices.** A slice is one contract that can be run or seen and accepted by one check. It is one item of the checklist under Acceptance criteria (the contract and its seam, what can be run or seen, the check that accepts it) and one ordered step under Approach (the files it touches, one commit). A slice has one seam and one review surface, and is reviewable on its own at roughly 100 to 600 lines (lock files and generated assets do not count). If a slice starts changing unrelated things, edit the description first: split it, then continue. Several pull requests only when a part must be live before the rest; the later one is planned after the earlier one merged, and there is no spec folder ([ADR 0013](adr/0013-one-pull-request-with-slices.md), which supersedes [ADR 0009](adr/0009-spec-folder-for-multi-pr-features.md)).
 
-The user approves the plan before code is written. Changing the plan later means updating the description (`gh pr edit <n> --body-file <plan.md>`) and saying so.
+**Name the lane** in the first lines of Approach, with the reason (`Lane: fast, because …`).
+
+### 4. Lane and go
+
+- **Fast, build right away:** a bug fix with a red test first, or a one-slice change with clear acceptance criteria, no new dependency, and no change to an external contract (API, persisted data, config format, visible UI behavior). A change that only touches documentation is never fast.
+- **Slow, wait for the user's go after the draft:** every documentation only change, and anything with several slices, an external contract, a migration or deletion, a new dependency, a one-way door, a product question, or questions left open by exploration. While waiting, do what fits any plan: probes, prototypes, red tests for the wanted behavior, reading. No production code before the go.
+- **Moving between lanes.** The brief or the plan names the lane. A worker may move to slow, never to fast. A fast plan that grows a second slice or touches a contract stops and moves to slow, and says so in the description.
+
+Changing the plan later means updating the description (`gh pr edit <n> --body-file <plan.md>`) and saying so.
 
 **Acceptance criteria are a living checklist.** Each criterion is an observable result plus the proof that shows it. Whoever implements checks a box off (`- [x]`) in the description as soon as that criterion is done and proven, not at the end, and adds new boxes when the plan grows. The `pull-request` check allows open boxes only while the pull request is a draft.
 
@@ -98,6 +107,7 @@ The user approves the plan before code is written. Changing the plan later means
 ### 5. Implementation
 
 - Follow [AGENTS.md](../AGENTS.md): load the matching project skills and read the nearest `README.md` and `DOCUMENTATION.md` before editing.
+- **One slice, one commit.** Build the next open slice, verify it, commit, push and check its box. The next slice starts when the previous one is verified.
 - **Proof** for a user-visible change is what the user would see: a recording of the feature in the real program, or at least screenshots, in the pull request, with before and after when behavior changes. Cover the states [CONTRIBUTING.md](../CONTRIBUTING.md#pull-requests) names (desktop and mobile, narrow and wide, light and dark). Unit tests support the proof; they are not the proof. Record through `lab/run record <tour>` into gitignored `.proof/<tour>/`. Publish on the host with `bun run proof:publish -- <pr> <tour>`: it uploads the video and screenshots into the pull request description through `gh pr edit --attach`, inside the Verification section ([ADR 0005](adr/0005-proof-attached-to-pull-requests.md)). Proof is attached, never committed or linked from a branch. On a GitLab tracker, upload with glab and place the returned Markdown in Verification; GitLab renders a video reference as a player. `glab mr update --attach` only appends at the end of the description, so the `glab` skill describes the upload and placement.
 - **Reproduce through the lab.** On the host run `bun install --frozen-lockfile` and `bun run build`, then `lab/run up` and `lab/run record lab`. Inspect every PNG, the contact sheet and the whole recording before publishing. `lab/run status` checks the lab at `http://127.0.0.1:3111`; `lab/run down` removes its pod, network and state volume. Tests needing a separate environment run through `lab/run`; everything else stays on the host. The detailed proof steps live in `.agents/skills/pichamber-verify/SKILL.md`.
 - **Every proof says how to get there.** For each proof, the description tells a developer how to reach it and check it themselves: the commands from a fresh checkout, the URL to open, and what to look at. A proof the reviewer cannot reproduce is only a claim.
@@ -121,7 +131,7 @@ The repository rules in `scripts/workflow/` check decision records and their ind
 
 ### 7. Review
 
-**Before the hand-over**, the author, person or agent, reads the whole description from top to bottom and checks every statement against what exists now: the code and the diff, the CI result of the last commit, the attached proof, and the real systems it names. Each acceptance criterion is implemented as the approved plan defined it; a deviation is named with its reason. What is no longer true is corrected, what is outdated is removed: the description states the current result, the commits hold the history. Only then does the pull request leave draft.
+**Before the hand-over**, the author, person or agent, reads the whole description from top to bottom and checks every statement against what exists now: the code and the diff, the CI result of the last commit, the attached proof, and the real systems it names. Each acceptance criterion is implemented as the plan defined it (as approved, in the slow lane); a deviation is named with its reason. What is no longer true is corrected, what is outdated is removed: the description states the current result, the commits hold the history. Only then does the pull request leave draft.
 
 The reviewer reads the description first, then watches the proof, then reads the diff. Findings that would recur go into a test or lint rule rather than a comment.
 
@@ -156,7 +166,7 @@ Agents copy what they find. Whatever is in the code becomes the pattern. So:
 |---|---|
 | ideas | all checks on every pull request |
 | roadmap items, their order and their dependencies | the pull request description check |
-| approving plans | format of decision records and their index |
+| the go for slow lane plans | format of decision records and their index |
 | review and merge | fields of every `CONTEXT.md` entry |
 | decision records, `CONTEXT.md` entries and their removal | the `workflow.json` configuration |
 | | the order list and graph in the roadmap issue |
