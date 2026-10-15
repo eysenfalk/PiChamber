@@ -440,6 +440,15 @@ describe('orchestration end-to-end through the real SDK', () => {
     const again = await client.request('orchestration.answer', { sessionId: workerId, questionId, text: 'RUN AGAIN' });
     expect(again.result).toEqual({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } });
 
+    // An answer given in the chat: the owner marks the question answered, no prompt goes out.
+    const second = (await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH TAG', audience: 'orchestrator' } })).result.value.openQuestion;
+    const promptsBefore = client.events.filter((message) => message.event === 'assistant.message.end' && message.payload?.sessionId === workerId).length;
+    const resolved = await client.request('orchestration.resolve', { sessionId: workerId, questionId: second });
+    expect(resolved.result.value).toEqual({ sessionId: workerId, questionId: second, resolved: true });
+    expect(await questionOf(workerId)).toBeNull();
+    expect(client.events.filter((message) => message.event === 'assistant.message.end' && message.payload?.sessionId === workerId).length).toBe(promptsBefore);
+    expect((await client.request('orchestration.resolve', { sessionId: workerId, questionId: second })).result).toEqual({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } });
+
     await client.close();
   }, 120_000);
 });

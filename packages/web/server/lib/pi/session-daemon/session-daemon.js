@@ -4526,6 +4526,16 @@ export function createSessionDaemon({
         writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
         return;
       }
+      case 'orchestration.resolve': {
+        // The owner marks a worker question answered without a prompt (#20).
+        const payload = message.payload ?? {};
+        const result = ![payload.sessionId, payload.questionId].every((value) => typeof value === 'string' && value.length > 0)
+          ? { error: { code: 'INVALID_ARGUMENT' } }
+          : await orchestration.resolve({ sessionId: payload.sessionId, questionId: payload.questionId })
+            .then((value) => ({ value }), (error) => ({ error: { code: typeof error?.code === 'string' ? error.code : 'ORCHESTRATION_FAILED' } }));
+        writeFrame(socket, { protocolVersion: PROTOCOL_VERSION, kind: 'response', requestId: message.requestId, result });
+        return;
+      }
       case 'orchestration.caller': {
         if (typeof message.payload?.sessionId !== 'string' || message.payload.sessionId.length === 0) {
           throw new SessionDaemonProtocolError('INVALID_ARGUMENT', 'A session id is required.');

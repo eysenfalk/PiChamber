@@ -1995,3 +1995,40 @@ describe('orchestration answer route (#20)', () => {
     expect(await answer({ value: { accepted: true } })).toEqual([502, { error: { code: 'MALFORMED_DAEMON_RESPONSE' } }]);
   });
 });
+
+describe('orchestration resolve route (#20)', () => {
+  let server;
+  afterEach(async () => {
+    await close(server);
+    server = undefined;
+  });
+
+  const start = async (getPiSessionDaemonRuntime) => {
+    const app = express();
+    app.use(express.json());
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime });
+    server = await listen(app);
+    return `http://127.0.0.1:${server.address().port}/api/pi/orchestration/questions/worker-1/q-1/resolve`;
+  };
+
+  it('closes the question through the daemon without a prompt', async () => {
+    const receipt = { sessionId: 'worker-1', questionId: 'q-1', resolved: true };
+    const request = vi.fn(async () => ({ value: receipt }));
+    const response = await fetch(await start(() => ({ request })), { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual(receipt);
+    expect(request).toHaveBeenCalledWith('orchestration.resolve', { sessionId: 'worker-1', questionId: 'q-1' });
+  });
+
+  it('maps a question that is not open to a conflict and refuses a malformed answer', async () => {
+    const resolve = async (result) => {
+      const response = await fetch(await start(() => ({ request: async () => result })), { method: 'POST' });
+      await close(server);
+      server = undefined;
+      return [response.status, await response.json()];
+    };
+    expect(await resolve({ error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } })).toEqual([409, { error: { code: 'ORCHESTRATION_QUESTION_UNKNOWN' } }]);
+    expect(await resolve({ value: { resolved: false } })).toEqual([502, { error: { code: 'MALFORMED_DAEMON_RESPONSE' } }]);
+  });
+});

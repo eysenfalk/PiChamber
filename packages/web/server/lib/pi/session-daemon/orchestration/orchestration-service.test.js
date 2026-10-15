@@ -2217,6 +2217,21 @@ describe('worker reports and digest', () => {
     expect((await harness.workers())['worker-1'].question?.id).toBe(replaced);
   });
 
+  it('marks an open question answered without a prompt, and nothing else', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'orchestrator' })).openQuestion;
+    const before = deps.sendInput.mock.calls.length;
+    await expectCode(service.resolve({ sessionId: 'worker-1', questionId: 'q-other' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect((await harness.workers())['worker-1'].question?.id).toBe(id);
+    await expect(service.resolve({ sessionId: 'worker-1', questionId: id })).resolves.toEqual({ sessionId: 'worker-1', questionId: id, resolved: true });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect(deps.sendInput.mock.calls.length).toBe(before);
+    await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+  });
+
   it('takes a brief only with a question or blocker, and only with a recommendation', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });

@@ -605,6 +605,13 @@ export interface PiOrchestrationAnswerResponse {
   deduplicated?: true;
 }
 
+/** `POST /api/pi/orchestration/questions/:sessionId/:questionId/resolve`: closes without a prompt. */
+export interface PiOrchestrationResolveResponse {
+  sessionId: string;
+  questionId: string;
+  resolved: true;
+}
+
 export interface PiOrchestrationReport {
   kind: 'progress' | 'question' | 'blocked' | 'ready' | 'done';
   summary: string;

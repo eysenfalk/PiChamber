@@ -1867,6 +1867,27 @@ export const registerPiRuntimeRoutes = (app, {
     }
   });
 
+  // Marks a question answered without a prompt, for an answer given in the chat.
+  app.post('/api/pi/orchestration/questions/:sessionId/:questionId/resolve', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { sessionId, questionId } = req.params;
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.resolve', { sessionId, questionId });
+      if (result?.error) {
+        const code = typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED';
+        res.status(ANSWER_ERROR_STATUS[code] ?? 503).json({ error: { code } });
+        return;
+      }
+      if (result?.value?.resolved !== true) {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(result.value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {
     const { sessionId } = req.params;
     const { archived } = req.body || {};

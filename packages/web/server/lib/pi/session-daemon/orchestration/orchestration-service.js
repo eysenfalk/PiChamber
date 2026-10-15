@@ -738,6 +738,15 @@ export function createOrchestrationService(deps) {
     return { sessionId, questionId, accepted: true, resolved, ...(receipt?.deduplicated ? { deduplicated: true } : {}) };
   });
 
+  // The owner marks a question answered without prompting the worker (#20),
+  // for an answer given in the worker's chat, which does not close it.
+  const resolve = ({ sessionId, questionId }) => withSession(sessionId, async () => {
+    if (!(await registry.update((document) => closeQuestion(document, sessionId, questionId)))) {
+      throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'This question is not open.', { sessionId, questionId });
+    }
+    return { sessionId, questionId, resolved: true };
+  });
+
   // Moves an idle worker of the caller back to an earlier entry and, with a
   // prompt, runs it again from there. A run, a retry, a start and an open
   // dialog all refuse: navigating under them would change a live transcript.
@@ -1870,6 +1879,7 @@ export function createOrchestrationService(deps) {
     prWatch,
     overview,
     answer,
+    resolve,
     startWakes: wakes.start,
     stopWakes: wakes.stop,
     verifyCaller,

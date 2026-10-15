@@ -35,6 +35,7 @@ import {
   type PiOrchestrationOverview,
   type PiOrchestrationAnswerInput,
   type PiOrchestrationAnswerResponse,
+  type PiOrchestrationResolveResponse,
   type PiSettingsUpdateInput,
   type PiSettingsUpdateResponse,
   type PiChamberDefaultsUpdateInput,
@@ -890,6 +891,15 @@ export class PiService {
     return jsonRequest<PiOrchestrationAnswerInput, PiOrchestrationAnswerResponse>(
       `/api/pi/orchestration/questions/${encodeURIComponent(sessionId)}/${encodeURIComponent(questionId)}/answer`,
       { method: 'POST', body: input, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}) },
+    );
+  }
+
+  /** Marks a worker's open question answered without prompting it; throws when it is not open. */
+  async resolveOrchestrationQuestion(sessionId: string, questionId: string, scope?: PiClientScope): Promise<PiOrchestrationResolveResponse> {
+    assertRuntimeUnchanged(scope);
+    return jsonRequest<Record<string, never>, PiOrchestrationResolveResponse>(
+      `/api/pi/orchestration/questions/${encodeURIComponent(sessionId)}/${encodeURIComponent(questionId)}/resolve`,
+      { method: 'POST', body: {}, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}) },
     );
   }
 
