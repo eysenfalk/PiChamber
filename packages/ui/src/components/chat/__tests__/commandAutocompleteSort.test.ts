@@ -21,7 +21,7 @@ const catalog: CommandAutocompleteSearchItem[] = [
     invocationName: 'skill:principle-exhaust-the-design-space',
     source: 'skill',
     isSkill: true,
-    description: 'Compare prototypes of a novel decision',
+    description: 'Weigh designs for a novel decision',
   },
   { name: 'skill:principle-prove-it-works', invocationName: 'skill:principle-prove-it-works', source: 'skill', isSkill: true, description: 'Prove it' },
   { name: 'skill:prototype', invocationName: 'skill:prototype', source: 'skill', isSkill: true, description: 'Build a disposable experiment' },
@@ -32,7 +32,7 @@ const catalog: CommandAutocompleteSearchItem[] = [
 const names = (query: string, category: Parameters<typeof filterAndSortCommands>[2] = 'all') =>
   filterAndSortCommands(catalog, query, category).map((item) => item.invocationName ?? item.name);
 
-describe('filterAndSortCommands follows Pi slash autocomplete (#184)', () => {
+describe('filterAndSortCommands: name matches follow Pi slash autocomplete (#184)', () => {
   test('/prototype lists only skill:prototype, not skill:principle-exhaust-the-design-space', () => {
     expect(names('prototype')).toEqual(['skill:prototype']);
   });
@@ -57,14 +57,50 @@ describe('filterAndSortCommands follows Pi slash autocomplete (#184)', () => {
     expect(names('', 'system')).toEqual(['compact']);
   });
 
-  test('only the executable name matches, as in Pi: descriptions do not', () => {
-    expect(names('experiment')).toEqual([]);
-    // Equal scores keep catalog order, as in Pi's stable sort.
+  test('equal name scores keep catalog order, as in Pi\'s stable sort', () => {
     expect(names('proto')).toEqual([
       'proto-thing',
       'skill:prototype',
       'prompt-workflow',
       'skill:principle-prove-it-works',
     ]);
+  });
+});
+
+describe('filterAndSortCommands: description and alias matches come last (#184)', () => {
+  const withMeta: CommandAutocompleteSearchItem[] = [
+    { name: 'deploy-docs', source: 'prompt', description: 'Publish the handbook' },
+    { name: 'handbook-sync', source: 'prompt', description: 'Sync' },
+    { name: 'ship-it', source: 'prompt', description: 'Publish the release', searchAliases: ['handbook'] },
+    { name: 'publish-all', source: 'prompt', description: 'Everything' },
+    { name: 'unrelated', source: 'prompt', description: 'Nothing here' },
+  ];
+  const run = (query: string, category: Parameters<typeof filterAndSortCommands>[2] = 'all') =>
+    filterAndSortCommands(withMeta, query, category).map((item) => item.name);
+
+  test('a command reachable only by description or alias follows every name match', () => {
+    expect(run('handbook')).toEqual(['handbook-sync', 'ship-it', 'deploy-docs']);
+    // the alias is an exact word, so it outranks the description match inside the group
+  });
+
+  test('the metadata group is ranked by fuzzy score and lists a command once', () => {
+    // 'publish': name match first; deploy-docs and ship-it match by description (same score, catalog order).
+    expect(run('publish')).toEqual(['publish-all', 'deploy-docs', 'ship-it']);
+    // ship-it matches both by description and alias but appears once.
+    expect(run('handbook').filter((name) => name === 'ship-it')).toHaveLength(1);
+  });
+
+  test('the name part stays exactly Pi: it does not change when metadata is added', () => {
+    const nameOnly = catalog.map((item) => ({ ...item, description: undefined, searchAliases: undefined }));
+    for (const query of ['proto', 'protot', 'prototype', 'skill:proto', 'rev', 'tests']) {
+      const expected = filterAndSortCommands(nameOnly, query, 'all').map((item) => item.name);
+      const actual = filterAndSortCommands(catalog, query, 'all').map((item) => item.name);
+      expect(actual.slice(0, expected.length)).toEqual(expected);
+    }
+  });
+
+  test('categories filter the metadata group too, and an empty query is unchanged', () => {
+    expect(run('handbook', 'skills')).toEqual([]);
+    expect(run('')).toEqual(withMeta.map((item) => item.name));
   });
 });

@@ -1,4 +1,4 @@
-import { piFuzzyFilter } from "@/lib/search/piFuzzy";
+import { piFuzzyFilter, piFuzzyFilterAny } from "@/lib/search/piFuzzy";
 
 export type CommandAutocompleteCategory =
   "all" | "system" | "skills" | "extensions" | "prompts";
@@ -124,14 +124,15 @@ export function commandMatchesCategory(
 const SKILL_PREFIX = "skill:";
 
 /**
- * Filter a merged catalog by category and free-text query, in the order of
- * Pi's slash autocomplete (pi-tui `CombinedAutocompleteProvider`): only the
- * executable name is matched, ranked by `piFuzzyFilter`; a `skill:` command
- * is matched by its bare name first, and those that match only their full
- * name (for example `skill:pro`) follow. Descriptions and aliases do not
- * match, as in Pi. Pure so the desktop rich list and the mobile compact list
- * share one per-keystroke path; the mobile list always passes `all` to keep
- * the full catalog without category chrome.
+ * Filter a merged catalog by category and free-text query. The name matches
+ * and their order are Pi's slash autocomplete (pi-tui
+ * `CombinedAutocompleteProvider`): ranked by `piFuzzyFilter`, a `skill:`
+ * command by its bare name first, then those that match only their full name
+ * (for example `skill:pro`). Commands that do not match by name but by
+ * description or search alias (a PiChamber extension, Pi has none) come last,
+ * ranked by the same fuzzy function. Pure so the desktop rich list and the
+ * mobile compact list share one per-keystroke path; the mobile list always
+ * passes `all` to keep the full catalog without category chrome.
  */
 export function filterAndSortCommands<T extends CommandAutocompleteSearchItem>(
   commands: readonly T[],
@@ -155,5 +156,12 @@ export function filterAndSortCommands<T extends CommandAutocompleteSearchItem>(
     normalizedQuery,
     commandInvocationName,
   );
-  return [...bareNameMatches, ...fullNameOnlyMatches];
+  const nameMatches = [...bareNameMatches, ...fullNameOnlyMatches];
+  const nameMatchSet = new Set(nameMatches);
+  const metadataMatches = piFuzzyFilterAny(
+    inCategory.filter((command) => !nameMatchSet.has(command)),
+    normalizedQuery,
+    (command) => [command.description, ...(command.searchAliases ?? [])].filter((text): text is string => Boolean(text)),
+  );
+  return [...nameMatches, ...metadataMatches];
 }

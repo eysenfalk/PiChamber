@@ -68,7 +68,7 @@ describe('command autocomplete — invocation identity', () => {
     ).toBe(true);
   });
 
-  test('search matches the executable invocation like Pi, not description (snippets never appear here)', () => {
+  test('search matches invocation and description (snippets never appear here)', () => {
     const skill: TestItem = {
       name: 'code-review',
       invocationName: 'skill:code-review',
@@ -81,7 +81,7 @@ describe('command autocomplete — invocation identity', () => {
     expect(search('code-review')).toBe(true);
     expect(search('deploy')).toBe(false);
     expect(search('Review code')).toBe(true); // tokens match separately, as in Pi
-    expect(search('description')).toBe(false);
+    expect(search('description')).toBe(true); // description match, ranked after name matches
     // Snippets use #name and must never be in the slash catalog; a # trigger
     // is not a slash invocation.
     expect(search('#sig')).toBe(false);

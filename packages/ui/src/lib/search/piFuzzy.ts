@@ -64,29 +64,44 @@ function piFuzzyMatch(query: string, text: string): PiFuzzyMatch {
   return { matches: true, score: swappedMatch.score + 5 };
 }
 
+function tokenize(query: string): string[] {
+  return query.trim().split(/[\s/]+/).filter((token) => token.length > 0);
+}
+
+/** Sum of the token scores, or undefined when a token does not match. */
+function scoreText(tokens: readonly string[], text: string): number | undefined {
+  let totalScore = 0;
+  for (const token of tokens) {
+    const match = piFuzzyMatch(token, text);
+    if (!match.matches) return undefined;
+    totalScore += match.score;
+  }
+  return totalScore;
+}
+
 /**
  * Best match first. Whitespace- and slash-separated tokens must all match.
  * The sort is stable, so equal scores keep the input order.
  */
 export function piFuzzyFilter<T>(items: readonly T[], query: string, getText: (item: T) => string): T[] {
-  if (!query.trim()) return [...items];
-  const tokens = query.trim().split(/[\s/]+/).filter((token) => token.length > 0);
+  return piFuzzyFilterAny(items, query, (item) => [getText(item)]);
+}
+
+/**
+ * Like `piFuzzyFilter` for items with several texts (PiChamber extension, Pi
+ * has none): an item matches when one of its texts matches all tokens, and is
+ * ranked by its best (lowest) score. Each item appears once.
+ */
+export function piFuzzyFilterAny<T>(items: readonly T[], query: string, getTexts: (item: T) => readonly string[]): T[] {
+  const tokens = tokenize(query);
   if (tokens.length === 0) return [...items];
 
   const results: { item: T; totalScore: number }[] = [];
   for (const item of items) {
-    const text = getText(item);
-    let totalScore = 0;
-    let allMatch = true;
-    for (const token of tokens) {
-      const match = piFuzzyMatch(token, text);
-      if (!match.matches) {
-        allMatch = false;
-        break;
-      }
-      totalScore += match.score;
-    }
-    if (allMatch) results.push({ item, totalScore });
+    const scores = getTexts(item)
+      .map((text) => scoreText(tokens, text))
+      .filter((score): score is number => score !== undefined);
+    if (scores.length > 0) results.push({ item, totalScore: Math.min(...scores) });
   }
   results.sort((a, b) => a.totalScore - b.totalScore);
   return results.map((result) => result.item);
