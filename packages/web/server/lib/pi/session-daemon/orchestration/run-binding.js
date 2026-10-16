@@ -1,5 +1,5 @@
 // Binds an input's verdict to the run Pi started for it, so a later abort
-// hits that run and no other. SDK assumption (Pi 1.1.0, CONTEXT.md): Pi
+// hits that run and no other. SDK assumption (Pi 1.3.0, CONTEXT.md): Pi
 // calls `preflightResult('started')` and then, without an await in between,
 // starts the run (`Agent.runWithLifecycle`), whose own AbortSignal is
 // `session.agent.signal` until the run ends. A signal that is new one
@@ -20,7 +20,7 @@ export const bindStartedRun = (session) => {
 
 /**
  * Proof that the run `run` (from `bindStartedRun`) ended, from the prompt that
- * started it. SDK assumption (Pi 1.1.0, CONTEXT.md): `prompt()` resolves only
+ * started it. SDK assumption (Pi 1.3.0, CONTEXT.md): `prompt()` resolves only
  * after its run, every retry and continuation of it, and its `agent_settled`
  * handlers; a prompt deferred while the previous run settles resolves early,
  * but gives no `started` verdict then. Resolves true once `promptEnd`
@@ -35,7 +35,7 @@ export const provenRunEnd = async (session, promptEnd, run) => {
 
 /**
  * Whether an `agent_settled` event is a real completion. SDK assumption (Pi
- * 1.1.0, CONTEXT.md): a run's signal is `session.agent.signal` from its start
+ * 1.3.0, CONTEXT.md): a run's signal is `session.agent.signal` from its start
  * until the run ends, also when it is aborted, and every continuation makes a
  * new one; Pi emits `agent_settled` after the run ended. A signal that still
  * exists means a run is live, so that settle completes nothing.

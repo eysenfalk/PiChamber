@@ -1332,7 +1332,7 @@ export function createOrchestrationService(deps) {
     // Taken before any await: a later turn must not replace it.
     const result = captureResult(runtime);
     // A run of this service ends only with its own prompt (`finishRun`). The
-    // event is no proof of that: Pi 1.1.0 can emit it for an earlier prompt
+    // event is no proof of that: Pi 1.3.0 can emit it for an earlier prompt
     // while this run waits in its retry backoff. It only records the result
     // of the run that started last.
     const run = liveRuns.get(sessionId);
