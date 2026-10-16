@@ -229,6 +229,22 @@ export const ORCHESTRATION_TOOLS = [
     parameters: { type: 'object', additionalProperties: false, required: ['sessionId'], properties: { sessionId } },
   },
   {
+    name: 'worker_resolve',
+    label: 'Close worker question',
+    description: 'Close the open question or blocker of one of your own workers without sending it anything: no run starts, a dormant worker stays dormant, a stopped one stays stopped. Use it when the question is settled elsewhere, for example the owner answered it in your chat, or the worker is stopped. To answer and close in one step, use session_send with resolves.',
+    childAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sessionId', 'questionId'],
+      properties: {
+        sessionId,
+        questionId: { ...questionId, description: 'The open question to close, as listed in orchestration_digest.' },
+        answeredBy: { type: 'string', enum: ['orchestrator', 'owner'], description: 'Who settled it, recorded in closedQuestion; owner when the owner answered in your chat. Default orchestrator.' },
+      },
+    },
+  },
+  {
     name: 'orchestration_takeover',
     label: 'Take over workers',
     description: 'Take over every worker and open start of another orchestrator session, for example after it was replaced. Refused while that session or one of its starts still runs. Retries of its starts with the same clientRequestId then reach you.',
@@ -243,7 +259,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'orchestration_digest',
     label: 'Orchestration digest',
-    description: 'The state of all your workers in one compact call, without opening dormant sessions: lifecycle, live state (busy, retry, waiting_input, idle, dormant), last progress and input, last report, open question, last error, usage at the last settle, pull request, and the slot use. Prefer it over session_read.',
+    description: 'The state of all your workers in one compact call, without opening dormant sessions: lifecycle, live state (busy, retry, waiting_input, idle, dormant), last progress and input, last report, open question, the last closed question with who closed it, last error, usage at the last settle, pull request, and the slot use. Prefer it over session_read.',
     childAllowed: false,
     parameters: {
       type: 'object',

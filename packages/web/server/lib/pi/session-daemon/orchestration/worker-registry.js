@@ -453,7 +453,7 @@ export const recordReport = (document, sessionId, args, { at, questionId, reposi
       openQuestion: open.id,
     });
   }
-  if (args.resolves !== undefined) delete worker.question;
+  if (args.resolves !== undefined) endQuestion(worker, 'worker', at);
   if (asks) {
     worker.question = {
       id: questionId, kind: args.kind, audience: args.audience, summary: args.summary, at,
@@ -473,11 +473,18 @@ export const recordReport = (document, sessionId, args, { at, questionId, reposi
   return { deduplicated: false, question: worker.question ?? null };
 };
 
-/** Closes the worker's open question when it is `questionId`. */
-export const closeQuestion = (document, sessionId, questionId) => {
+// Only the last close is kept: who settled it (`owner`, `orchestrator`,
+// `worker` or `stop`) and when (#231).
+const endQuestion = (worker, by, at) => {
+  worker.closedQuestion = { id: worker.question.id, by, at };
+  delete worker.question;
+};
+
+/** Closes the worker's open question when it is `questionId`, recording who closed it. */
+export const closeQuestion = (document, sessionId, questionId, by, at) => {
   const worker = document.workers[sessionId];
   if (!worker?.question || worker.question.id !== questionId) return false;
-  delete worker.question;
+  endQuestion(worker, by, at);
   return true;
 };
 

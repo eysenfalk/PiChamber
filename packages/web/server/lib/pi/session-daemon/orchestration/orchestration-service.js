@@ -702,7 +702,7 @@ export function createOrchestrationService(deps) {
     // An accepted message from the worker's owner answers its open question.
     const resolved = args.resolves === undefined ? undefined : await registry.update((document) => (
       document.workers[args.sessionId]?.orchestratorSessionId === callerSessionId
-      && closeQuestion(document, args.sessionId, args.resolves)
+      && closeQuestion(document, args.sessionId, args.resolves, 'orchestrator', now())
     ));
     return {
       sessionId: args.sessionId,
@@ -725,14 +725,16 @@ export function createOrchestrationService(deps) {
     }
     const receipt = await sendInput({ sessionId, text, delivery: 'prompt', operationId: clientRequestId, source: 'owner' });
     // A report meanwhile may have closed or replaced it; then only the prompt counts.
-    const resolved = await registry.update((document) => closeQuestion(document, sessionId, questionId));
+    const resolved = await registry.update((document) => closeQuestion(document, sessionId, questionId, 'owner', now()));
     return { sessionId, questionId, accepted: true, resolved, ...(receipt?.deduplicated ? { deduplicated: true } : {}) };
   });
 
-  // The owner marks a question answered without prompting the worker (#20),
-  // for an answer given in the worker's chat, which does not close it.
-  const resolve = ({ sessionId, questionId }) => withSession(sessionId, async () => {
-    if (!(await registry.update((document) => closeQuestion(document, sessionId, questionId)))) {
+  // Closes a question without prompting the worker: the owner's "mark
+  // answered" in the control center (#20), for an answer given in the
+  // worker's chat, and the orchestrator's `worker_resolve` (#231), for one
+  // given in its chat or a stopped worker. Only the registry changes.
+  const resolve = ({ sessionId, questionId }, by = 'owner') => withSession(sessionId, async () => {
+    if (!(await registry.update((document) => closeQuestion(document, sessionId, questionId, by, now())))) {
       throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'This question is not open.', { sessionId, questionId });
     }
     return { sessionId, questionId, resolved: true };
@@ -915,6 +917,8 @@ export function createOrchestrationService(deps) {
       delete worker.admission;
       worker.state = 'stopped';
       worker.stateSince = now();
+      // The stop ends the conversation: nobody answers its question any more (#231).
+      if (worker.question) closeQuestion(document, sessionId, worker.question.id, 'stop', worker.stateSince);
       // Checked in this write: a verdict that settles an input later queues
       // its release behind it.
       if ((unsettled?.pending.size ?? 0) === 0) return { held: false };
@@ -1066,6 +1070,7 @@ export function createOrchestrationService(deps) {
       lastInputAt: worker.lastInputAt ?? null,
       report: worker.report ? report : null,
       question: worker.question ?? null,
+      closedQuestion: worker.closedQuestion ?? null,
       dialog: dialogOf(sessionId),
       lastError: settled?.lastError ?? null,
       usage: settled?.usage ? { settled: settled.usage, settledAt: settled.at } : null,
@@ -1259,6 +1264,7 @@ export function createOrchestrationService(deps) {
     session_stop: stop,
     session_rewind: rewind,
     worker_cleanup: cleanupWorker,
+    worker_resolve: (_callerSessionId, args) => resolve(args, args.answeredBy ?? 'orchestrator'),
     orchestration_takeover: takeover,
   };
 
@@ -1851,6 +1857,8 @@ export function createOrchestrationService(deps) {
         if (live.stopping && !belongsToLiveProcess(live.stopping)) delete live.stopping;
         // A hold ends with its process: that process's runs and inputs died with it.
         if (live.hold && !belongsToLiveProcess(live.hold.process)) delete live.hold;
+        // A stopped worker kept its question before stops closed them (#231).
+        if (live.state === 'stopped' && live.question) closeQuestion(current, sessionId, live.question.id, 'stop', now());
       });
     }
   };

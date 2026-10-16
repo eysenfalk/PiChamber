@@ -2251,6 +2251,107 @@ describe('worker reports and digest', () => {
     await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
   });
 
+  it('closes the open question of a stopped worker (#231)', async () => {
+    const harness = createHarness();
+    const { service } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION })).openQuestion;
+    await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ stopped: ['worker-1'] });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect((await digest(harness)).workers.find((worker) => worker.sessionId === 'worker-1').question).toBeNull();
+    expect((await service.overview()).orchestrators[0].workers[0].question).toBeNull();
+    await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+  });
+
+  it('lets the orchestrator close a question of its own worker with worker_resolve, without a run (#231)', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    // An owner question the owner answered in the orchestrator's chat.
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION })).openQuestion;
+    const sends = deps.sendInput.mock.calls.length;
+    deps.activateSession.mockClear();
+
+    await expectCode(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: 'q-other' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    await expectCode(service.call('worker-1', 'worker_resolve', { sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_FORBIDDEN');
+    harness.runtimes.set('orch-2', createRuntime({ sessionId: 'orch-2' }));
+    await expectCode(service.call('orch-2', 'worker_resolve', { sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_FORBIDDEN');
+    expect((await harness.workers())['worker-1'].question?.id).toBe(id);
+
+    await expect(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id }))
+      .resolves.toEqual({ sessionId: 'worker-1', questionId: id, resolved: true });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect((await digest(harness)).workers[0].question).toBeNull();
+    await expectCode(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect(deps.sendInput.mock.calls.length).toBe(sends);
+    expect(deps.activateSession).not.toHaveBeenCalled();
+  });
+
+  it('drops the question a stopped worker kept from before stops closed questions, on the next call (#231)', async () => {
+    const harness = createHarness({ now: () => 7_000 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    await harness.service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    await harness.registry.update((document) => {
+      document.workers['worker-1'].question = { id: 'q-old', kind: 'question', audience: 'owner', summary: 'Merge?', at: 1 };
+    });
+    // The daemon restarts with the stored registry.
+    const restarted = createHarness({ file: harness.file, now: () => 7_000 });
+    const { service, deps } = restarted;
+    expect((await digest(restarted)).workers[0]).toMatchObject({ lifecycle: 'stopped', question: null, closedQuestion: { id: 'q-old', by: 'stop', at: 7_000 } });
+    expect((await service.overview()).orchestrators[0].workers[0].question).toBeNull();
+    await expectCode(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: 'q-old' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect((await restarted.workers())['worker-1']).toMatchObject({ state: 'stopped' });
+    expect(deps.sendInput).not.toHaveBeenCalled();
+    expect(deps.activateSession).not.toHaveBeenCalled();
+  });
+
+  it('records who closed the last question, on every close path (#231)', async () => {
+    const harness = createHarness({ now: () => 5_000 });
+    const { service } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const ask = async (audience = 'orchestrator') => (await report(harness, audience === 'owner'
+      ? { kind: 'question', summary: 'Which API?', audience, brief: OWNER_QUESTION }
+      : { kind: 'question', summary: 'Which API?', audience })).openQuestion;
+    const closed = async () => (await harness.workers())['worker-1'].closedQuestion;
+
+    let id = await ask();
+    await report(harness, { kind: 'progress', summary: 'decided myself', resolves: id });
+    expect(await closed()).toEqual({ id, by: 'worker', at: 5_000 });
+
+    id = await ask();
+    await service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'use v2', resolves: id });
+    expect(await closed()).toEqual({ id, by: 'orchestrator', at: 5_000 });
+    await harness.settle('worker-1', 'second');
+
+    id = await ask('owner');
+    await service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' });
+    expect(await closed()).toEqual({ id, by: 'owner', at: 5_000 });
+    await harness.settle('worker-1', 'third');
+
+    id = await ask('owner');
+    await service.resolve({ sessionId: 'worker-1', questionId: id });
+    expect(await closed()).toEqual({ id, by: 'owner', at: 5_000 });
+
+    id = await ask();
+    await service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id });
+    expect(await closed()).toEqual({ id, by: 'orchestrator', at: 5_000 });
+
+    // The owner answered in the orchestrator's chat.
+    id = await ask('owner');
+    await service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id, answeredBy: 'owner' });
+    expect(await closed()).toEqual({ id, by: 'owner', at: 5_000 });
+    expect((await digest(harness)).workers[0]).toMatchObject({ question: null, closedQuestion: { id, by: 'owner', at: 5_000 } });
+
+    id = await ask();
+    await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    expect(await closed()).toEqual({ id, by: 'stop', at: 5_000 });
+    expect((await digest(harness)).workers[0].closedQuestion).toEqual({ id, by: 'stop', at: 5_000 });
+  });
+
   it('takes a brief only with a question or blocker, and only with a recommendation', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
@@ -2753,6 +2854,8 @@ describe('worker_cleanup', () => {
 
   it('removes worktree, local and remote branch, then the session, and forgets the worker after a squash merge', async () => {
     const h = await setup();
+    // Its open question goes with the record (#231).
+    await h.service.call(h.sessionId, 'worker_report', { kind: 'question', summary: 'Next?', audience: 'orchestrator' });
     const result = await h.cleanup();
 
     expect(result).toEqual({ sessionId: h.sessionId, removed: [`worktree ${h.worktree}`, 'branch 9-fix', 'origin 9-fix', `session ${h.sessionId}`] });
@@ -2762,6 +2865,7 @@ describe('worker_cleanup', () => {
     expect(h.remoteExists()).toBe(false);
     expect(h.deleteSession).toHaveBeenCalledWith(h.sessionId);
     expect(await h.workers()).toEqual({});
+    expect((await h.service.overview()).orchestrators.flatMap((group) => group.workers)).toEqual([]);
   });
 
   it.each([
