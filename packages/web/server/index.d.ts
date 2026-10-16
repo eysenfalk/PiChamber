@@ -18,8 +18,9 @@ export interface StartWebUiServerOptions {
   /**
    * Hosts that relaunch the server process themselves (the desktop app)
    * supply this; without it the server replaces its own process through
-   * `process.execve`, and restart is unsupported where that is missing. `prepare` arms the relaunch and may throw; `commit` ends
-   * the current process after the HTTP reply was written.
+   * `process.execve`, and restart is unsupported where that is missing.
+   * `prepare` arms the relaunch and may throw; `commit` ends the current
+   * process after the HTTP reply was written.
    */
   restartProcess?: {
     prepare?: () => void | Promise<void>;

@@ -94,7 +94,7 @@ describe('POST /api/pi/runtime/restart', () => {
       order.push('prepare');
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(commit).not.toHaveBeenCalled();
-      return { scope: 'process', commit };
+      return { commit };
     });
     const response = await post(server, '/api/pi/runtime/restart');
     expect(response.status).toBe(202);
@@ -107,7 +107,7 @@ describe('POST /api/pi/runtime/restart', () => {
     const commit = vi.fn();
     const restartHost = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error('boom'), { code: 'DAEMON_STOP_TIMEOUT' }))
-      .mockResolvedValueOnce({ scope: 'process', commit });
+      .mockResolvedValueOnce({ commit });
     const request = vi.fn(async () => ({ reloaded: 1, deferred: 0, failed: 0 }));
     await start(restartHost, { getPiSessionDaemonRuntime: () => ({ request }) });
 
@@ -129,7 +129,7 @@ describe('POST /api/pi/runtime/restart', () => {
     const gate = new Promise((resolve) => { release = resolve; });
     await start(async () => {
       await gate;
-      return { scope: 'process', commit: () => {} };
+      return { commit: () => {} };
     });
     const first = post(server, '/api/pi/runtime/restart');
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -186,7 +186,7 @@ describe('runtime reload and restart authentication', () => {
 
   it('rejects unauthenticated calls to both routes without running either action', async () => {
     const request = vi.fn(async () => ({ reloaded: 0, deferred: 0, failed: 0 }));
-    const restartHost = vi.fn(async () => ({ scope: 'process', commit: () => {} }));
+    const restartHost = vi.fn(async () => ({ commit: () => {} }));
     await start({ restartHost, request });
 
     for (const route of ['/api/pi/runtime/reload', '/api/pi/runtime/restart']) {
@@ -199,7 +199,7 @@ describe('runtime reload and restart authentication', () => {
 
   it('runs both actions for a session authenticated through the normal UI login', async () => {
     const request = vi.fn(async () => ({ reloaded: 3, deferred: 0, failed: 0 }));
-    const restartHost = vi.fn(async () => ({ scope: 'process', commit: () => {} }));
+    const restartHost = vi.fn(async () => ({ commit: () => {} }));
     await start({ restartHost, request });
 
     const login = await post(server, '/auth/session', {
@@ -240,7 +240,7 @@ describe('createHostRestart', () => {
     const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess });
     const outcome = await restart();
     expect(order).toEqual(['stop', 'prepare']);
-    expect(outcome).toEqual({ scope: 'process', commit: restartProcess.commit });
+    expect(outcome).toEqual({ commit: restartProcess.commit });
     expect(restartProcess.commit).not.toHaveBeenCalled();
   });
 
@@ -271,7 +271,7 @@ describe('createHostRestart', () => {
     const supervisor = supervisorWith({ stop: vi.fn(async () => { throw gone; }) });
     const restartProcess = { prepare: vi.fn(), commit: vi.fn() };
     const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess });
-    await expect(restart()).resolves.toEqual({ scope: 'process', commit: restartProcess.commit });
+    await expect(restart()).resolves.toEqual({ commit: restartProcess.commit });
     expect(supervisor.start).not.toHaveBeenCalled();
   });
 

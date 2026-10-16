@@ -42,7 +42,7 @@ export const createHostRestart = ({ getSupervisor, restartProcess = null } = {})
       await supervisor.start().catch(() => {});
       throw error;
     }
-    return { scope: 'process', commit: restartProcess.commit };
+    return { commit: restartProcess.commit };
   };
 };
 
