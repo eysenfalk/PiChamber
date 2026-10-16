@@ -229,6 +229,18 @@ export const ORCHESTRATION_TOOLS = [
     parameters: { type: 'object', additionalProperties: false, required: ['sessionId'], properties: { sessionId } },
   },
   {
+    name: 'worker_resolve',
+    label: 'Close worker question',
+    description: 'Close the open question or blocker of one of your own workers without sending it anything: no run starts, a dormant worker stays dormant, a stopped one stays stopped. Use it when the question is settled elsewhere, for example the owner answered it in your chat, or the worker is stopped. To answer and close in one step, use session_send with resolves.',
+    childAllowed: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sessionId', 'questionId'],
+      properties: { sessionId, questionId: { ...questionId, description: 'The open question to close, as listed in orchestration_digest.' } },
+    },
+  },
+  {
     name: 'orchestration_takeover',
     label: 'Take over workers',
     description: 'Take over every worker and open start of another orchestrator session, for example after it was replaced. Refused while that session or one of its starts still runs. Retries of its starts with the same clientRequestId then reach you.',

@@ -729,8 +729,10 @@ export function createOrchestrationService(deps) {
     return { sessionId, questionId, accepted: true, resolved, ...(receipt?.deduplicated ? { deduplicated: true } : {}) };
   });
 
-  // The owner marks a question answered without prompting the worker (#20),
-  // for an answer given in the worker's chat, which does not close it.
+  // Closes a question without prompting the worker: the owner's "mark
+  // answered" in the control center (#20), for an answer given in the
+  // worker's chat, and the orchestrator's `worker_resolve` (#231), for one
+  // given in its chat or a stopped worker. Only the registry changes.
   const resolve = ({ sessionId, questionId }) => withSession(sessionId, async () => {
     if (!(await registry.update((document) => closeQuestion(document, sessionId, questionId)))) {
       throw new OrchestrationError('ORCHESTRATION_QUESTION_UNKNOWN', 'This question is not open.', { sessionId, questionId });
@@ -1261,6 +1263,7 @@ export function createOrchestrationService(deps) {
     session_stop: stop,
     session_rewind: rewind,
     worker_cleanup: cleanupWorker,
+    worker_resolve: (_callerSessionId, args) => resolve(args),
     orchestration_takeover: takeover,
   };
 

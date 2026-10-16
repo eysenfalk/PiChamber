@@ -8,7 +8,7 @@ import { ORCHESTRATION_TOOLS } from './tool-contracts.js';
 
 const workerAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool.childAllowed !== false]));
 const orchestratorAllowed = new Map(ORCHESTRATION_TOOLS.map((tool) => [tool.name, tool.orchestratorAllowed !== false]));
-const OWNERSHIP_TOOLS = new Set(['session_stop', 'session_rewind', 'worker_cleanup']);
+const OWNERSHIP_TOOLS = new Set(['session_stop', 'session_rewind', 'worker_cleanup', 'worker_resolve']);
 
 /**
  * @param {{ toolName: string, callerSessionId: string, callerKind: 'worker' | 'orchestrator' | 'unmarked',

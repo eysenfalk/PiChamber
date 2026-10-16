@@ -2264,6 +2264,49 @@ describe('worker reports and digest', () => {
     await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
   });
 
+  it('lets the orchestrator close a question of its own worker with worker_resolve, without a run (#231)', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    // An owner question the owner answered in the orchestrator's chat.
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION })).openQuestion;
+    const sends = deps.sendInput.mock.calls.length;
+    deps.activateSession.mockClear();
+
+    await expectCode(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: 'q-other' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    await expectCode(service.call('worker-1', 'worker_resolve', { sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_FORBIDDEN');
+    harness.runtimes.set('orch-2', createRuntime({ sessionId: 'orch-2' }));
+    await expectCode(service.call('orch-2', 'worker_resolve', { sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_FORBIDDEN');
+    expect((await harness.workers())['worker-1'].question?.id).toBe(id);
+
+    await expect(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id }))
+      .resolves.toEqual({ sessionId: 'worker-1', questionId: id, resolved: true });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect((await digest(harness)).workers[0].question).toBeNull();
+    await expectCode(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect(deps.sendInput.mock.calls.length).toBe(sends);
+    expect(deps.activateSession).not.toHaveBeenCalled();
+  });
+
+  it('closes the question of a stopped worker with worker_resolve and leaves it stopped (#231)', async () => {
+    const harness = createHarness();
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    // A question stored before stops closed questions.
+    await harness.registry.update((document) => {
+      document.workers['worker-1'].question = { id: 'q-old', kind: 'question', audience: 'orchestrator', summary: 'Merge?', at: 1 };
+    });
+    const sends = deps.sendInput.mock.calls.length;
+    await expect(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: 'q-old' }))
+      .resolves.toEqual({ sessionId: 'worker-1', questionId: 'q-old', resolved: true });
+    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'stopped' });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect(deps.sendInput.mock.calls.length).toBe(sends);
+  });
+
   it('takes a brief only with a question or blocker, and only with a recommendation', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });

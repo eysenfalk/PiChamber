@@ -490,6 +490,48 @@ describe('orchestration end-to-end through the real SDK', () => {
     await client.close();
   }, 120_000);
 
+  it('closes questions settled elsewhere: worker_resolve without a run, and session_stop (#231)', async () => {
+    const { client, createSession } = await startDaemon();
+    const parentId = await createSession();
+    const call = async (sessionId, tool, args) => (await client.request('orchestration.call', { sessionId, tool, args })).result;
+    const replies = (sessionId, text) => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === sessionId && message.payload?.text === text).length;
+    const assistantEnds = (sessionId) => client.events.filter((message) => message.event === 'assistant.message.end'
+      && message.payload?.sessionId === sessionId).length;
+    const reached = (check) => vi.waitFor(() => expect(check(), String(check)).toBe(true), { timeout: 30_000, interval: 50 });
+    const questionOf = async (workerId) => (await client.request('orchestration.overview', {})).result.value.orchestrators
+      .flatMap((group) => group.workers).find((worker) => worker.sessionId === workerId)?.question ?? null;
+    // A worker missing from the digest must not read as a closed question.
+    const digestQuestion = async (workerId) => (await call(parentId, 'orchestration_digest', {})).value.workers
+      .find((worker) => worker.sessionId === workerId).question;
+
+    await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
+    await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
+    const workerId = (await client.request('orchestration.overview', {})).result.value.orchestrators[0].workers[0].sessionId;
+    expect(ORCHESTRATION_TOOLS.find((tool) => tool.name === 'worker_resolve')).toMatchObject({ childAllowed: false });
+
+    // The owner answered this one in the orchestrator's chat: the orchestrator closes it, the worker gets no prompt.
+    const ownerQuestion = (await call(workerId, 'worker_report', { kind: 'question', summary: 'WHICH BRANCH', audience: 'owner', brief: ownerBrief })).value.openQuestion;
+    expect(await questionOf(workerId)).toMatchObject({ id: ownerQuestion, audience: 'owner' });
+    const before = assistantEnds(workerId);
+    expect((await call(workerId, 'worker_resolve', { sessionId: workerId, questionId: ownerQuestion })).error).toMatchObject({ code: 'ORCHESTRATION_FORBIDDEN' });
+    expect((await call(parentId, 'worker_resolve', { sessionId: workerId, questionId: ownerQuestion })).value)
+      .toEqual({ sessionId: workerId, questionId: ownerQuestion, resolved: true });
+    expect(await questionOf(workerId)).toBeNull();
+    expect(await digestQuestion(workerId)).toBeNull();
+    await new Promise((done) => { setTimeout(done, 500); });
+    expect(assistantEnds(workerId)).toBe(before);
+
+    // A stopped worker's question goes with the stop.
+    const orchestratorQuestion = (await call(workerId, 'worker_report', { kind: 'question', summary: 'WHICH TAG', audience: 'orchestrator' })).value.openQuestion;
+    expect(await digestQuestion(workerId)).toMatchObject({ id: orchestratorQuestion });
+    expect((await call(parentId, 'session_stop', { sessionId: workerId })).value).toMatchObject({ stopped: [workerId] });
+    expect(await questionOf(workerId)).toBeNull();
+    expect(await digestQuestion(workerId)).toBeNull();
+
+    await client.close();
+  }, 120_000);
+
   it('delivers a wake whose send meets the owner\'s idle disposal once, to the reopened owner (#190)', async () => {
     // Once armed, the parent's next idle disposal waits here while it still owns the runtime.
     const gate = { sessionId: undefined, entered: undefined, release: () => {} };
