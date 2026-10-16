@@ -260,14 +260,16 @@ export async function scanPiSessionJsonlHeaders({ sessionId, agentDir, accept = 
 /**
  * Every existing directory that holds Pi sessions, so folders no project names
  * can be listed too. Pi keeps one store per cwd under `<agentDir>/sessions/`,
- * but the store name encodes the cwd lossily, so the cwd comes from the newest
- * readable session header in each store. Listing any cwd that maps to a store
- * reads the whole store, so one header per store reaches all its sessions. A
- * directory that no longer exists is left out: the daemon can neither list
- * nor continue a session there. A missing sessions root is an empty, complete
- * answer. A store, or a store's only headers, that cannot be read set
- * `incomplete`, because a directory may sit behind them. Only a failure to
- * read the sessions root itself rejects.
+ * but the store name encodes the cwd lossily, so one store can hold several
+ * cwds (`a-b` and `a/b`). The cwd comes from the newest readable session
+ * header in each store whose directory still exists. Listing any cwd that maps
+ * to a store reads the whole store, so one header per store reaches all its
+ * sessions. A directory that no longer exists (`ENOENT`, `ENOTDIR`) is left
+ * out: the daemon can neither list nor continue a session there. A missing
+ * sessions root is an empty, complete answer. A store, a store's only headers
+ * or a directory that cannot be read or checked set `incomplete`, because a
+ * directory may sit behind them. Only a failure to read the sessions root
+ * itself rejects.
  *
  * @param {{ agentDir: string, readDirectory?: typeof readdir }} options
  * @returns {Promise<{ directories: string[], incomplete: boolean }>}
@@ -282,6 +284,17 @@ export async function listPiSessionDirectories({ agentDir, readDirectory = readd
     throw unreadable();
   }
   let incomplete = false;
+  // One check per directory, shared by every header that names it.
+  const checks = new Map();
+  const directoryExists = (directory) => {
+    if (!checks.has(directory)) {
+      checks.set(directory, stat(directory).then((entry) => entry.isDirectory(), (error) => {
+        if (error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR') incomplete = true;
+        return false;
+      }));
+    }
+    return checks.get(directory);
+  };
   const readStoreDirectory = async (storePath) => {
     let files;
     try {
@@ -306,17 +319,14 @@ export async function listPiSessionDirectories({ agentDir, readDirectory = readd
         if (!(error instanceof SyntaxError) && !isMissing(error)) failed = true;
         continue;
       }
-      if (isSessionHeader(header) && header.cwd.length > 0) return header.cwd;
+      if (isSessionHeader(header) && header.cwd.length > 0 && await directoryExists(header.cwd)) return header.cwd;
     }
     if (failed) incomplete = true;
     return undefined;
   };
   const storeDirectories = stores.filter((store) => store.isDirectory());
   const found = await mapWithConcurrency(storeDirectories, LIST_FILE_CONCURRENCY, (store) => readStoreDirectory(join(sessionsRoot, store.name)));
-  const existing = await mapWithConcurrency([...new Set(found.filter(Boolean))], LIST_FILE_CONCURRENCY, async (directory) => (
-    await stat(directory).then((entry) => entry.isDirectory(), () => false) ? directory : undefined
-  ));
-  return { directories: existing.filter(Boolean).sort(), incomplete };
+  return { directories: [...new Set(found.filter(Boolean))].sort(), incomplete };
 }
 
 export async function validatePiSessionJsonlFile(filePath) {
