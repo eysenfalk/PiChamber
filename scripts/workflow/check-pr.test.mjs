@@ -29,6 +29,7 @@ describe('the pull request template', () => {
       'Findings',
       'Out of scope',
       'Risks and open questions',
+      'Retro',
     ]);
   });
 

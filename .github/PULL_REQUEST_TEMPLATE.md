@@ -43,3 +43,7 @@
 ## Risks and open questions
 
 <!-- Failure, rollback, cleanup, compatibility, security, performance, data-loss and cross-runtime concerns the reviewer should look at closely. "None identified" only with a concrete reason. -->
+
+## Retro
+
+<!-- Answer when the pull request leaves draft; while it is a draft write "Open until ready". (1) Which review or fix round was avoidable? (2) Which check would have found it earlier? (3) What changes in a rule, skill or test, or explicitly "nothing". Optional: questions asked to the owner in this pull request (count). -->

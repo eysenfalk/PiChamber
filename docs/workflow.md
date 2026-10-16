@@ -86,7 +86,7 @@ git push -u origin 12-short-name
 gh pr create --draft --base dev --title "<what changes>" --body-file <plan.md>
 ```
 
-Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions.
+Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, Goal, Acceptance criteria, Approach, Affected surfaces, Repository guidance, Verification, Decisions, Findings, Out of scope, Risks and open questions, Retro.
 
 **One pull request per undertaking, with slices.** A slice is one contract that can be run or seen and accepted by one check. It is one item of the checklist under Acceptance criteria (the contract and its seam, what can be run or seen, the check that accepts it) and one ordered step under Approach (the files it touches, one commit). A slice has one seam and one review surface, and is reviewable on its own at roughly 100 to 600 lines (lock files and generated assets do not count). If a slice starts changing unrelated things, edit the description first: split it, then continue. Several pull requests only when a part must be live before the rest; the later one is planned after the earlier one merged, and there is no spec folder ([ADR 0013](adr/0013-one-pull-request-with-slices.md), which supersedes [ADR 0009](adr/0009-spec-folder-for-multi-pr-features.md)).
 
@@ -101,6 +101,8 @@ Write the plan from [the template](../.github/PULL_REQUEST_TEMPLATE.md): Issue, 
 Changing the plan later means updating the description (`gh pr edit <n> --body-file <plan.md>`) and saying so.
 
 **Acceptance criteria are a living checklist.** Each criterion is an observable result plus the proof that shows it. Whoever implements checks a box off (`- [x]`) in the description as soon as that criterion is done and proven, not at the end, and adds new boxes when the plan grows. The `pull-request` check allows open boxes only while the pull request is a draft.
+
+**Retro.** Before the hand-over the author answers three questions in `## Retro`: which review or fix round was avoidable, which check would have found it earlier, and what changes in a rule, skill or test (or explicitly: nothing). Optional: the number of questions asked to the owner in this pull request. A draft says "Open until ready", because the check requires every section to be filled. The section is required from the first description check after the merge ([ADR 0018](adr/0018-every-pull-request-carries-a-short-retro.md)), because the check runs on the merge commit: an open draft adds `## Retro` with "Open until ready", a ready pull request answers the questions.
 
 **What happens after the merge is not a criterion.** Every criterion must be provable before the merge, because the pull request leaves draft only with every box checked. Work that can only follow the merge, such as publishing a release from the merge commit, is a step in Approach and gets its own issue: the squash merge closes the issue the pull request names, so that issue cannot track it.
 
