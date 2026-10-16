@@ -42,7 +42,7 @@ import { createUiAuth } from './lib/ui-auth/ui-auth.js';
 import { assertCurrentRuntimeSupported as defaultAssertCurrentRuntimeSupported } from './lib/server/runtime-requirements.js';
 import { resolveStaticCacheControl } from './lib/static-cache-control.js';
 import { resolveServerBuild } from './lib/build-info.js';
-import { createHostRestart } from './lib/pi/host-restart.js';
+import { createHostRestart, createSelfReplace } from './lib/pi/host-restart.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -251,9 +251,18 @@ export async function startWebUiServer(options = {}) {
     restartHost: createHostRestart({
       getSupervisor: () => piSessionDaemonRuntime,
       // The desktop app brings its own server back by relaunching itself;
-      // a CLI server relies on its process manager (see host-restart.js).
-      restartProcess: options.restartProcess,
-      exitProcess: () => gracefulShutdown({ exitProcess: true }),
+      // any other host replaces its own process (see host-restart.js).
+      restartProcess: options.restartProcess ?? createSelfReplace({
+        execve: process.execve?.bind(process),
+        execPath: process.execPath,
+        execArgv: process.execArgv,
+        argv: process.argv,
+        // The live object: `serve --foreground` puts the resolved UI
+        // password here, so the replacement keeps it.
+        env: process.env,
+        checkExecutable: (file) => fs.accessSync(file, fs.constants.X_OK),
+        stopServer: () => gracefulShutdown(),
+      }),
     }),
   });
   registerNotificationRoutes(app, { uiAuthController, delivery: notificationDelivery });

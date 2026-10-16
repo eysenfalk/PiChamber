@@ -10,7 +10,7 @@ import { createRemoteClientAuthRuntime } from '../client-auth/remote-clients.js'
 import { registerAuthAndAccessRoutes } from '../server/core-routes.js';
 import { createTunnelAuth } from '../server/tunnel-auth.js';
 import { createUiAuth } from '../ui-auth/ui-auth.js';
-import { createHostRestart } from './host-restart.js';
+import { createHostRestart, createSelfReplace } from './host-restart.js';
 import { registerPiRuntimeRoutes } from './routes.js';
 
 const listen = (app) => new Promise((resolve, reject) => {
@@ -103,16 +103,6 @@ describe('POST /api/pi/runtime/restart', () => {
     expect(order).toEqual(['prepare', 'commit']);
   });
 
-  it('reports a daemon-only restart without ending the process', async () => {
-    const commit = vi.fn();
-    await start(async () => ({ scope: 'daemon', commit }));
-    const response = await post(server, '/api/pi/runtime/restart');
-    expect(response.status).toBe(202);
-    await expect(response.json()).resolves.toEqual({ accepted: true, scope: 'daemon' });
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(commit).not.toHaveBeenCalled();
-  });
-
   it('shows the failure of a failing hook, keeps the server usable and allows a retry', async () => {
     const commit = vi.fn();
     const restartHost = vi.fn()
@@ -139,7 +129,7 @@ describe('POST /api/pi/runtime/restart', () => {
     const gate = new Promise((resolve) => { release = resolve; });
     await start(async () => {
       await gate;
-      return { scope: 'daemon' };
+      return { scope: 'process', commit: () => {} };
     });
     const first = post(server, '/api/pi/runtime/restart');
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -196,7 +186,7 @@ describe('runtime reload and restart authentication', () => {
 
   it('rejects unauthenticated calls to both routes without running either action', async () => {
     const request = vi.fn(async () => ({ reloaded: 0, deferred: 0, failed: 0 }));
-    const restartHost = vi.fn(async () => ({ scope: 'daemon' }));
+    const restartHost = vi.fn(async () => ({ scope: 'process', commit: () => {} }));
     await start({ restartHost, request });
 
     for (const route of ['/api/pi/runtime/reload', '/api/pi/runtime/restart']) {
@@ -209,7 +199,7 @@ describe('runtime reload and restart authentication', () => {
 
   it('runs both actions for a session authenticated through the normal UI login', async () => {
     const request = vi.fn(async () => ({ reloaded: 3, deferred: 0, failed: 0 }));
-    const restartHost = vi.fn(async () => ({ scope: 'daemon' }));
+    const restartHost = vi.fn(async () => ({ scope: 'process', commit: () => {} }));
     await start({ restartHost, request });
 
     const login = await post(server, '/auth/session', {
@@ -235,33 +225,19 @@ describe('createHostRestart', () => {
     ...overrides,
   });
 
-  it('restarts only the daemon when nothing can bring the server back', async () => {
+  it('offers no restart without a way to bring the server back, whatever the environment says (#66)', () => {
     const supervisor = supervisorWith();
-    const restart = createHostRestart({ getSupervisor: () => supervisor, env: {}, exitProcess: vi.fn() });
-    const outcome = await restart();
-    expect(outcome).toEqual({ scope: 'daemon' });
-    expect(supervisor.stop).toHaveBeenCalledTimes(1);
-    expect(supervisor.start).toHaveBeenCalledTimes(1);
-  });
-
-  it('stops the daemon and exits under a process manager (systemd INVOCATION_ID)', async () => {
-    const supervisor = supervisorWith();
-    const exitProcess = vi.fn();
-    const restart = createHostRestart({ getSupervisor: () => supervisor, env: { INVOCATION_ID: 'abc' }, exitProcess });
-    const outcome = await restart();
-    expect(outcome.scope).toBe('process');
-    expect(supervisor.stop).toHaveBeenCalledTimes(1);
-    expect(supervisor.start).not.toHaveBeenCalled();
-    expect(exitProcess).not.toHaveBeenCalled();
-    outcome.commit();
-    expect(exitProcess).toHaveBeenCalledTimes(1);
+    // systemd sets INVOCATION_ID for every process of a user session, so it
+    // must not be read as "a process manager restarts this process".
+    expect(createHostRestart({ getSupervisor: () => supervisor, restartProcess: null, env: { INVOCATION_ID: 'abc' } })).toBeNull();
+    expect(supervisor.stop).not.toHaveBeenCalled();
   });
 
   it('arms a host relaunch after stopping the daemon and leaves the exit to commit', async () => {
     const order = [];
     const supervisor = supervisorWith({ stop: vi.fn(async () => { order.push('stop'); }) });
     const restartProcess = { prepare: vi.fn(() => { order.push('prepare'); }), commit: vi.fn() };
-    const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess, env: {}, exitProcess: vi.fn() });
+    const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess });
     const outcome = await restart();
     expect(order).toEqual(['stop', 'prepare']);
     expect(outcome).toEqual({ scope: 'process', commit: restartProcess.commit });
@@ -274,7 +250,6 @@ describe('createHostRestart', () => {
     const restart = createHostRestart({
       getSupervisor: () => supervisor,
       restartProcess: { prepare: vi.fn(), commit: vi.fn() },
-      env: {},
     });
     await expect(restart()).rejects.toBe(error);
     expect(supervisor.start).toHaveBeenCalledTimes(1);
@@ -284,7 +259,7 @@ describe('createHostRestart', () => {
     const error = new Error('relaunch failed');
     const supervisor = supervisorWith();
     const restartProcess = { prepare: vi.fn(() => { throw error; }), commit: vi.fn() };
-    const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess, env: {} });
+    const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess });
     await expect(restart()).rejects.toBe(error);
     expect(supervisor.stop).toHaveBeenCalledTimes(1);
     expect(supervisor.start).toHaveBeenCalledTimes(1);
@@ -294,13 +269,62 @@ describe('createHostRestart', () => {
   it('treats an already-gone daemon as stopped and still starts a fresh one', async () => {
     const gone = Object.assign(new Error('gone'), { code: 'DAEMON_UNAVAILABLE' });
     const supervisor = supervisorWith({ stop: vi.fn(async () => { throw gone; }) });
-    const restart = createHostRestart({ getSupervisor: () => supervisor, env: {} });
-    await expect(restart()).resolves.toEqual({ scope: 'daemon' });
-    expect(supervisor.start).toHaveBeenCalledTimes(1);
+    const restartProcess = { prepare: vi.fn(), commit: vi.fn() };
+    const restart = createHostRestart({ getSupervisor: () => supervisor, restartProcess });
+    await expect(restart()).resolves.toEqual({ scope: 'process', commit: restartProcess.commit });
+    expect(supervisor.start).not.toHaveBeenCalled();
   });
 
   it('reports an unavailable supervisor', async () => {
-    const restart = createHostRestart({ getSupervisor: () => null, env: {} });
+    const restart = createHostRestart({ getSupervisor: () => null, restartProcess: { commit: vi.fn() } });
     await expect(restart()).rejects.toMatchObject({ code: 'DAEMON_UNAVAILABLE' });
+  });
+});
+
+describe('createSelfReplace', () => {
+  const base = (overrides = {}) => ({
+    execve: vi.fn(),
+    execPath: '/usr/bin/node',
+    execArgv: ['--max-old-space-size=256'],
+    argv: ['/usr/bin/node', '/app/bin/cli.js', 'serve', '--foreground', '--port', '3000'],
+    env: { HOME: '/home/u', INVOCATION_ID: 'abc' },
+    checkExecutable: vi.fn(),
+    stopServer: vi.fn(async () => {}),
+    ...overrides,
+  });
+
+  it('is unavailable where the runtime has no execve (Windows)', () => {
+    expect(createSelfReplace(base({ execve: undefined }))).toBeNull();
+  });
+
+  it('refuses in prepare when the executable cannot be started again', () => {
+    const deps = base({ checkExecutable: vi.fn(() => { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); }) });
+    const replace = createSelfReplace(deps);
+    expect(() => replace.prepare()).toThrow('gone');
+    expect(deps.stopServer).not.toHaveBeenCalled();
+    expect(deps.execve).not.toHaveBeenCalled();
+  });
+
+  it('stops the server, then replaces the process with the same command line and environment', async () => {
+    const order = [];
+    const deps = base({
+      stopServer: vi.fn(async () => { order.push('stop'); }),
+      execve: vi.fn(() => { order.push('execve'); }),
+    });
+    const replace = createSelfReplace(deps);
+    replace.prepare();
+    await replace.commit();
+    expect(order).toEqual(['stop', 'execve']);
+    expect(deps.execve).toHaveBeenCalledWith(
+      '/usr/bin/node',
+      ['/usr/bin/node', '--max-old-space-size=256', '/app/bin/cli.js', 'serve', '--foreground', '--port', '3000'],
+      deps.env,
+    );
+  });
+
+  it('replaces the process even when the server does not finish stopping in time', async () => {
+    const deps = base({ stopServer: vi.fn(() => new Promise(() => {})), stopTimeoutMs: 20 });
+    await createSelfReplace(deps).commit();
+    expect(deps.execve).toHaveBeenCalledTimes(1);
   });
 });

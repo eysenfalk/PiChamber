@@ -1079,11 +1079,7 @@ export const registerPiRuntimeRoutes = (app, {
     }
     // The reply is written before the process is replaced so the client sees
     // the acknowledgement and then reconnects.
-    res.status(202).json({ accepted: true, scope: outcome?.scope === 'process' ? 'process' : 'daemon' });
-    if (outcome?.scope !== 'process' || typeof outcome.commit !== 'function') {
-      restartInFlight = false;
-      return;
-    }
+    res.status(202).json({ accepted: true, scope: 'process' });
     res.once('close', () => {
       void Promise.resolve().then(() => outcome.commit()).catch((error) => {
         restartInFlight = false;

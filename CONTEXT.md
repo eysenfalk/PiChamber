@@ -78,6 +78,22 @@ Two things ADR 0006 assumes are untested. A blocking dialog opened from `turn_en
 
 A same-version AppImage replacement is only picked up when the relaunch uses `$APPIMAGE`, because `process.execPath` points into the old mount.
 
+### systemd sets INVOCATION_ID for every process of a user session
+
+- Source: issue #66 (chaos-qa run r1 against PR #40, `/proc/<pid>/environ` of the AppImage, a terminal-started server and a probe shell, none under a unit with `Restart=`)
+- Date: 2026-10-16
+- Settled by: PR #40 merging (restart no longer reads `INVOCATION_ID`)
+
+`INVOCATION_ID` does not mean a process manager restarts the process. The old restart exited on it and left a terminal-started server down for good.
+
+### A web server on Windows cannot restart itself from Settings
+
+- Source: Node `process.execve` (Node >= 22.15, POSIX only) and Bun 1.4; probed on Linux 2026-10-16 with Node 22.22.1 and Bun 1.4.0 (same PID and argv, the port binds again, a `pichamber serve` child with an IPC channel survives without the channel); PR #40
+- Date: 2026-10-16
+- Settled by: a Windows user who needs it, then a detached replacement that waits for the port, tested on a Windows host
+
+Restart replaces the server's own process with `execve`. Windows has no `execve`, so a web server there answers 501 before anything stops and the UI says to restart it from its host. The desktop app is not affected; it relaunches through Electron.
+
 ## Release
 
 ### Releases of the fork are built locally, not by release.yml

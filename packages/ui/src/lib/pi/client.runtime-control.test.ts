@@ -51,9 +51,9 @@ describe('PiService runtime control', () => {
   });
 
   test('restartRuntime posts once to the restart route and returns the scope', async () => {
-    install(() => json({ accepted: true, scope: 'daemon' }, 202));
+    install(() => json({ accepted: true, scope: 'process' }, 202));
     const result = await new PiService().restartRuntime();
-    expect(result).toEqual({ accepted: true, scope: 'daemon' });
+    expect(result).toEqual({ accepted: true, scope: 'process' });
     expect(calls[0].url).toContain('/api/pi/runtime/restart');
     expect(calls[0].method).toBe('POST');
   });
@@ -73,7 +73,8 @@ describe('PiService runtime control', () => {
   });
 
   test('restartRuntime rejects an unknown scope', async () => {
-    install(() => json({ accepted: true, scope: 'cluster' }, 202));
+    // A daemon-only restart no longer exists (#66).
+    install(() => json({ accepted: true, scope: 'daemon' }, 202));
     const failure = await failureOf(new PiService().restartRuntime());
     expect(failure.code).toBe('DAEMON_PROTOCOL_MISMATCH');
   });

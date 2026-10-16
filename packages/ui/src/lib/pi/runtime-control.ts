@@ -4,7 +4,7 @@ import { invalidatePromptTemplatesLoadCache } from '@/stores/usePromptTemplatesS
 import { invalidateSkillsLoadCache, useSkillsStore } from '@/stores/useSkillsStore';
 import { piClient, PiRequestError } from './client';
 import { fetchPiRuntimeHealth } from './transport';
-import type { PiRuntimeReloadResult, PiRuntimeRestartResult } from './protocol';
+import type { PiRuntimeReloadResult } from './protocol';
 
 /**
  * "Reload Pi" and "Restart PiChamber" from Settings. Both go through
@@ -43,7 +43,7 @@ export const summarizeReload = (result: PiRuntimeReloadResult): { level: 'succes
 
 const describeFailure = (error: unknown, fallback: string): string => {
   if (error instanceof PiRequestError && error.message && !error.message.startsWith('Pi request failed')) return error.message;
-  if (error instanceof PiRequestError && error.status === 501) return 'This server cannot be restarted from here.';
+  if (error instanceof PiRequestError && error.status === 501) return 'This server cannot restart itself. Restart it from its host. A web server on Windows has no self-restart.';
   return fallback;
 };
 
@@ -91,12 +91,6 @@ export const reloadPiRuntime = async (overrides: Partial<RuntimeControlDeps> = {
   }
 };
 
-const describeRestartScope = (scope: PiRuntimeRestartResult['scope']): string => (
-  scope === 'process'
-    ? 'PiChamber is restarting.'
-    : 'Only the Pi session daemon restarted. This server cannot restart itself; restart it from its host to load a new server build.'
-);
-
 /**
  * Waits until the runtime answers health again. `previousStreamEpoch` is the
  * epoch of the daemon that was running before the restart: a restarted daemon
@@ -133,9 +127,8 @@ export const restartPiRuntime = async (overrides: Partial<RuntimeControlDeps> = 
     previousStreamEpoch = undefined;
   }
 
-  let result: PiRuntimeRestartResult;
   try {
-    result = await deps.client.restartRuntime();
+    await deps.client.restartRuntime();
   } catch (error) {
     deps.notify.error(describeFailure(error, 'PiChamber could not be restarted.'));
     return false;
@@ -146,10 +139,6 @@ export const restartPiRuntime = async (overrides: Partial<RuntimeControlDeps> = 
     deps.notify.error('PiChamber did not come back in time. Check the server and reload the page.', { id: RESTART_TOAST_ID, duration: 10_000 });
     return false;
   }
-  if (result.scope === 'daemon') {
-    deps.notify.warning(describeRestartScope('daemon'), { id: RESTART_TOAST_ID, duration: 10_000 });
-  } else {
-    deps.notify.success('PiChamber restarted.', { id: RESTART_TOAST_ID });
-  }
+  deps.notify.success('PiChamber restarted.', { id: RESTART_TOAST_ID });
   return true;
 };

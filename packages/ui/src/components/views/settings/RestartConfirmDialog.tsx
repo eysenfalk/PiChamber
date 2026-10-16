@@ -74,7 +74,7 @@ export function RestartConfirmDialog(props: {
                 <DialogHeader>
                   <DialogTitle>{'Restart PiChamber?'}</DialogTitle>
                   <DialogDescription>
-                    {'PiChamber restarts its server and the Pi session daemon, or only the daemon when the server cannot restart itself. Connected devices reconnect on their own.'}
+                    {'PiChamber restarts its server and the Pi session daemon. Connected devices reconnect on their own.'}
                   </DialogDescription>
                 </DialogHeader>
                 <RestartWorkingSessions sessions={sessions} />

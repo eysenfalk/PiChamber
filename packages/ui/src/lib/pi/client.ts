@@ -456,9 +456,8 @@ export class PiService {
   }
 
   /**
-   * Restart the server (or only its Pi session daemon, see
-   * `PiRuntimeRestartResult.scope`). Not retried: the request is not
-   * idempotent and the server may already be going away.
+   * Restart the server process and its Pi session daemon. Not retried: the
+   * request is not idempotent and the server may already be going away.
    */
   async restartRuntime(scope?: PiClientScope): Promise<PiRuntimeRestartResult> {
     assertRuntimeUnchanged(scope);
@@ -467,7 +466,7 @@ export class PiService {
       retry: false,
       ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
     });
-    if (result?.accepted !== true || (result.scope !== 'process' && result.scope !== 'daemon')) {
+    if (result?.accepted !== true || result.scope !== 'process') {
       throw new PiRequestError('DAEMON_PROTOCOL_MISMATCH');
     }
     return { accepted: true, scope: result.scope };

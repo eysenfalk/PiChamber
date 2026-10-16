@@ -121,13 +121,13 @@ export interface PiRuntimeReloadResult {
 }
 
 /**
- * `POST /api/pi/runtime/restart` response. `process` means the server itself
- * restarts (desktop relaunch or a process manager); `daemon` means this
- * server cannot restart itself and only the Pi session daemon restarted.
+ * `POST /api/pi/runtime/restart` response. The server process itself
+ * restarts: the desktop app relaunches, any other host replaces its own
+ * process. A server that cannot do that answers 501 instead.
  */
 export interface PiRuntimeRestartResult {
   accepted: true;
-  scope: 'process' | 'daemon';
+  scope: 'process';
 }
 
 // ---------------------------------------------------------------------------

@@ -156,20 +156,6 @@ describe('restartPiRuntime', () => {
     expect(events.at(-1)?.kind).toBe('success');
   });
 
-  test('says only the daemon restarted when the server cannot restart itself', async () => {
-    const { events, notify } = makeNotify();
-    const health = [{ state: 'ready', streamEpoch: 'old' }, { state: 'ready', streamEpoch: 'new' }];
-    const ok = await restartPiRuntime({
-      client: { reloadRuntime: mock(), restartRuntime: async () => ({ accepted: true, scope: 'daemon' }) },
-      fetchHealth: (async () => health.shift()) as unknown as RuntimeControlDeps['fetchHealth'],
-      notify,
-      ...clock(),
-    });
-    expect(ok).toBe(true);
-    expect(events.at(-1)?.kind).toBe('warning');
-    expect(events.at(-1)?.message).toContain('Only the Pi session daemon restarted');
-  });
-
   test('shows the error and never starts waiting when the restart is rejected', async () => {
     const { events, notify } = makeNotify();
     const ok = await restartPiRuntime({
@@ -193,7 +179,7 @@ describe('restartPiRuntime', () => {
       notify,
       ...clock(),
     });
-    expect(events[0].message).toBe('This server cannot be restarted from here.');
+    expect(events[0].message).toBe('This server cannot restart itself. Restart it from its host. A web server on Windows has no self-restart.');
   });
 
   test('reports an error when the runtime does not come back in time', async () => {
