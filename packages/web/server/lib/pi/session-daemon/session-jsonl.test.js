@@ -192,6 +192,35 @@ describe('Pi session directory discovery', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports a directory it cannot check as incomplete and still lists the others', async () => {
+    const { agentDir, store, folder, root } = await agentWith();
+    const good = await folder('good');
+    const locked = await folder(join('protected', 'cwd'));
+    await store('good', { '2026-01-01_g.jsonl': header('g', good) });
+    await store('locked', { '2026-01-01_l.jsonl': header('l', locked) });
+    await chmod(join(root, 'protected'), 0o000);
+    try {
+      await expect(listPiSessionDirectories({ agentDir }))
+        .resolves.toEqual({ directories: [good], incomplete: true });
+    } finally {
+      await chmod(join(root, 'protected'), 0o700);
+    }
+  });
+
+  it('falls back to an older header of the same store when the newest directory is gone', async () => {
+    const { agentDir, store, folder, root } = await agentWith();
+    const kept = await folder('a-b');
+    const gone = join(root, 'a', 'b');
+    expect(encodePiSessionCwd(gone)).toBe(encodePiSessionCwd(kept));
+    await store(encodePiSessionCwd(kept), {
+      '2026-01-01_kept.jsonl': header('kept', kept),
+      '2026-02-01_gone.jsonl': header('gone', gone),
+    });
+
+    await expect(listPiSessionDirectories({ agentDir }))
+      .resolves.toEqual({ directories: [kept], incomplete: false });
+  });
+
   it('fails, instead of answering with no directories, when the sessions root cannot be read', async () => {
     const { agentDir, store } = await agentWith();
     await store('project', {});
