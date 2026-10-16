@@ -2251,6 +2251,19 @@ describe('worker reports and digest', () => {
     await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
   });
 
+  it('closes the open question of a stopped worker (#231)', async () => {
+    const harness = createHarness();
+    const { service } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const id = (await report(harness, { kind: 'question', summary: 'Which API?', audience: 'owner', brief: OWNER_QUESTION })).openQuestion;
+    await expect(service.call('orch', 'session_stop', { sessionId: 'worker-1' })).resolves.toMatchObject({ stopped: ['worker-1'] });
+    expect((await harness.workers())['worker-1'].question).toBeUndefined();
+    expect((await digest(harness)).workers.find((worker) => worker.sessionId === 'worker-1').question).toBeNull();
+    expect((await service.overview()).orchestrators[0].workers[0].question).toBeNull();
+    await expectCode(service.resolve({ sessionId: 'worker-1', questionId: id }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+  });
+
   it('takes a brief only with a question or blocker, and only with a recommendation', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
@@ -2753,6 +2766,8 @@ describe('worker_cleanup', () => {
 
   it('removes worktree, local and remote branch, then the session, and forgets the worker after a squash merge', async () => {
     const h = await setup();
+    // Its open question goes with the record (#231).
+    await h.service.call(h.sessionId, 'worker_report', { kind: 'question', summary: 'Next?', audience: 'orchestrator' });
     const result = await h.cleanup();
 
     expect(result).toEqual({ sessionId: h.sessionId, removed: [`worktree ${h.worktree}`, 'branch 9-fix', 'origin 9-fix', `session ${h.sessionId}`] });
@@ -2762,6 +2777,7 @@ describe('worker_cleanup', () => {
     expect(h.remoteExists()).toBe(false);
     expect(h.deleteSession).toHaveBeenCalledWith(h.sessionId);
     expect(await h.workers()).toEqual({});
+    expect((await h.service.overview()).orchestrators.flatMap((group) => group.workers)).toEqual([]);
   });
 
   it.each([

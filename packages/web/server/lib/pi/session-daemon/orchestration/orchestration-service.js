@@ -913,6 +913,8 @@ export function createOrchestrationService(deps) {
       delete worker.stopping;
       delete worker.doneReported;
       delete worker.admission;
+      // The stop ends the conversation: nobody answers its question any more (#231).
+      delete worker.question;
       worker.state = 'stopped';
       worker.stateSince = now();
       // Checked in this write: a verdict that settles an input later queues
