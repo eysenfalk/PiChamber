@@ -79,13 +79,27 @@ const PiSessionBootstrapBridge: React.FC = () => {
   const { selectedSessionId, directory, connection, focusPending } = snapshot;
 
   React.useEffect(() => {
-    if (!directory) return;
-    const currentDirectory = useDirectoryStore.getState().currentDirectory;
-    if (normalizePath(currentDirectory) !== normalizePath(directory)) {
-      useDirectoryStore.getState().setDirectory(directory, { showOverlay: false });
-    }
-    void useConfigStore.getState().activateDirectory(directory);
-  }, [directory]);
+    // Mirror a Pi focus change when the store publishes it, not in a later
+    // effect. The directory subscription in `MobileApp` does the same in the
+    // other direction, so folder writes reach the other store in the order
+    // they happened and the later one wins in both (#108). Only a change of
+    // the focus is mirrored, never a mere difference to the directory store,
+    // so a write back of the other side's change is skipped.
+    let mirroredDirectory: string | null = null;
+    const mirrorFocus = () => {
+      const focusedDirectory = store.getState().directory;
+      if (normalizePath(focusedDirectory) === normalizePath(mirroredDirectory)) return;
+      mirroredDirectory = focusedDirectory;
+      if (!focusedDirectory) return;
+      const currentDirectory = useDirectoryStore.getState().currentDirectory;
+      if (normalizePath(currentDirectory) !== normalizePath(focusedDirectory)) {
+        useDirectoryStore.getState().setDirectory(focusedDirectory, { showOverlay: false });
+      }
+      void useConfigStore.getState().activateDirectory(focusedDirectory);
+    };
+    mirrorFocus();
+    return store.subscribe(mirrorFocus, 'chrome');
+  }, [store]);
 
   // The composer still reads the restored session UI store. Keep its complete
   // identity synchronized, including project switches and the no-project state.
