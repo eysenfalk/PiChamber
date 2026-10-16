@@ -136,6 +136,8 @@ mock.module('@/stores/useConfigStore', () => ({
 mock.module('@/stores/useDirectoryStore', () => ({
   useDirectoryStore: Object.assign((selector: (s: { currentDirectory: string }) => unknown) => selector({ currentDirectory: '/repo' }), {
     getState: () => ({ currentDirectory: '/repo', setDirectory: () => undefined }),
+    // The folder never changes here, so no listener ever fires.
+    subscribe: () => () => undefined,
   }),
 }));
 mock.module('@/stores/useUIStore', () => ({
