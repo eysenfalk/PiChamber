@@ -63,7 +63,8 @@ describe('pinned SDK upgrade compatibility', () => {
     const models = await ModelRuntime.create(options);
     await models.setRuntimeApiKey('opencode', 'pichamber-test-catalog-only');
     expect(requests).toHaveLength(0);
-    expect(models.getModel('opencode', cached.id)).toEqual(cached);
+    // Since Pi 1.3.0 the provider's baseUrl from models.json also applies to cached catalog models.
+    expect(models.getModel('opencode', cached.id)).toEqual({ ...cached, baseUrl: 'https://opencode.ai/zen/v1' });
     expect(models.getModel('opencode', 'upgrade-custom-model')?.name).toBe('My custom model');
     expect(models.getModel('opencode', flash.id)?.name).toBe('My Flash override');
     expect(models.getModel('opencode', 'deepseek-v4-flash-free')).toBeUndefined();

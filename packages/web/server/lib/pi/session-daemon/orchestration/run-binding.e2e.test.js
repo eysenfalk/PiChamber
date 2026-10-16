@@ -19,9 +19,10 @@ const textOf = (message) => typeof message?.content === 'string'
   ? message.content
   : (message?.content ?? []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 
-// Pins the SDK order run-binding.js relies on (Pi 1.1.0): Pi starts the run
-// in the same synchronous step that reports `started`, and a prompt that
-// waited in `before_agent_start` while another run started gets no run.
+// Pins the SDK order run-binding.js relies on (Pi 1.3.0): Pi starts the run
+// in the same synchronous step that reports `started`, refuses a prompt while
+// another run starts, and still settles a prompt that lost the start race
+// during its auth check while another run is live.
 describe('run binding through the real SDK', () => {
   let root;
   let runtime;
@@ -89,34 +90,26 @@ describe('run binding through the real SDK', () => {
     await running.catch(() => {});
   });
 
-  it('binds no run for a prompt that waited in before_agent_start while another prompt\'s run started', async () => {
+  it('refuses a prompt while another prompt\'s run starts, before it reports started', async () => {
     const { session, prompt } = await setup();
     gates['start A'] = gate();
-    gates['provider B'] = gate();
+    gates['provider A'] = gate();
     let boundA;
-    let boundB;
-    // A passes Pi's isStreaming check and waits in before_agent_start.
-    const promptA = prompt('A', () => { boundA = bindStartedRun(session); }).catch((error) => error);
+    let startedB = false;
+    // A's run is starting: A waits in before_agent_start.
+    const promptA = prompt('A', () => { boundA = bindStartedRun(session); });
     await gates['start A'].reached;
-    // B starts a real run meanwhile and is held in the provider.
-    const promptB = prompt('B', () => { boundB = bindStartedRun(session); });
-    await gates['provider B'].reached;
-    const signalB = await boundB;
-    expect(signalB).toBe(session.agent.signal);
-    // A reports `started` although B owns the agent's run.
+    // B is refused without a verdict; it neither starts nor queues.
+    await expect(prompt('B', () => { startedB = true; })).rejects.toThrow(/already processing/);
+    expect(startedB).toBe(false);
     gates['start A'].resolve();
+    await gates['provider A'].reached;
+    expect(await boundA).toBe(session.agent.signal);
+    gates['provider A'].resolve();
     await promptA;
-    expect(boundA).toBeDefined();
-    const signalA = await boundA;
-    expect(signalA).toBeNull();
-    expect(abortBoundRun(session, signalA)).toBe(false);
-    expect(signalB.aborted).toBe(false);
-    gates['provider B'].resolve();
-    await promptB;
-    expect(signalB.aborted).toBe(false);
     const replies = session.messages.filter((message) => message.role === 'assistant').map(textOf);
-    expect(replies).toContain('RAN B');
-    expect(replies).not.toContain('RAN A');
+    expect(replies).toContain('RAN A');
+    expect(replies).not.toContain('RAN B');
   });
 
   // What the daemon sees at its `agent_settled` boundary (R8-S2).
@@ -131,11 +124,26 @@ describe('run binding through the real SDK', () => {
   it('marks the settle Pi emits for a rejected prompt while another run is live as no completion', async () => {
     const { session, prompt } = await setup();
     const seen = settles(session);
+    // Without configured auth, prompt() awaits checkAuth after its isStreaming
+    // check, so two prompts can both pass it and both start a run.
+    const auth = gate();
+    let waiting = 0;
+    const bothChecking = gate();
+    session.modelRuntime.hasConfiguredAuth = () => false;
+    session.modelRuntime.checkAuth = async () => {
+      waiting += 1;
+      if (waiting === 2) bothChecking.entered();
+      await auth.promise;
+      return {};
+    };
     gates['start A'] = gate();
     gates['provider B'] = gate();
     const promptA = prompt('A').catch((error) => error);
-    await gates['start A'].reached;
     const promptB = prompt('B');
+    await bothChecking.reached;
+    auth.resolve();
+    // A waits in before_agent_start while B's run starts and is held in the provider.
+    await gates['start A'].reached;
     await gates['provider B'].reached;
     const signalB = session.agent.signal;
     // A's rejected prompt still emits agent_settled from its finally, while
