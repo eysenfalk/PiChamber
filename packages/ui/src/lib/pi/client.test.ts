@@ -221,7 +221,9 @@ describe("PiService", () => {
     installFetchMock(() => jsonResponse({ error: { code: "SESSION_JSONL_UNREADABLE" } }, { status: 503 }))
     await expect(new PiService().listSessionDirectories()).rejects.toBeInstanceOf(PiRequestError)
     installFetchMock(() => jsonResponse({ sessions: [] }))
-    await expect(new PiService().listSessionDirectories()).rejects.toMatchObject({ code: "MALFORMED_DAEMON_RESPONSE" })
+    const malformed = await new PiService().listSessionDirectories().catch((error: unknown) => error)
+    expect(malformed).toBeInstanceOf(PiRequestError)
+    expect((malformed as PiRequestError).code).toBe("MALFORMED_DAEMON_RESPONSE")
   })
 
   test("listSessions throws PiRequestError on persistent 5xx response", async () => {

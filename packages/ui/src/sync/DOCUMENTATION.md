@@ -67,7 +67,7 @@ The Pi cluster belongs to the connected runtime, not the focused project:
 | `PiSessionStore` transcript paging | Bounded initial hydration, older-page deduplication, stale-result rejection, and prepend reconciliation | One runtime, directory, and session ID |
 | `pi-session-catalog.ts` | Live runtime-scoped metadata catalog (`byId`, `byDirectory`, `listStatusByDirectory`); field-sensitive in-flight list reconciliation with runtime-scoped deletion tombstones; the at-most-2-in-flight directory refresh scheduler | All known directories in the active runtime |
 | `pi-session-catalog-cache.ts` | Best-effort runtime-scoped browser snapshot of stable catalog metadata for warm first paint; never persists lifecycle/retry/hydration authority | Up to four recently used runtimes and 2,000 session rows |
-| `PiSessionCatalogFeeder` (`pi-session-catalog-feeder.tsx`) | Subscribes to `useProjectsStore` + `useWorktreeStore`; fills the catalog for every known directory (project roots + worktrees), deduped by sorted signature | All known directories; React-mount lifecycle |
+| `PiSessionCatalogFeeder` (`pi-session-catalog-feeder.tsx`) | Subscribes to `useProjectsStore` + `useWorktreeStore`; fills the catalog for every known directory (project roots + worktrees), deduped by sorted signature; then, through the same scheduler, every other existing folder that holds sessions (`refreshForeignSessionDirectories` over `GET /api/pi/session-directories`, #103). The learned folders live in `state.foreignSessionDirectories`: a complete answer replaces them, an incomplete one only adds, a failed one keeps them, a runtime switch resets them | All known directories, then foreign folders; React-mount lifecycle |
 | `session-catalog-access.ts` | `loadSessionCatalog(directories?)` completeness-checked read path for retention cleanup and mobile restore | All known directories in the active runtime |
 | `session-ordering.ts` | Ephemeral lifecycle rank used by every user-visible session list | All known sessions in the active runtime |
 | `session-activity-timing.ts` | Elapsed time of the running turn and of the turn that just finished, plus the persisted starts that survive a reload | All known sessions in the active runtime |
@@ -333,7 +333,7 @@ usePiSessionSnapshot((s) => s.catalog.byId.get(sessionID) ?? null, undefined, se
 `PiSessionStore` publishes one notification per topic touched by a commit:
 
 - `session:{id}` — that session's reducer record changed (messages, parts, lifecycle on the transcript). Token deltas on session B do not wake session A's chat selectors.
-- `catalog` — `state.catalog` identity changed (lifecycle, title, membership, stub insert). Token deltas that leave the catalog ref unchanged do not wake catalog subscribers.
+- `catalog` — `state.catalog` identity changed (lifecycle, title, membership, stub insert), or the learned `state.foreignSessionDirectories` changed. Token deltas that leave the catalog ref unchanged do not wake catalog subscribers.
 - `chrome` — cluster UI: `connection`, `error`, `directory`, `selectedSessionId`, `sessions[]`, `sessionsListStatus`, `focusPending`, `hydratedSessionIds`.
 - `*` (default when `subscribe` is called without a topic) — broadcast to every listener regardless of topic. Kept for tests and legacy callers; production hooks pass an explicit topic so the broadcast path is unused on the token hot path.
 

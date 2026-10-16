@@ -73,6 +73,12 @@ export interface PiSessionStoreState {
    *  `pi-session-catalog.ts` for membership, lifecycle, and reference-
    *  hygiene rules. */
   catalog: PiSessionCatalogState;
+  /** Existing directories outside every known directory (project, worktree,
+   *  home) that hold sessions, so the sidebar can show them under Other
+   *  folders (#103). Learned through `refreshForeignSessionDirectories`; a
+   *  failed answer keeps the learned list, a runtime switch resets it. Not
+   *  part of the persisted catalog. */
+  foreignSessionDirectories: readonly string[];
   /** Sync readiness, separate from `connection`. See `PiSyncReadiness`. */
   syncReadiness: PiSyncReadiness;
   /** Outstanding reconnect-recovery obligations. See `PiSyncRecoveryScopes`. */
