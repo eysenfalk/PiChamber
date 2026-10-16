@@ -1857,6 +1857,8 @@ export function createOrchestrationService(deps) {
         if (live.stopping && !belongsToLiveProcess(live.stopping)) delete live.stopping;
         // A hold ends with its process: that process's runs and inputs died with it.
         if (live.hold && !belongsToLiveProcess(live.hold.process)) delete live.hold;
+        // A stopped worker kept its question before stops closed them (#231).
+        if (live.state === 'stopped' && live.question) closeQuestion(current, sessionId, live.question.id, 'stop', now());
       });
     }
   };

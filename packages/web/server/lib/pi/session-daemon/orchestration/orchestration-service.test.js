@@ -2289,22 +2289,23 @@ describe('worker reports and digest', () => {
     expect(deps.activateSession).not.toHaveBeenCalled();
   });
 
-  it('closes the question of a stopped worker with worker_resolve and leaves it stopped (#231)', async () => {
-    const harness = createHarness();
-    const { service, deps } = harness;
-    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+  it('drops the question a stopped worker kept from before stops closed questions, on the next call (#231)', async () => {
+    const harness = createHarness({ now: () => 7_000 });
+    await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
     await harness.settle('worker-1', 'first');
-    await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
-    // A question stored before stops closed questions.
+    await harness.service.call('orch', 'session_stop', { sessionId: 'worker-1' });
     await harness.registry.update((document) => {
-      document.workers['worker-1'].question = { id: 'q-old', kind: 'question', audience: 'orchestrator', summary: 'Merge?', at: 1 };
+      document.workers['worker-1'].question = { id: 'q-old', kind: 'question', audience: 'owner', summary: 'Merge?', at: 1 };
     });
-    const sends = deps.sendInput.mock.calls.length;
-    await expect(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: 'q-old' }))
-      .resolves.toEqual({ sessionId: 'worker-1', questionId: 'q-old', resolved: true });
-    expect((await harness.workers())['worker-1']).toMatchObject({ state: 'stopped' });
-    expect((await harness.workers())['worker-1'].question).toBeUndefined();
-    expect(deps.sendInput.mock.calls.length).toBe(sends);
+    // The daemon restarts with the stored registry.
+    const restarted = createHarness({ file: harness.file, now: () => 7_000 });
+    const { service, deps } = restarted;
+    expect((await digest(restarted)).workers[0]).toMatchObject({ lifecycle: 'stopped', question: null, closedQuestion: { id: 'q-old', by: 'stop', at: 7_000 } });
+    expect((await service.overview()).orchestrators[0].workers[0].question).toBeNull();
+    await expectCode(service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: 'q-old' }), 'ORCHESTRATION_QUESTION_UNKNOWN');
+    expect((await restarted.workers())['worker-1']).toMatchObject({ state: 'stopped' });
+    expect(deps.sendInput).not.toHaveBeenCalled();
+    expect(deps.activateSession).not.toHaveBeenCalled();
   });
 
   it('records who closed the last question, on every close path (#231)', async () => {
