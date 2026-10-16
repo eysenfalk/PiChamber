@@ -565,6 +565,31 @@ export function recreatedWorktreeTour(manifest) {
   ] });
 }
 
+/**
+ * Issues #66 and #67 on the lab's terminal-started `serve --foreground` server: Reload Pi clicked twice 80 ms
+ * apart shows one result toast; Restart replaces the server process (execve) and the UI comes back by itself.
+ */
+export function runtimeControlsTour() {
+  const reload = 'button[aria-label="Reload Pi"]';
+  const restart = 'button[aria-label="Restart PiChamber"]';
+  return validateTour({ name: 'runtime-controls', steps: [
+    { caption: 'Settings with Reload Pi and Restart PiChamber next to the search (#39).', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '?settings=general' }, { type: 'wait', selector: reload }], evidence: [{ selector: reload }, { selector: restart }] },
+    // A lab reload answers in 50 to 70 ms, so the second click follows at once to land while the first is in flight.
+    { caption: 'Reload Pi clicked twice while the first reload runs: one result toast (#67).', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: reload }, { type: 'click', selector: reload }, { type: 'wait', selector: '[data-sonner-toast]' }, { type: 'wait', ms: 1500 }],
+      evidence: [{ selector: '[data-sonner-toaster] [data-sonner-toast]:only-child' }] },
+    { caption: 'Restart asks once; nothing is working, so it only confirms.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', ms: 5000 }, { type: 'click', selector: restart }, { type: 'wait', text: 'Restart PiChamber?' }],
+      evidence: [{ text: 'Restart PiChamber?' }, { text: 'PiChamber restarts its server and the Pi session daemon. Connected devices reconnect on their own.' }] },
+    { caption: 'Confirm clicked twice, 80 ms apart: one toast, no failure; the UI waited for the restarted server by itself (#66, #67).', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: 'Restart PiChamber' }, { type: 'wait', ms: 80 }, { type: 'click', text: 'Restart PiChamber' }, { type: 'wait', text: 'PiChamber restarted.' }],
+      evidence: [{ text: 'PiChamber restarted.' }, { selector: '[data-sonner-toaster] [data-sonner-toast]:only-child' }] },
+    { caption: 'After the restart, About shows UI, server and session daemon on one build.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: 'About' }, { type: 'wait', text: 'Session daemon' }], evidence: [{ text: 'Session daemon' }, { text: 'Server' }] },
+  ] });
+}
+
 /** Issue #46: the create-device dialog on a server without Tailscale (the lab pod has none) keeps the home network as default. */
 export function addDeviceTour() {
   // Desktop opens Settings from the URL; hosted mobile ignores `?settings=` and goes through the drawer.

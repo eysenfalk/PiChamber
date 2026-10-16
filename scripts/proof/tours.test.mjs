@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
+import { addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, runtimeControlsTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
 import { EVENTS_MESSAGE } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
 import { LAB_ASKER_BLOCKER, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
@@ -175,6 +175,15 @@ describe('tours.mjs format', () => {
     expect(actions).toContainEqual({ type: 'type', selector: '.xterm-screen', value: 'git -C /one worktree add /one-worktrees/clean-one clean-one' });
     expect(tour.steps.at(-1).evidence).toEqual([{ selector: '[data-tree-node="w:/one-worktrees/clean-one"]' }, { selector: '[role="treeitem"][aria-label="Clean"]' }]);
     expect(() => recreatedWorktreeTour({ ...manifest, worktrees: [] })).toThrow('Invalid lab seed manifest');
+  });
+  test('runtime-controls clicks Reload Pi twice in flight, the restart confirm twice 80 ms apart, and proves the restart by the reconnect toast', () => {
+    const tour = runtimeControlsTour();
+    expect(tour.name).toBe('runtime-controls');
+    const reload = { type: 'click', selector: 'button[aria-label="Reload Pi"]' };
+    expect(tour.steps[1].actions.slice(0, 2)).toEqual([reload, reload]);
+    const confirm = { type: 'click', text: 'Restart PiChamber' };
+    expect(tour.steps.at(-2).actions.slice(0, 3)).toEqual([confirm, { type: 'wait', ms: 80 }, confirm]);
+    expect(tour.steps.at(-2).evidence).toContainEqual({ text: 'PiChamber restarted.' });
   });
   test('add-device requires Home network selected and Tailscale disabled in every viewport and theme', () => {
     const tour = addDeviceTour();

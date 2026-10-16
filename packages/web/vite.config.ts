@@ -5,9 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { VitePWA } from 'vite-plugin-pwa';
 import { themeStoragePlugin } from '../../vite-theme-plugin';
+import { BUILD_INFO_FILE, createBuildStamp } from './server/lib/build-info.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'));
+// One stamp per Vite run: the UI bundle embeds it and the server reads the same
+// one from build-info.json beside the build.
+const buildStamp = createBuildStamp({ cwd: __dirname });
 const pwaDevEnabled = process.env.PICHAMBER_DISABLE_PWA_DEV !== '1';
 const reactScanToggle = (process.env.VITE_ENABLE_REACT_SCAN ?? '').toLowerCase();
 const enableReactScan = reactScanToggle === '1' || reactScanToggle === 'true' || reactScanToggle === 'on' || reactScanToggle === 'yes';
@@ -123,6 +127,12 @@ export default defineConfig({
         ];
       },
     },
+    {
+      name: 'pichamber-build-info',
+      generateBundle() {
+        this.emitFile({ type: 'asset', fileName: BUILD_INFO_FILE, source: `${JSON.stringify(buildStamp)}\n` });
+      },
+    },
     themeStoragePlugin(),
     themeJsonHmrPlugin(),
     bootVendorGraphPlugin(),
@@ -169,6 +179,7 @@ export default defineConfig({
     'process.env': {},
     global: 'globalThis',
     __APP_VERSION__: JSON.stringify(packageJson.version),
+    __PICHAMBER_BUILD__: JSON.stringify(buildStamp),
   },
   server: {
     port: 5173,

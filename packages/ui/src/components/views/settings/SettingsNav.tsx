@@ -8,6 +8,7 @@ import {
   type SettingsPageMeta,
 } from '@/lib/settings/metadata';
 import type { SettingsSearchResult } from '@/lib/settings/search';
+import { RuntimeControlButtons } from './RuntimeControls';
 
 const NAV_GROUP_ORDER = ['general', 'projects', 'agent'] as const;
 
@@ -137,8 +138,9 @@ export function SettingsNav({
           </div>
         ) : null
       ) : (
-        <div className="px-3 pt-3">
-          <div className="flex h-10 items-center gap-1.5 rounded-md border border-border bg-transparent px-2 text-muted-foreground focus-within:ring-2 focus-within:ring-primary/40 sm:h-8">
+        <div className="flex items-center gap-1 px-3 pt-3">
+          <RuntimeControlButtons buttonClassName="h-10 w-10 sm:h-8 sm:w-8" />
+          <div className="flex h-10 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-transparent px-2 text-muted-foreground focus-within:ring-2 focus-within:ring-primary/40 sm:h-8">
             <Icon name="search" className="h-4 w-4 shrink-0" />
             <input
               value={settingsSearchQuery}

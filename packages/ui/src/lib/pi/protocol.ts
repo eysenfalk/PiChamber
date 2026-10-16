@@ -113,6 +113,23 @@ export interface PiRuntimeHealth {
   error?: PiError;
 }
 
+/** `POST /api/pi/runtime/reload` response: sessions reloaded now, deferred to turn end, or failed. */
+export interface PiRuntimeReloadResult {
+  reloaded: number;
+  deferred: number;
+  failed: number;
+}
+
+/**
+ * `POST /api/pi/runtime/restart` response. The server process itself
+ * restarts: the desktop app relaunches, any other host replaces its own
+ * process. A server that cannot do that answers 501 instead.
+ */
+export interface PiRuntimeRestartResult {
+  accepted: true;
+  scope: 'process';
+}
+
 // ---------------------------------------------------------------------------
 // Projects
 // ---------------------------------------------------------------------------

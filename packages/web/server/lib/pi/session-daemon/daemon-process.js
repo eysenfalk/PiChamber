@@ -21,6 +21,7 @@ const serverPid = Number(argument('--server-pid'));
 const daemonId = argument('--daemon-id');
 const daemonRuntime = argument('--runtime');
 const buildId = argument('--build-id');
+const builtAt = argument('--built-at');
 const startedAt = new Date().toISOString();
 
 const exitWithFailure = (code) => {
@@ -114,6 +115,7 @@ if (!endpoint || !credentialFile || !stateFile || !cwd || !profileKey || !server
       daemonId,
       daemonRuntime: daemonRuntime || 'web',
       buildId: buildId || 'unknown',
+      ...(builtAt ? { builtAt } : {}),
       healthMetadata: { daemonPid: process.pid },
       onOwnershipClaim: ({ serverInstanceId: nextServerInstanceId, serverPid: nextServerPid }) => writeReadyState({
         ownerServerInstanceId: nextServerInstanceId,
