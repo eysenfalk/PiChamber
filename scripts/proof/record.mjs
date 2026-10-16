@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { KEYS, addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, sidebarTreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
+import { KEYS, addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, runtimeControlsTour, sidebarTreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -23,7 +23,7 @@ export function recordingUrl(value) {
 }
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename|add-device|sidebar-tree|orchestration|worktree-worker|extension-messages|html-render|recreated-worktree|tool-profiles|control-center> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
+const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename|add-device|sidebar-tree|orchestration|worktree-worker|extension-messages|html-render|recreated-worktree|tool-profiles|control-center|runtime-controls> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
 const idleProbe = 'window.__proofLastMutation = performance.now(); new MutationObserver(() => { window.__proofLastMutation = performance.now(); }).observe(document, {subtree:true, childList:true, attributes:true, characterData:true});';
 
 // CDP defines an empty loaderId as a request fetched from a worker. Its finish
@@ -294,9 +294,9 @@ async function main() {
   } });
   if (values.help) { console.log(usage); return; }
   const [name] = positionals;
-  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour, 'worktree-worker': worktreeWorkerTour, 'extension-messages': extensionMessagesTour, 'html-render': htmlRenderTour, 'recreated-worktree': recreatedWorktreeTour, 'tool-profiles': toolProfilesTour, 'control-center': controlCenterTour };
+  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'runtime-controls': runtimeControlsTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour, 'worktree-worker': worktreeWorkerTour, 'extension-messages': extensionMessagesTour, 'html-render': htmlRenderTour, 'recreated-worktree': recreatedWorktreeTour, 'tool-profiles': toolProfilesTour, 'control-center': controlCenterTour };
   const fixtureTours = { fixture, 'fixture-broken': brokenFixture };
-  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device, sidebar-tree, orchestration, worktree-worker, extension-messages, html-render, recreated-worktree, tool-profiles or control-center; see --help');
+  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device, sidebar-tree, orchestration, worktree-worker, extension-messages, html-render, recreated-worktree, tool-profiles, control-center or runtime-controls; see --help');
   const isLab = Object.hasOwn(labTours, name);
   const tour = isLab ? labTours[name](JSON.parse(await readFile(resolve(values.manifest || join(root, 'lab/seed-manifest.json')), 'utf8'))) : fixtureTours[name];
   let server;
