@@ -51,6 +51,12 @@ export const LAB_ASKER_OPTIONS = [
   { label: 'Warn only', consequence: 'Everything stays green; a missing license shows up only in review.' },
   { label: 'Fail on new branches only', consequence: 'Old branches stay green; the check needs a list of exempt branches that someone keeps.' },
 ];
+// Issue #231: ASK TWO starts a second asker in the worktree. The owner answers a question in the
+// orchestrator's chat (OWNER: <answer>), and the orchestrator closes it with worker_resolve without a
+// run; STOP ASKER stops the worker whose question is open, which closes that question.
+export const LAB_ASKER_TWO_TITLE = 'Lab: asker two';
+export const LAB_RESOLVED_REPLY = 'You answered it here, so I closed its question without a run.';
+export const LAB_STOPPED_REPLY = 'I stopped it; its question is closed with it.';
 export const LAB_ASKER_BLOCKER = 'The license check cannot read the license list from the CI cache.';
 const LAB_ASKER_QUESTION_BRIEF = {
   context: 'I tighten the README check of this project. Three old branches have no license section, so how strict the check is decides which of them turn red.',
@@ -132,6 +138,34 @@ const respond = async (context) => {
       model: { providerId: 'faux', modelId: 'faux-1' },
       clientRequestId: 'lab-choose-' + Date.now(),
     })], { stopReason: 'toolUse' });
+  }
+  if (task === 'ASK TWO') {
+    if (last?.role === 'toolResult') {
+      return fauxAssistantMessage(last.isError ? 'The second asker did not start: ' + textOf(last) : 'The worker "${LAB_ASKER_TWO_TITLE}" is running.');
+    }
+    // The first asker holds the project, so the second one works in its worktree.
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__session_spawn', {
+      cwd: ${JSON.stringify(worktreeWorkerCwd)},
+      task: 'QUESTION TASK: tighten the README check of this project.',
+      title: ${JSON.stringify(LAB_ASKER_TWO_TITLE)},
+      model: { providerId: 'faux', modelId: 'faux-1' },
+      clientRequestId: 'lab-ask-two-' + Date.now(),
+    })], { stopReason: 'toolUse' });
+  }
+  // The orchestrator finds the open question in its digest, then closes it (owner answer) or stops its worker.
+  const ownerAnswer = task.startsWith('OWNER: ');
+  if (ownerAnswer || task === 'STOP ASKER') {
+    if (last?.role === 'user') return fauxAssistantMessage([fauxToolCall('mcp__pichamber__orchestration_digest', {})], { stopReason: 'toolUse' });
+    if (last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__orchestration_digest' && !last.isError) {
+      const asking = (JSON.parse(textOf(last)).workers ?? []).find((worker) => worker.question);
+      if (!asking) return fauxAssistantMessage('No worker question is open.');
+      return fauxAssistantMessage([ownerAnswer
+        ? fauxToolCall('mcp__pichamber__worker_resolve', { sessionId: asking.sessionId, questionId: asking.question.id, answeredBy: 'owner' })
+        : fauxToolCall('mcp__pichamber__session_stop', { sessionId: asking.sessionId })], { stopReason: 'toolUse' });
+    }
+    if (last?.role === 'toolResult') {
+      return fauxAssistantMessage(last.isError ? 'That failed: ' + textOf(last) : ownerAnswer ? ${JSON.stringify(LAB_RESOLVED_REPLY)} : ${JSON.stringify(LAB_STOPPED_REPLY)});
+    }
   }
   // An open dialog of the chooser waits for the owner, so the orchestrator leaves it alone.
   if (/^(A|\\d+) worker events?:/.test(text) && text.includes(${JSON.stringify(LAB_CHOOSER_TITLE)}) && text.includes('dialog:')) {
@@ -230,7 +264,7 @@ const respond = async (context) => {
       clientRequestId: 'lab-spawn-' + Date.now(),
     })], { stopReason: 'toolUse' });
   }
-  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO, REVIEW, RENDER, ASK or CHOOSE.');
+  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO, REVIEW, RENDER, ASK, ASK TWO, OWNER: <answer>, STOP ASKER or CHOOSE.');
 };
 
 export default function (pi) {

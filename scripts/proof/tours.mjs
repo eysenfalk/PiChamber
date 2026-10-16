@@ -1,4 +1,4 @@
-import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_ASKER_TWO_TITLE, LAB_CHOOSER_DIALOGS, LAB_RESOLVED_REPLY, LAB_STOPPED_REPLY, LAB_CHOOSER_TITLE, LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -414,6 +414,50 @@ export function controlCenterTour(manifest) {
         { type: 'click', text: 'Send answer' }, { type: 'wait', ...empty }],
       // The row's last report line truncates on a phone by design, so the evidence is the worker's name.
       evidence: [empty, { text: 'nothing waits for you' }, { text: worker }] },
+  ] });
+}
+
+/**
+ * Issue #231: a settled question leaves the control center. The owner answers the asker in the
+ * orchestrator's chat, which closes the question with worker_resolve without a run; the orchestrator
+ * stops a second asker, which closes its question with the stop.
+ */
+export function settledQuestionsTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const composer = '[data-chat-input="true"] .cm-content';
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const inbox = '[aria-label="Decision inbox"]';
+  const question = { selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION };
+  const waiting = 'button[aria-label="Open control center, 1 decision waiting"]';
+  const nothing = 'button[aria-label="Close control center"]';
+  const empty = { text: 'No open questions or dialogs.' };
+  const backToChat = [{ type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer }];
+  const say = (value, reply) => [{ type: 'type', selector: composer, value }, { type: 'press', key: 'Enter' }, { type: 'wait', text: reply }];
+  const answer = `OWNER: ${LAB_ASKER_OPTIONS[0].label}`;
+  return validateTour({ name: 'settled-questions', steps: [
+    { caption: `The orchestrator starts "${LAB_ASKER_TITLE}", which asks the owner; the control center lists the open question.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) }, ...backToChat,
+        ...say('ASK', 'I leave that question to you.'), { type: 'wait', selector: waiting }, { type: 'click', selector: waiting }, { type: 'wait', text: LAB_ASKER_QUESTION }],
+      evidence: [question, { selector: `button[aria-label="Open ${LAB_ASKER_TITLE}"]` }] },
+    { caption: `The owner answers in the orchestrator's chat instead ("${answer}"). The orchestrator closes the question with worker_resolve as answered by the owner; no run starts in the asker.`, viewport: 'desktop', theme: 'light',
+      actions: [...backToChat, ...say(answer, LAB_RESOLVED_REPLY)],
+      evidence: [{ text: LAB_RESOLVED_REPLY }] },
+    { caption: 'The control center no longer lists the question: nothing waits for the owner.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'button[aria-label="Open control center"]' }, { type: 'wait', ...empty }],
+      evidence: [empty, { selector: nothing }] },
+    { caption: `A second asker, "${LAB_ASKER_TWO_TITLE}", asks the same question in the worktree; the control center lists it.`, viewport: 'desktop', theme: 'light',
+      actions: [...backToChat, ...say('ASK TWO', 'I leave that question to you.'), { type: 'wait', selector: waiting }, { type: 'click', selector: waiting }, { type: 'wait', text: LAB_ASKER_QUESTION }],
+      evidence: [question, { selector: `button[aria-label="Open ${LAB_ASKER_TWO_TITLE}"]` }] },
+    { caption: `The owner has the orchestrator stop "${LAB_ASKER_TWO_TITLE}"; the stop closes its question.`, viewport: 'desktop', theme: 'light',
+      actions: [...backToChat, ...say('STOP ASKER', LAB_STOPPED_REPLY)],
+      evidence: [{ text: LAB_STOPPED_REPLY }] },
+    { caption: 'The control center lists no question of the stopped worker.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: 'button[aria-label="Open control center"]' }, { type: 'wait', ...empty }],
+      evidence: [empty, { selector: nothing }] },
   ] });
 }
 

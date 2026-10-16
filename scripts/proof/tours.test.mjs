@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
+import { addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, settledQuestionsTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
 import { EVENTS_MESSAGE } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
-import { LAB_ASKER_BLOCKER, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_ASKER_TWO_TITLE, LAB_CHOOSER_DIALOGS, LAB_RESOLVED_REPLY, LAB_STOPPED_REPLY, LAB_CHOOSER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 const copy = () => structuredClone(fixture);
 
 describe('tours.mjs format', () => {
@@ -127,6 +127,22 @@ describe('tours.mjs format', () => {
     expect(evidence).toContainEqual({ selector: `button[aria-label="Open ${LAB_CHOOSER_TITLE}"]` });
     expect(new Set(tour.steps.map(step => `${step.viewport}/${step.theme}`))).toEqual(new Set(['desktop/light', 'desktop/dark', 'mobile/light', 'mobile/dark']));
     expect(() => controlCenterTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
+  });
+
+  test('settled-questions closes an owner question answered in the chat and the question of a stopped worker (#231)', () => {
+    const tour = settledQuestionsTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [{ project: 'lab-one', title: 'Orchestrator', role: 'orchestrator' }] });
+    expect(tour.name).toBe('settled-questions');
+    const actions = tour.steps.flatMap(step => step.actions);
+    expect(actions.filter(action => action.type === 'type').map(action => action.value)).toEqual(['ASK', 'OWNER: Fail the check', 'ASK TWO', 'STOP ASKER']);
+    const evidence = tour.steps.flatMap(step => step.evidence);
+    expect(evidence).toContainEqual({ selector: '[aria-label="Decision inbox"] [data-inbox-question]', text: LAB_ASKER_QUESTION });
+    expect(evidence).toContainEqual({ selector: `button[aria-label="Open ${LAB_ASKER_TITLE}"]` });
+    expect(evidence).toContainEqual({ selector: `button[aria-label="Open ${LAB_ASKER_TWO_TITLE}"]` });
+    expect(evidence).toContainEqual({ text: LAB_RESOLVED_REPLY });
+    expect(evidence).toContainEqual({ text: LAB_STOPPED_REPLY });
+    // Each close ends in an empty inbox with no waiting decision.
+    expect(evidence.filter(entry => entry.text === 'No open questions or dialogs.')).toHaveLength(2);
+    expect(() => settledQuestionsTour({ projects: [{ name: 'lab-one', path: '/one' }], sessions: [] })).toThrow('Invalid lab seed manifest');
   });
 
   test('worktree-worker spawns a worker in a linked worktree and proves it sits under that worktree', () => {

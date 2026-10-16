@@ -7,7 +7,7 @@ import { schemaViolation } from '../../packages/web/server/lib/pi/session-daemon
 import { reportViolation } from '../../packages/web/server/lib/pi/session-daemon/orchestration/report-rules.js';
 import { ORCHESTRATION_TOOLS } from '../../packages/web/server/lib/pi/session-daemon/orchestration/tool-contracts.js';
 import { createWakes } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
-import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_ASKER_TWO_TITLE, LAB_CHOOSER_DIALOGS, LAB_RESOLVED_REPLY, LAB_STOPPED_REPLY, LAB_CHOOSER_TITLE, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 
 // The message the daemon sends to a waking orchestrator, built by the real wakes module.
 async function wakeText(...events) {
@@ -103,6 +103,29 @@ test('ASK starts the asker, which asks the owner with a brief and reports a bloc
     // The orchestrator leaves an owner question to the owner.
     expect(await labReply(directory, (await wakeText(['question', LAB_ASKER_QUESTION])).replace('Lab: worker', LAB_ASKER_TITLE)))
       .toContain('I leave that question to you.');
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('the orchestrator closes an owner question answered in its chat with worker_resolve, and STOP ASKER stops the worker that asks (#231)', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'pichamber-faux-'));
+  try {
+    expect(await toolCallOf(directory, 'ASK TWO')).toMatchObject({ name: 'mcp__pichamber__session_spawn', arguments: { title: LAB_ASKER_TWO_TITLE, cwd: '/lab/alpha-worktrees/fetch-me' } });
+    const digest = { role: 'toolResult', toolName: 'mcp__pichamber__orchestration_digest', toolCallId: 'd', isError: false, timestamp: Date.now(),
+      content: [{ type: 'text', text: JSON.stringify({ workers: [{ sessionId: 'w0', question: null }, { sessionId: 'w1', question: { id: 'q-1' } }] }, null, 2) }] };
+    const done = (toolName) => ({ role: 'toolResult', toolName, toolCallId: 'r', isError: false, timestamp: Date.now(), content: [{ type: 'text', text: '{}' }] });
+    const callOf = async (text, earlier) => (await labMessage(directory, text, earlier)).content.find((part) => part.type === 'toolCall');
+    const replyOf = async (text, earlier) => (await labMessage(directory, text, earlier)).content.map((part) => part.text ?? '').join('');
+    for (const text of ['OWNER: Fail the check', 'STOP ASKER']) expect(await callOf(text, [])).toMatchObject({ name: 'mcp__pichamber__orchestration_digest' });
+    expect(await callOf('OWNER: Fail the check', [digest])).toMatchObject({ name: 'mcp__pichamber__worker_resolve', arguments: { sessionId: 'w1', questionId: 'q-1', answeredBy: 'owner' } });
+    expect(await callOf('STOP ASKER', [digest])).toMatchObject({ name: 'mcp__pichamber__session_stop', arguments: { sessionId: 'w1' } });
+    expect(await replyOf('OWNER: Fail the check', [digest, done('mcp__pichamber__worker_resolve')])).toBe(LAB_RESOLVED_REPLY);
+    expect(await replyOf('STOP ASKER', [digest, done('mcp__pichamber__session_stop')])).toBe(LAB_STOPPED_REPLY);
+    // Both calls pass the daemon's contracts.
+    for (const [name, args] of [['worker_resolve', { sessionId: 'w1', questionId: 'q-1', answeredBy: 'owner' }], ['session_stop', { sessionId: 'w1' }], ['orchestration_digest', {}]]) {
+      expect(schemaViolation(ORCHESTRATION_TOOLS.find((tool) => tool.name === name).parameters, args)).toBeNull();
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
