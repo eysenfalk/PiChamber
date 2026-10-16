@@ -1,7 +1,8 @@
 /**
  * Catalog feeder — keeps `PiSessionStore.catalog` populated for every
  * directory the sidebar knows about: project roots plus the discovered
- * worktree paths in the runtime-scoped `useWorktreeStore` topology. The
+ * worktree paths in the runtime-scoped `useWorktreeStore` topology, then
+ * every other existing folder that holds sessions (#103). The
  * feeder is the single fill path; the at-most-2-in-flight scheduler and
  * the per-directory refresh generation live in `pi-session-store.ts`
  * and `pi-session-catalog.ts`.
@@ -108,13 +109,12 @@ export const PiSessionCatalogFeeder: React.FC = () => {
         const status = store.getState().catalog.listStatusByDirectory.get(directory);
         return status !== 'ready' && status !== 'loading';
       });
-      if (pendingDirectories.length === 0) {
-        lastSignature = signature;
-        return;
-      }
-
       lastSignature = signature;
-      void store.refreshAllDirectoryCatalogs(pendingDirectories);
+      // Folders outside every known directory come after the known ones and
+      // through the same scheduler (#103). A failed directory answer keeps the
+      // learned folders and is retried on the next signature change.
+      void store.refreshAllDirectoryCatalogs(pendingDirectories)
+        .then(() => (cancelled ? undefined : store.refreshForeignSessionDirectories(directories)));
     };
 
     refresh();

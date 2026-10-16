@@ -34,6 +34,7 @@ import {
   encodePiSessionCwd,
   findPiSessionJsonlById,
   getPiSessionDirectory,
+  listPiSessionDirectories,
   listPiSessionJsonlDirectory,
   matchesPiSessionJsonlName,
   normalizeWindowsShellPath,
@@ -121,6 +122,112 @@ describe('Pi session header scan', () => {
     const agentDir = await mkdtemp(join(tmpdir(), 'pichamber-pi-header-scan-empty-'));
     await expect(scanPiSessionJsonlHeaders({ sessionId: 'caller', agentDir }))
       .resolves.toEqual({ match: null, incomplete: false });
+  });
+});
+
+describe('Pi session directory discovery', () => {
+  const header = (id, cwd) => `${JSON.stringify({ type: 'session', id, cwd })}\n`;
+  const agentWith = async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-session-dirs-'));
+    const agentDir = join(root, 'agent');
+    const store = async (name, files) => {
+      const path = join(agentDir, 'sessions', name);
+      await mkdir(path, { recursive: true });
+      for (const [file, text] of Object.entries(files)) await writeFile(join(path, file), text);
+      return path;
+    };
+    const folder = async (name) => {
+      const path = join(root, name);
+      await mkdir(path, { recursive: true });
+      return path;
+    };
+    return { agentDir, store, folder, root };
+  };
+
+  it('lists each existing directory once, from the newest readable header of its store', async () => {
+    const { agentDir, store, folder, root } = await agentWith();
+    const project = await folder('project');
+    const scratch = await folder('scratch');
+    await store('project', {
+      '2026-01-01_old.jsonl': header('old', project),
+      '2026-02-01_new.jsonl': header('new', project),
+      'notes.txt': 'not a session',
+    });
+    await store('scratch', { '2026-03-01_broken.jsonl': 'not json\n', '2026-01-01_s.jsonl': header('s', scratch) });
+    await store('gone', { '2026-01-01_g.jsonl': header('g', join(root, 'deleted')) });
+    await store('empty', {});
+
+    await expect(listPiSessionDirectories({ agentDir }))
+      .resolves.toEqual({ directories: [project, scratch].sort(), incomplete: false });
+  });
+
+  it('treats a missing sessions root as an empty, complete answer', async () => {
+    const { agentDir } = await agentWith();
+    await expect(listPiSessionDirectories({ agentDir })).resolves.toEqual({ directories: [], incomplete: false });
+  });
+
+  it('reports a store it could not read as incomplete and still lists the others', async () => {
+    const { agentDir, store, folder } = await agentWith();
+    const project = await folder('project');
+    await store('project', { '2026-01-01_p.jsonl': header('p', project) });
+    const broken = await store('broken', {});
+    const readDirectory = async (path, options) => {
+      if (path === broken) throw Object.assign(new Error('io'), { code: 'EIO' });
+      return readdir(path, options);
+    };
+
+    await expect(listPiSessionDirectories({ agentDir, readDirectory }))
+      .resolves.toEqual({ directories: [project], incomplete: true });
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports a store whose headers it cannot read as incomplete', async () => {
+    const { agentDir, store, folder } = await agentWith();
+    const hidden = await folder('hidden');
+    const path = await store('hidden', { '2026-01-01_h.jsonl': header('h', hidden) });
+    await chmod(join(path, '2026-01-01_h.jsonl'), 0o000);
+    try {
+      await expect(listPiSessionDirectories({ agentDir })).resolves.toEqual({ directories: [], incomplete: true });
+    } finally {
+      await chmod(join(path, '2026-01-01_h.jsonl'), 0o600);
+    }
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports a directory it cannot check as incomplete and still lists the others', async () => {
+    const { agentDir, store, folder, root } = await agentWith();
+    const good = await folder('good');
+    const locked = await folder(join('protected', 'cwd'));
+    await store('good', { '2026-01-01_g.jsonl': header('g', good) });
+    await store('locked', { '2026-01-01_l.jsonl': header('l', locked) });
+    await chmod(join(root, 'protected'), 0o000);
+    try {
+      await expect(listPiSessionDirectories({ agentDir }))
+        .resolves.toEqual({ directories: [good], incomplete: true });
+    } finally {
+      await chmod(join(root, 'protected'), 0o700);
+    }
+  });
+
+  it('falls back to an older header of the same store when the newest directory is gone', async () => {
+    const { agentDir, store, folder, root } = await agentWith();
+    const kept = await folder('a-b');
+    const gone = join(root, 'a', 'b');
+    expect(encodePiSessionCwd(gone)).toBe(encodePiSessionCwd(kept));
+    await store(encodePiSessionCwd(kept), {
+      '2026-01-01_kept.jsonl': header('kept', kept),
+      '2026-02-01_gone.jsonl': header('gone', gone),
+    });
+
+    await expect(listPiSessionDirectories({ agentDir }))
+      .resolves.toEqual({ directories: [kept], incomplete: false });
+  });
+
+  it('fails, instead of answering with no directories, when the sessions root cannot be read', async () => {
+    const { agentDir, store } = await agentWith();
+    await store('project', {});
+    const readDirectory = async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
+
+    await expect(listPiSessionDirectories({ agentDir, readDirectory }))
+      .rejects.toMatchObject({ code: 'SESSION_JSONL_UNREADABLE' });
   });
 });
 

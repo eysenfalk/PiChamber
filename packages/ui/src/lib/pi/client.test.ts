@@ -209,6 +209,23 @@ describe("PiService", () => {
     expect(attempt).toBe(2);
   });
 
+  test("listSessionDirectories reads the session directories of the runtime", async () => {
+    installFetchMock(() => jsonResponse({ directories: ["/scratch", "/work"], incomplete: true }))
+    const result = await new PiService().listSessionDirectories()
+    expect(result).toEqual({ directories: ["/scratch", "/work"], incomplete: true })
+    expect(recordedCalls()[0].url).toBe("/api/pi/session-directories")
+    expect(recordedCalls()[0].init?.method).toBe("GET")
+  })
+
+  test("listSessionDirectories rejects a failed or malformed answer instead of returning no directories", async () => {
+    installFetchMock(() => jsonResponse({ error: { code: "SESSION_JSONL_UNREADABLE" } }, { status: 503 }))
+    await expect(new PiService().listSessionDirectories()).rejects.toBeInstanceOf(PiRequestError)
+    installFetchMock(() => jsonResponse({ sessions: [] }))
+    const malformed = await new PiService().listSessionDirectories().catch((error: unknown) => error)
+    expect(malformed).toBeInstanceOf(PiRequestError)
+    expect((malformed as PiRequestError).code).toBe("MALFORMED_DAEMON_RESPONSE")
+  })
+
   test("listSessions throws PiRequestError on persistent 5xx response", async () => {
     installFetchMock(() =>
       jsonResponse({ error: { code: "DAEMON_UNAVAILABLE" } }, { status: 503 }),

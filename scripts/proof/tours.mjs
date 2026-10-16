@@ -119,11 +119,11 @@ export function sidebarTreeTour(manifest) {
   const sessions = manifest?.sessions;
   const project = manifest?.projects?.find(candidate => candidate.name === manifest?.worktrees?.[0]?.project);
   const find = role => sessions?.find(session => session.role === role && nonempty(session.title));
-  const [long, fork, forkChild, chat] = ['long', 'fork', 'fork-child', 'chat'].map(find);
+  const [long, fork, forkChild, chat, foreign] = ['long', 'fork', 'fork-child', 'chat', 'foreign'].map(find);
   const others = manifest?.projects?.filter(candidate => candidate.name !== project?.name) ?? [];
   const otherSession = others[0] && sessions?.find(session => session.project === others[0].name && nonempty(session.title));
   const worktrees = sessions?.filter(session => session.role === 'worktree' && session.project === project?.name && nonempty(session.worktree)) ?? [];
-  if (!project || !nonempty(project.path) || !long || !fork || !forkChild || !chat || worktrees.length < 2 || others.length < 2 || !others.every(other => nonempty(other.path)) || !otherSession) throw new Error('Invalid lab seed manifest');
+  if (!project || !nonempty(project.path) || !long || !fork || !forkChild || !chat || !foreign || worktrees.length < 2 || others.length < 2 || !others.every(other => nonempty(other.path)) || !otherSession) throw new Error('Invalid lab seed manifest');
   const titleCase = name => name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
   const label = titleCase(project.name);
   // Projects added by path get the id `path_` plus the base64url path.
@@ -244,6 +244,11 @@ export function sidebarTreeTour(manifest) {
     { caption: 'New session closes the drawer and opens an empty chat.', viewport: 'mobile', theme: 'light',
       actions: [{ type: 'click', text: 'New session' }, { type: 'wait', selector: '[data-chat-input="true"]' }],
       evidence: [{ selector: '[data-chat-input="true"]' }] },
+    // Issue #103: the session lives in a folder outside every project and outside home.
+    { caption: `After a reload, Other folders lists the folder outside every project with "${foreign.title}" in it.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: '[data-tree-node="other"]' }, { type: 'click', selector: '[data-tree-node="other"]' },
+        { type: 'wait', selector: '[data-tree-node^="o:"]' }, { type: 'click', selector: '[data-tree-node^="o:"]' }, { type: 'wait', text: foreign.title }],
+      evidence: [{ selector: '[data-tree-node="other"][aria-expanded="true"]' }, { text: 'Other folders' }, { text: foreign.title }] },
   ] });
 }
 

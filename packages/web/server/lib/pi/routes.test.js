@@ -920,6 +920,52 @@ describe('Pi runtime route', () => {
     });
   });
 
+  it('proxies the session directories and forwards an incomplete answer', async () => {
+    const calls = [];
+    let answer = { directories: ['/scratch', '/workspace', '', 7], incomplete: true, endpoint: '/private/socket' };
+    const runtime = {
+      health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: ['sessions.directories'] }),
+      request: async (command, payload) => {
+        calls.push({ command, payload });
+        return answer;
+      },
+    };
+    const app = express();
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime: () => runtime });
+    server = await listen(app);
+    const url = `http://127.0.0.1:${server.address().port}/api/pi/session-directories`;
+
+    const partial = await fetch(url);
+    expect(partial.status).toBe(200);
+    await expect(partial.json()).resolves.toEqual({ directories: ['/scratch', '/workspace'], incomplete: true });
+    expect(calls).toEqual([{ command: 'sessions.directories', payload: undefined }]);
+
+    answer = { directories: ['/scratch'] };
+    await expect((await fetch(url)).json()).resolves.toEqual({ directories: ['/scratch'] });
+  });
+
+  it('answers a failed or malformed session directories request with an error, never an empty list', async () => {
+    let fail;
+    const runtime = {
+      health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: ['sessions.directories'] }),
+      request: async () => fail(),
+    };
+    const app = express();
+    registerPiRuntimeRoutes(app, { getPiSessionDaemonRuntime: () => runtime });
+    server = await listen(app);
+    const url = `http://127.0.0.1:${server.address().port}/api/pi/session-directories`;
+
+    fail = () => { throw Object.assign(new Error('io'), { code: 'SESSION_JSONL_UNREADABLE' }); };
+    const unreadable = await fetch(url);
+    expect(unreadable.status).toBe(503);
+    await expect(unreadable.json()).resolves.toEqual({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+
+    fail = () => ({ sessions: [] });
+    const malformed = await fetch(url);
+    expect(malformed.status).toBe(502);
+    await expect(malformed.json()).resolves.toEqual({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+  });
+
   it('forwards that a session list is incomplete and omits the marker for a complete one', async () => {
     const row = { session: { id: 'pi-readable', directory: '/workspace', createdAt: 1, updatedAt: 2 }, updatedAt: 2 };
     let incomplete = true;

@@ -90,6 +90,14 @@ const seedCatalog = (store: PiSessionStore, records: LiveSessionRecord[]) => {
 
 type Props = { knownSessionDirectories: Set<string> };
 
+const SCRATCH = '/lab/folders/scratch';
+
+const learnForeignDirectories = (store: PiSessionStore, directories: string[]) => {
+  const internal = store as unknown as { state: ReturnType<PiSessionStore['getState']>; emit: (topics: string[]) => void };
+  internal.state = { ...store.getState(), foreignSessionDirectories: directories };
+  internal.emit(['catalog']);
+};
+
 const restoreFns: Array<() => void> = [];
 afterEach(() => {
   while (restoreFns.length > 0) restoreFns.pop()!();
@@ -132,6 +140,33 @@ describe('useSidebarSessions', () => {
       expect(store.isDeleted('worker')).toBe(false);
     } finally {
       await act(async () => root.unmount());
+      seedCatalog(store, []);
+    }
+  });
+
+  test('shows a session in a folder outside every project once the store learned the folder (#103)', async () => {
+    const store = getPiSessionStore();
+    seedCatalog(store, [record('project-session', PROJECT), record('scratch-session', SCRATCH)]);
+
+    const dom = installMinimalDom();
+    restoreFns.push(dom.restore);
+    let visible: Session[] = [];
+    const Harness = () => {
+      visible = useSidebarSessions({ enabled: true, knownSessionDirectories: new Set([PROJECT]), homeDirectory: '/home/user' }).sessions;
+      return null;
+    };
+    const visibleIds = () => visible.map((session) => session.id).sort();
+
+    const root: Root = createRoot(dom.container);
+    try {
+      await act(async () => root.render(React.createElement(Harness)));
+      expect(visibleIds()).toEqual(['project-session']);
+
+      await act(async () => learnForeignDirectories(store, [SCRATCH]));
+      expect(visibleIds()).toEqual(['project-session', 'scratch-session']);
+    } finally {
+      await act(async () => root.unmount());
+      learnForeignDirectories(store, []);
       seedCatalog(store, []);
     }
   });

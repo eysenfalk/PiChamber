@@ -103,6 +103,7 @@ export const initialSessionStoreState = (
   focusPending: false,
   sessionsListStatus: 'idle',
   catalog,
+  foreignSessionDirectories: [],
   syncReadiness: 'ready',
   syncRecovery: { directories: [], residents: [] },
 });

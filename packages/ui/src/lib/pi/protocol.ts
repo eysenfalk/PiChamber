@@ -130,6 +130,15 @@ export interface PiProjectSelectResponse {
   directory: string;
 }
 
+/** Every existing directory that holds Pi sessions, including folders no
+ *  project names. */
+export interface PiSessionDirectoryListResponse {
+  directories: string[];
+  /** Set when the server could not read every session store. The list proves
+   *  the directories it contains, not that an omitted one has no sessions. */
+  incomplete?: true;
+}
+
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------

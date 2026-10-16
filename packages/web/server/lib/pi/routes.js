@@ -1664,6 +1664,25 @@ export const registerPiRuntimeRoutes = (app, {
     }
   });
 
+  app.get('/api/pi/session-directories', async (_req, res) => {
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('sessions.directories');
+      // A malformed answer is a failure, never an empty list: the client would
+      // take it as "no other folders".
+      if (!Array.isArray(result?.directories)) {
+        const error = new Error('The Pi session daemon returned no directory list.');
+        error.code = 'MALFORMED_DAEMON_RESPONSE';
+        throw error;
+      }
+      res.json({
+        directories: result.directories.filter((directory) => typeof directory === 'string' && directory.length > 0),
+        ...(result.incomplete === true ? { incomplete: true } : {}),
+      });
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
   app.patch('/api/pi/sessions/:sessionId', async (req, res) => {
     const sessionId = req.params.sessionId;
     const title = req.body?.title;

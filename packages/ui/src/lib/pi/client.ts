@@ -60,6 +60,7 @@ import {
   type PiSessionMessagesResponse,
   type PiSessionNavigateResponse,
   type PiSessionListResponse,
+  type PiSessionDirectoryListResponse,
   type PiSessionTreeResponse,
   type PiAttachmentCreateInput,
   type PiAttachmentCreateResponse,
@@ -467,6 +468,20 @@ export class PiService {
       ...(directory ? { query: { directory } } : {}),
       ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
     });
+  }
+
+  /** Directories that hold sessions, so folders outside every project can be
+   *  listed too. A failure rejects; it never reads as "no directories". */
+  async listSessionDirectories(scope?: PiClientScope): Promise<PiSessionDirectoryListResponse> {
+    assertRuntimeUnchanged(scope);
+    const result = await jsonRequest<undefined, PiSessionDirectoryListResponse>('/api/pi/session-directories', {
+      method: 'GET',
+      ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
+    });
+    if (!Array.isArray(result?.directories)) {
+      throw new PiRequestError('MALFORMED_DAEMON_RESPONSE', 'Session directory list is malformed');
+    }
+    return result;
   }
 
   async createSession(input: PiSessionCreateInput, scope?: PiClientScope): Promise<PiSessionDetailResponse> {

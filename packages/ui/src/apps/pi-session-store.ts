@@ -222,6 +222,8 @@ export class PiSessionStore {
   // duplicate `listSessions`; explicit `refreshDirectoryCatalog` calls are
   // unaffected and still supersede.
   private pendingCatalogPassByKey = new Map<string, Promise<void>>();
+  /** Latest `refreshForeignSessionDirectories` call; an older answer commits nothing. */
+  private foreignDirectoriesRequest = 0;
   /** Committed deletions for the active runtime. A tombstone survives its
    *  echo so an in-flight list, detail, or history response started before
    *  the deletion cannot resurrect the session. Archive and directory moves
@@ -1173,6 +1175,54 @@ export class PiSessionStore {
         settle.get(directory)?.();
       }
     }
+  }
+
+  /**
+   * Learn the existing directories outside `knownDirectories` that hold
+   * sessions (#103) and list them through the same scheduler as the known
+   * ones. The caller lists its known directories first. A complete answer
+   * replaces the learned list, an incomplete one only adds to it (it proves
+   * no absence), and a failed one keeps it: a failure never reads as "no
+   * foreign directories" and never touches the catalog.
+   */
+  async refreshForeignSessionDirectories(knownDirectories: Iterable<string>): Promise<void> {
+    const request = ++this.foreignDirectoriesRequest;
+    const runtimeKey = getRuntimeKey();
+    const generation = this.runtimeGeneration;
+    let answer: Awaited<ReturnType<typeof piClient.listSessionDirectories>>;
+    try {
+      answer = await piClient.listSessionDirectories({ runtimeKey });
+    } catch {
+      return;
+    }
+    if (
+      request !== this.foreignDirectoriesRequest
+      || generation !== this.runtimeGeneration
+      || runtimeKey !== getRuntimeKey()
+    ) return;
+    const known = new Set<string>();
+    for (const directory of knownDirectories) {
+      const normalized = normalizePath(directory);
+      if (normalized) known.add(normalized.toLowerCase());
+    }
+    const kept = answer.incomplete ? this.state.foreignSessionDirectories : [];
+    const next: string[] = [];
+    for (const directory of [...kept, ...answer.directories]) {
+      const normalized = normalizePath(directory);
+      if (!normalized || known.has(normalized.toLowerCase())) continue;
+      known.add(normalized.toLowerCase());
+      next.push(normalized);
+    }
+    const current = this.state.foreignSessionDirectories;
+    if (next.length !== current.length || next.some((directory, index) => directory !== current[index])) {
+      this.state = { ...this.state, foreignSessionDirectories: next };
+      this.emit([TOPIC_CATALOG]);
+    }
+    const pending = next.filter((directory) => {
+      const status = this.state.catalog.listStatusByDirectory.get(directory);
+      return status !== 'ready' && status !== 'loading';
+    });
+    if (pending.length > 0) await this.refreshAllDirectoryCatalogs(pending);
   }
 
   async start(options: {
