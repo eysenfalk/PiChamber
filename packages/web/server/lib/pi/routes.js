@@ -1806,6 +1806,88 @@ export const registerPiRuntimeRoutes = (app, {
     res.status(201).json({ token, sessionId, expiresAt, idleTimeoutMs, url: '/api/pi/mcp', server: 'pichamber' });
   });
 
+  // The owner's control center (#20): all orchestrators with their workers,
+  // slots, host and pending dialogs. A failed daemon read is an error, never
+  // an empty overview.
+  app.get('/api/pi/orchestration/overview', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.overview', {});
+      if (result?.error) {
+        res.status(503).json({ error: { code: typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED' } });
+        return;
+      }
+      const value = result?.value;
+      if (!value || typeof value !== 'object' || !Array.isArray(value.orchestrators) || !Array.isArray(value.dialogs)) {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
+  // The owner answers a worker's open question from the control center (#20).
+  // The daemon prompts the worker as the owner and closes the question only
+  // after Pi accepted the prompt; a question that is not open changes nothing.
+  const ANSWER_ERROR_STATUS = {
+    INVALID_ARGUMENT: 400,
+    INVALID_PROMPT: 400,
+    ORCHESTRATION_QUESTION_UNKNOWN: 409,
+    SESSION_BUSY: 409,
+    OPERATION_PAYLOAD_MISMATCH: 409,
+    SESSION_NOT_FOUND: 404,
+  };
+  app.post('/api/pi/orchestration/questions/:sessionId/:questionId/answer', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { sessionId, questionId } = req.params;
+    const { text, clientRequestId } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || (clientRequestId !== undefined && typeof clientRequestId !== 'string')) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.answer', {
+        sessionId, questionId, text, ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+      });
+      if (result?.error) {
+        const code = typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED';
+        res.status(ANSWER_ERROR_STATUS[code] ?? 503).json({ error: { code } });
+        return;
+      }
+      const value = result?.value;
+      if (!value || value.accepted !== true || typeof value.resolved !== 'boolean') {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
+  // Marks a question answered without a prompt, for an answer given in the chat.
+  app.post('/api/pi/orchestration/questions/:sessionId/:questionId/resolve', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { sessionId, questionId } = req.params;
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.resolve', { sessionId, questionId });
+      if (result?.error) {
+        const code = typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED';
+        res.status(ANSWER_ERROR_STATUS[code] ?? 503).json({ error: { code } });
+        return;
+      }
+      if (result?.value?.resolved !== true) {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(result.value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {
     const { sessionId } = req.params;
     const { archived } = req.body || {};
@@ -1823,8 +1905,11 @@ export const registerPiRuntimeRoutes = (app, {
       );
       const items = projectSessionList(result?.sessions);
       if (!items.some((item) => item.session.id === sessionId)) {
-        const error = new Error('The Pi session does not exist.');
-        error.code = 'INVALID_SESSION';
+        // A partial list skipped a file it could not read, which may be this
+        // session: absence is not proven, so do not call it deleted.
+        const partial = result?.incomplete === true;
+        const error = new Error(partial ? 'The Pi session file cannot be read.' : 'The Pi session does not exist.');
+        error.code = partial ? 'SESSION_JSONL_UNREADABLE' : 'INVALID_SESSION';
         throw error;
       }
       await archiveStore.set(sessionId, archived);

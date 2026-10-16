@@ -16,6 +16,7 @@ lab/run record worktree-worker # A worker spawned in a linked worktree sits unde
 lab/run record extension-messages # Custom messages as compact grouped rows (#147), in .proof/extension-messages/
 lab/run record html-render  # The faux model calls html_render; page inline, maximized, reloaded, mobile (#155), in .proof/html-render/
 lab/run record tool-profiles # REVIEW starts a read-only review worker; edit and write blocked, README unchanged (#151), in .proof/tool-profiles/
+lab/run record control-center # Two workers ask the owner; a dialog is answered in the chat, a dialog and a question in the control center, the follow-up marked answered (#20, #87), in .proof/control-center/
 lab/run record recreated-worktree # A session leaves with its closed worktree and returns with it, no reload (#160), in .proof/recreated-worktree/
 lab/run down                # removes pod, internal network and lab state volume
 ```

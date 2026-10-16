@@ -41,12 +41,49 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:6px 8px;b
 </body></html>`;
 // Issue #151: REVIEW starts a review worker (tool profile read-only) that tries to change the README.
 export const LAB_REVIEW_WORKER_TITLE = 'Lab: reviewer';
+// Issue #20, #210: ASK starts a worker that asks the owner a question with a full brief. The owner
+// answers it with an option button; the answer arrives as the option's label, and the worker then
+// reports a blocker for the owner, which the owner answers with free text.
+export const LAB_ASKER_TITLE = 'Lab: asker';
+export const LAB_ASKER_QUESTION = 'Should the README check fail when the license section is missing?';
+export const LAB_ASKER_OPTIONS = [
+  { label: 'Fail the check', consequence: 'A README without a license blocks the release; three old branches turn red at once.', recommended: true },
+  { label: 'Warn only', consequence: 'Everything stays green; a missing license shows up only in review.' },
+  { label: 'Fail on new branches only', consequence: 'Old branches stay green; the check needs a list of exempt branches that someone keeps.' },
+];
+export const LAB_ASKER_BLOCKER = 'The license check cannot read the license list from the CI cache.';
+const LAB_ASKER_QUESTION_BRIEF = {
+  context: 'I tighten the README check of this project. Three old branches have no license section, so how strict the check is decides which of them turn red.',
+  options: LAB_ASKER_OPTIONS,
+  recommendation: 'Fail the check: a missing license blocks every release anyway, and the three old branches are easy to fix.',
+  counterargument: 'Old branches turn red at once and someone has to fix them before their next release.',
+  revisit: 'When a project ships without a license on purpose.',
+  meanwhile: 'I keep the title and install checks going; the license part waits for your answer.',
+};
+const LAB_ASKER_BLOCKER_BRIEF = {
+  context: 'The license check reads the list of allowed licenses from the shared CI cache. The lab runner has no access to that cache, so the check cannot run at all.',
+  tried: 'Rebuilt the cache key and ran the check without the cache; both fail with "permission denied" on the cache bucket.',
+  needed: 'Read access for the lab runner to the CI cache, or your OK to keep a copy of the license list in the repository.',
+  recommendation: 'Keep the copy: it is 40 lines and changes about once a year.',
+  meanwhile: 'The license part of the check stays off; the title and install checks run.',
+};
+// Issue #87: CHOOSE starts a worker whose tool opens two extension dialogs. The chat shows
+// an open dialog of any session as a modal, so the second waits a moment: the owner answers
+// the first in the chat, opens the control center and answers the second in its inbox.
+export const LAB_CHOOSER_TITLE = 'Lab: chooser';
+export const LAB_CHOOSER_DIALOGS = [
+  { title: 'Which license should the README name?', options: ['MIT', 'Apache-2.0'] },
+  { title: 'Show a license badge in the README?', options: ['Add a badge', 'No badge'], delayMs: 3000 },
+];
 // Long enough for the owner to ask the orchestrator something while the worker runs.
 const WORKER_THINK_MS = 10000;
 
 /** Source of the extension module the seed writes into the lab agent directory. */
 export function fauxOrchestrationExtension({ fauxUrl, workerCwd, worktreeWorkerCwd }) {
+  // pi-ai's index sits next to its providers and exports TypeBox for tool schemas.
+  const piAiUrl = fauxUrl.replace(/providers\/faux\.js$/, 'index.js');
   return `import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(fauxUrl)};
+import { Type } from ${JSON.stringify(piAiUrl)};
 
 const textOf = (message) => typeof message?.content === 'string'
   ? message.content
@@ -70,6 +107,63 @@ const respond = async (context) => {
   if (last?.role === 'toolResult' && last.toolName === 'html_render') return fauxAssistantMessage(last.isError ? 'The page failed: ' + textOf(last) : ${JSON.stringify(LAB_HTML_RENDER_REPLY)});
   if (text === 'RENDER') {
     return fauxAssistantMessage([fauxToolCall('html_render', { title: ${JSON.stringify(LAB_HTML_RENDER_TITLE)}, html: ${JSON.stringify(LAB_HTML_RENDER_PAGE)} })], { stopReason: 'toolUse' });
+  }
+  if (task === 'ASK') {
+    if (last?.role === 'toolResult') {
+      return fauxAssistantMessage(last.isError ? 'The asker did not start: ' + textOf(last) : 'The worker "${LAB_ASKER_TITLE}" is running.');
+    }
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__session_spawn', {
+      cwd: ${JSON.stringify(workerCwd)},
+      task: 'QUESTION TASK: tighten the README check of this project.',
+      title: ${JSON.stringify(LAB_ASKER_TITLE)},
+      model: { providerId: 'faux', modelId: 'faux-1' },
+      clientRequestId: 'lab-ask-' + Date.now(),
+    })], { stopReason: 'toolUse' });
+  }
+  if (task === 'CHOOSE') {
+    if (last?.role === 'toolResult') {
+      return fauxAssistantMessage(last.isError ? 'The chooser did not start: ' + textOf(last) : 'The worker "${LAB_CHOOSER_TITLE}" is running.');
+    }
+    // One managed worker per directory: the asker already holds the project, so the chooser works in its worktree.
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__session_spawn', {
+      cwd: ${JSON.stringify(worktreeWorkerCwd)},
+      task: 'DIALOG TASK: pick the license of this project.',
+      title: ${JSON.stringify(LAB_CHOOSER_TITLE)},
+      model: { providerId: 'faux', modelId: 'faux-1' },
+      clientRequestId: 'lab-choose-' + Date.now(),
+    })], { stopReason: 'toolUse' });
+  }
+  // An open dialog of the chooser waits for the owner, so the orchestrator leaves it alone.
+  if (/^(A|\\d+) worker events?:/.test(text) && text.includes(${JSON.stringify(LAB_CHOOSER_TITLE)}) && text.includes('dialog:')) {
+    return fauxAssistantMessage('The chooser waits on a dialog for the owner. I leave that dialog to you.');
+  }
+  // The chooser asks through lab_choose, once per dialog, then names both answers.
+  if (task.includes('DIALOG TASK') && (last?.role === 'user' || last?.toolName === 'lab_choose')) {
+    const choices = results.filter((result) => result.toolName === 'lab_choose').map((result) => textOf(result).trim());
+    const dialogs = ${JSON.stringify(LAB_CHOOSER_DIALOGS)};
+    if (choices.length >= dialogs.length) return fauxAssistantMessage('Chosen: ' + choices.join(' and ') + '.');
+    return fauxAssistantMessage([fauxToolCall('lab_choose', dialogs[choices.length])], { stopReason: 'toolUse' });
+  }
+  // The asker's question goes to the owner, so the orchestrator leaves it alone.
+  if (/^(A|\\d+) worker events?:/.test(text) && text.includes(${JSON.stringify(LAB_ASKER_TITLE)})) {
+    return fauxAssistantMessage('The asker has a question for the owner. I leave that question to you.');
+  }
+  // The question comes with the task. A tap on an option answers with its label (and a note as a new
+  // paragraph); then the worker is blocked and tells the owner. A free text answer starts with ANSWER.
+  const chosen = ${JSON.stringify(LAB_ASKER_OPTIONS.map((option) => option.label))}.find((label) => task === label || task.startsWith(label + '\\n\\n'));
+  const asking = task.includes('QUESTION TASK') || chosen !== undefined;
+  if (asking && last?.role === 'toolResult' && last.toolName === 'mcp__pichamber__worker_report') {
+    return fauxAssistantMessage(last.isError ? 'The report was refused: ' + textOf(last)
+      : chosen ? 'Got your answer (' + task + '). I am blocked and told the owner what I need.' : 'I asked the owner and wait for the answer.');
+  }
+  if (asking && last?.role === 'user') {
+    return fauxAssistantMessage([fauxToolCall('mcp__pichamber__worker_report', chosen
+      ? { kind: 'blocked', audience: 'owner', summary: ${JSON.stringify(LAB_ASKER_BLOCKER)}, brief: ${JSON.stringify(LAB_ASKER_BLOCKER_BRIEF)}, clientRequestId: 'lab-blocked-' + Date.now() }
+      : { kind: 'question', audience: 'owner', summary: ${JSON.stringify(LAB_ASKER_QUESTION)}, brief: ${JSON.stringify(LAB_ASKER_QUESTION_BRIEF)}, clientRequestId: 'lab-question-' + Date.now() },
+    )], { stopReason: 'toolUse' });
+  }
+  if (task.startsWith('ANSWER') && last?.role === 'user') {
+    return fauxAssistantMessage('Got your answer (' + task + '). I go on with the license check.');
   }
   if (task.includes('REVIEW TASK') && !/^(A|\\d+) worker events?:/.test(text)) {
     const resultOf = (name) => textOf(results.find((result) => result.toolName === name)).trim();
@@ -136,13 +230,25 @@ const respond = async (context) => {
       clientRequestId: 'lab-spawn-' + Date.now(),
     })], { stopReason: 'toolUse' });
   }
-  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO, REVIEW or RENDER.');
+  return fauxAssistantMessage('Scripted lab model: send ORCHESTRATE, STATUS, GO, REVIEW, RENDER, ASK or CHOOSE.');
 };
 
 export default function (pi) {
   const faux = fauxProvider();
   faux.setResponses(Array.from({ length: 200 }, () => respond));
   pi.registerProvider(faux.provider);
+  // A blocking extension dialog, the kind the decision inbox lists next to questions.
+  pi.registerTool({
+    name: 'lab_choose',
+    label: 'Choose',
+    description: 'Ask the user to pick one option.',
+    parameters: Type.Object({ title: Type.String(), options: Type.Array(Type.String()), delayMs: Type.Optional(Type.Number()) }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (params.delayMs) await new Promise((done) => setTimeout(done, params.delayMs));
+      const choice = await ctx.ui.select(params.title, params.options);
+      return { content: [{ type: 'text', text: choice ?? 'cancelled' }], details: undefined };
+    },
+  });
 }
 `;
 }

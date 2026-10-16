@@ -1,4 +1,4 @@
-import { LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, LAB_HTML_RENDER_PROMPT, LAB_HTML_RENDER_REPLY, LAB_HTML_RENDER_TITLE, LAB_REVIEW_WORKER_TITLE, LAB_WORKER_TITLE, LAB_WORKTREE_WORKER } from '../lab/faux-orchestration.mjs';
 
 export const VIEWPORTS = {
   desktop: { width: 1440, height: 900, mobile: false },
@@ -326,6 +326,94 @@ export function toolProfilesTour(manifest) {
       evidence: [done, { text: 'git: README.md unchanged' }, { text: 'Tools sent to me (review worker, profile read-only)' }] },
     { caption: 'The same worker transcript in dark theme.', viewport: 'desktop', theme: 'dark', actions: [],
       evidence: [{ selector: 'html.dark [data-chat-input="true"]' }, done] },
+  ] });
+}
+
+/**
+ * Issue #20, #87, #210: a worker asks the owner; the control center lists the workers, and its decision
+ * inbox shows the full brief, answers the question with an option button and the blocker after it with free text.
+ */
+export function controlCenterTour(manifest) {
+  const orchestrator = manifest?.sessions?.find(session => session.role === 'orchestrator' && nonempty(session.title));
+  const project = manifest?.projects?.find(candidate => candidate.name === orchestrator?.project);
+  if (!orchestrator || !project || !nonempty(project.path)) throw new Error('Invalid lab seed manifest');
+  const label = project.name.replace(/[-_]/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+  const worker = LAB_ASKER_TITLE;
+  const chooser = LAB_CHOOSER_TITLE;
+  const [license, badge] = LAB_CHOOSER_DIALOGS;
+  const composer = '[data-chat-input="true"] .cm-content';
+  const item = title => `[role="treeitem"][aria-label="${title}"]`;
+  const inbox = '[aria-label="Decision inbox"]';
+  const row = `button[aria-label="Open ${worker}"]`;
+  const chooserRow = `button[aria-label="Open ${chooser}"]`;
+  const waiting = 'button[aria-label="Open control center, 1 decision waiting"]';
+  const waitingTwo = 'button[aria-label="Open control center, 2 decisions waiting"]';
+  const desktopEntry = 'button[aria-label^="Open control center"]';
+  const inboxDialog = `${inbox} [data-inbox-dialog]`;
+  const chatDialog = `[role="dialog"][aria-label="${license.title}"]`;
+  const closeOne = 'button[aria-label="Close control center, 1 decision waiting"]';
+  const chosen = { text: `Chosen: ${license.options[1]} and ${badge.options[0]}.` };
+  const mobileEntry = 'button[aria-label^="Open control center"]';
+  const choice = LAB_ASKER_OPTIONS.find(option => option.recommended).label;
+  const option = `${inbox} [data-inbox-option="${choice}"]`;
+  const blocker = { selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_BLOCKER };
+  const answer = 'ANSWER: keep the copy';
+  const empty = { text: 'No open questions or dialogs.' };
+  return validateTour({ name: 'control-center', steps: [
+    { caption: `The orchestrator starts "${worker}", which asks the owner a question. The orchestrator leaves owner questions to the owner, and the header counts one waiting decision.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', text: label }, { type: 'click', text: label },
+        { type: 'click', selector: `[data-tree-node="w:${project.path}"]` }, { type: 'wait', selector: item(orchestrator.title) },
+        { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer },
+        { type: 'type', selector: composer, value: 'ASK' }, { type: 'press', key: 'Enter' }, { type: 'wait', text: 'I leave that question to you.' }, { type: 'wait', selector: waiting }],
+      evidence: [{ text: `The worker "${worker}" is running.` }, { text: 'I leave that question to you.' }, { selector: waiting }] },
+    { caption: `A second worker, "${chooser}", opens an extension dialog; the orchestrator leaves it to the owner and the header counts two waiting decisions.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'type', selector: composer, value: 'CHOOSE' }, { type: 'press', key: 'Enter' }, { type: 'wait', text: 'I leave that dialog to you.' }, { type: 'wait', selector: waitingTwo }],
+      evidence: [{ text: 'I leave that dialog to you.' }, { selector: waitingTwo }] },
+    { caption: `The owner opens "${chooser}" from the control center, which shows its dialog in its own chat only (#215), picks ${license.options[1]} there and goes back to the orchestrator. The control center shows the question as its title with the context, three options as answer buttons with their consequence, the recommended one marked, and what the worker does until then.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: desktopEntry }, { type: 'wait', selector: chooserRow }, { type: 'scroll', selector: chooserRow }, { type: 'click', selector: chooserRow }, { type: 'wait', selector: chatDialog },
+        { type: 'click', text: license.options[1] }, { type: 'wait', ms: 1000 }, { type: 'click', selector: item(orchestrator.title) }, { type: 'wait', selector: composer }, { type: 'click', selector: desktopEntry },
+        { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'wait', text: badge.title }, { type: 'wait', selector: chooserRow }],
+      evidence: [{ selector: '[aria-label="Slots and host"]' }, { selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }, { selector: option, text: 'Recommended' },
+        { selector: `${inbox} [data-inbox-option]`, index: 2, text: LAB_ASKER_OPTIONS[2].consequence }, { text: 'Until then:' }] },
+    { caption: 'Further down the control center lists the chooser\'s next dialog and both workers under their orchestrator.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'scroll', selector: chooserRow }],
+      evidence: [{ selector: inboxDialog, text: badge.title }, { selector: row }, { selector: chooserRow }] },
+    { caption: `The owner picks "${badge.options[0]}" in the inbox without opening the chooser. Only the question is left.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', text: badge.options[0] }, { type: 'wait', selector: closeOne }],
+      evidence: [{ selector: closeOne }, { selector: `${inbox} [data-inbox-question]`, text: LAB_ASKER_QUESTION }] },
+    { caption: 'On the phone the same question stacks its options full width, each with its consequence, so one tap answers.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
+        { type: 'wait', selector: option }],
+      // The whole card is taller than a phone, so the evidence is its title and the visible options.
+      evidence: [{ text: LAB_ASKER_QUESTION }, { selector: option, text: 'Recommended' },
+        { selector: `${inbox} [data-inbox-option]`, index: 1, text: LAB_ASKER_OPTIONS[1].consequence }] },
+    { caption: `One tap on "${choice}" answers: the label goes to the worker as the owner's prompt and closes the question. The worker then reports a blocker for the owner, with what it tried and what it needs.`, viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'navigate', path: '' }, { type: 'wait', selector: item(orchestrator.title) }, { type: 'click', selector: item(orchestrator.title) },
+        { type: 'wait', selector: composer }, { type: 'click', selector: waiting }, { type: 'wait', selector: option }, { type: 'click', selector: option }, { type: 'wait', text: LAB_ASKER_BLOCKER }],
+      evidence: [blocker, { text: 'Tried' }, { text: 'Needed' }] },
+    { caption: 'Opening the worker from the control center shows the option answer in its transcript.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'scroll', selector: row }, { type: 'click', selector: row }, { type: 'wait', text: `Got your answer (${choice}).` }],
+      evidence: [{ text: `Got your answer (${choice}).` }] },
+    { caption: 'Opening the chooser from the session list shows both answers in its transcript, the one from the chat and the one from the inbox.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'wait', selector: item(chooser) }, { type: 'click', selector: item(chooser) }, { type: 'wait', ...chosen }],
+      evidence: [chosen] },
+    { caption: 'The session list filter shows only workers.', viewport: 'desktop', theme: 'light',
+      actions: [{ type: 'click', selector: '[data-testid="worker-filter-trigger"]' }, { type: 'wait', selector: '[data-worker-filter="only"]' },
+        { type: 'click', selector: '[data-worker-filter="only"]' }, { type: 'wait', selector: 'button[aria-label="Workers: only workers"]' }],
+      evidence: [{ selector: 'button[aria-label="Workers: only workers"]' }, { selector: item(worker) }, { selector: item(chooser) }] },
+    { caption: 'The control center in dark theme, with the blocker open.', viewport: 'desktop', theme: 'dark',
+      actions: [{ type: 'click', selector: waiting }, { type: 'wait', selector: `${inbox} [data-inbox-question]` }],
+      evidence: [{ selector: `html.dark ${inbox} [data-inbox-question]`, text: LAB_ASKER_BLOCKER }, { selector: row }] },
+    { caption: 'Hosted mobile opens the control center full screen from its header, with the blocker and its brief.', viewport: 'mobile', theme: 'light',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
+        { type: 'wait', selector: `${inbox} [data-inbox-question]` }],
+      evidence: [{ selector: mobileEntry }, blocker, { text: 'Needed' }, { text: 'Until then:' }] },
+    { caption: 'On the phone in dark theme, the owner answers the blocker with free text. The answer goes to the worker and closes the blocker; nothing waits for the owner any more.', viewport: 'mobile', theme: 'dark',
+      actions: [{ type: 'navigate', path: 'mobile.html' }, { type: 'wait', selector: mobileEntry }, { type: 'click', selector: mobileEntry },
+        { type: 'wait', selector: `${inbox} [data-inbox-question]` }, { type: 'type', selector: `textarea[aria-label="Answer to ${worker}"]`, value: answer },
+        { type: 'click', text: 'Send answer' }, { type: 'wait', ...empty }],
+      // The row's last report line truncates on a phone by design, so the evidence is the worker's name.
+      evidence: [empty, { text: 'nothing waits for you' }, { text: worker }] },
   ] });
 }
 

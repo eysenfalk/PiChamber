@@ -34,6 +34,7 @@ const GitView = lazyWithChunkRecovery(() => import('@/components/views/GitView')
 const DiffView = lazyWithChunkRecovery(() => import('@/components/views/DiffView').then(m => ({ default: m.DiffView })));
 const FilesView = lazyWithChunkRecovery(() => import('@/components/views/FilesView').then(m => ({ default: m.FilesView })));
 const DiagramView = lazyWithChunkRecovery(() => import('@/components/views/DiagramView').then(m => ({ default: m.DiagramView })));
+const ControlCenterView = lazyWithChunkRecovery(() => import('@/components/views/ControlCenterView').then(m => ({ default: m.ControlCenterView })));
 const SettingsView = lazyWithChunkRecovery(() => import('@/components/views/SettingsView').then(m => ({ default: m.SettingsView })));
 const SettingsWindow = lazyWithChunkRecovery(() => import('@/components/views/SettingsWindow').then(m => ({ default: m.SettingsWindow })));
 
@@ -64,8 +65,10 @@ export const MainLayout: React.FC = () => {
             const draftOpened = Boolean(state.newSessionDraft?.open) && state.newSessionDraft !== prev.newSessionDraft;
             if (sessionSelected || draftOpened) closeSurfacePages();
         });
+        // A tab change closes only the Archive; closeMainSurfaces would also
+        // leave the control center the user is switching to.
         const unsubscribeTab = useUIStore.subscribe((state, prev) => {
-            if (state.activeMainTab !== prev.activeMainTab) closeSurfacePages();
+            if (state.activeMainTab !== prev.activeMainTab && state.isArchivePageOpen) state.setArchivePageOpen(false);
         });
         return () => {
             unsubscribeSession();
@@ -348,11 +351,11 @@ export const MainLayout: React.FC = () => {
 
     const secondaryView = React.useMemo(() => {
         // Desktop surfaces live in the context panel; the only full-view
-        // overlays left there are the terminal (promoted by project actions)
-        // and the diagram viewer. Mobile keeps the full tab set; the Git view
+        // overlays left there are the terminal (promoted by project actions),
+        // the diagram viewer and the control center. Mobile keeps the full tab set; the Git view
         // is normally opened in the right drawer and is not mounted at startup.
         // A route-addressable active Git tab remains available as a full view.
-        if (!isMobile && activeMainTab !== 'terminal' && activeMainTab !== 'diagram') {
+        if (!isMobile && activeMainTab !== 'terminal' && activeMainTab !== 'diagram' && activeMainTab !== 'control') {
             return null;
         }
         const mobileGitDrawerVisible = mobileRightSidebarOpen || mobileRightDrawerVisible;
@@ -372,6 +375,8 @@ export const MainLayout: React.FC = () => {
                 return <React.Suspense fallback={null}><FilesView /></React.Suspense>;
             case 'diagram':
                 return <React.Suspense fallback={null}><DiagramView /></React.Suspense>;
+            case 'control':
+                return <React.Suspense fallback={null}><ControlCenterView /></React.Suspense>;
             default:
                 return null;
         }

@@ -78,6 +78,7 @@ import {
   asError,
   isInvalidSessionError,
   isSessionInUseError,
+  isSessionUnreadableError,
   isSessionRuntimeConflictError,
   delayBeforeRetry,
   initialSessionStoreState,
@@ -2880,9 +2881,10 @@ export class PiSessionStore {
             this.handleInvalidSession(sessionId, directory, expected, buffered);
             return;
           }
-          if (expected === this.runtimeGeneration && isSessionInUseError(error)) {
-            // Another owner holds this session: keep the id selected so the
-            // chat surfaces its load error instead of navigating away.
+          if (expected === this.runtimeGeneration && (isSessionInUseError(error) || isSessionUnreadableError(error))) {
+            // Another owner holds this session, or its file is unreadable:
+            // keep the id selected so the chat surfaces its load error
+            // instead of navigating away or tombstoning it.
             // Buffered live events for unrelated sessions still apply.
             if (buffered.length > 0) this.commitEvents(buffered);
             this.failSessionLoad(sessionId, asError(error));
@@ -2917,9 +2919,10 @@ export class PiSessionStore {
         this.handleInvalidSession(sessionId, directory, expected);
         return;
       }
-      if (isSessionInUseError(error)) {
-        // Another owner holds this session: keep the id selected so the chat
-        // surfaces its load error instead of navigating away.
+      if (isSessionInUseError(error) || isSessionUnreadableError(error)) {
+        // Another owner holds this session, or its file is unreadable: keep
+        // the id selected so the chat surfaces its load error instead of
+        // navigating away or tombstoning it.
         this.failSessionLoad(sessionId, asError(error));
         return;
       }

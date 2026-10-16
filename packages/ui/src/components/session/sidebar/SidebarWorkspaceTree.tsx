@@ -3,7 +3,7 @@ import { Icon } from '@/components/icon/Icon';
 import type { GitWorktree } from '@/lib/api/types';
 import { useDeviceInfo } from '@/lib/device';
 import { applyTreeDrop } from './applyTreeDrop';
-import { ContainerRow, TreeGuides } from './TreeContainerRow';
+import { ContainerRow, TreeGuides, WaitingMarker } from './TreeContainerRow';
 import { canShowQuickCreateButton } from './quickCreate';
 import { nodeLabel } from './treeNodeLabel';
 import { TreeDndItem, TreeDndProvider, type TreeDragPayload } from './treeDnd';
@@ -370,6 +370,9 @@ export const SidebarWorkspaceTree: React.FC<Props> = ({
                   <div className="min-w-0 flex-1">
                     {renderSession(toSessionNode(row.node), containerDirectory(container), container?.projectId ?? null)}
                   </div>
+                  {!row.node.rollup.running && (row.node.activity === 'waiting' || (row.node.rollup.waiting && !row.expanded)) ? (
+                    <WaitingMarker label={row.node.activity === 'waiting' ? 'Waiting for an answer' : 'A worker is waiting for an answer'} />
+                  ) : null}
                   {forks > 0 ? (
                     // An icon, not the ⑂ glyph: the interface monospace font has no fork sign.
                     <span className="inline-flex shrink-0 items-center gap-0.5 pl-1 typography-micro tabular-nums text-muted-foreground" aria-label={forks === 1 ? '1 fork' : `${forks} forks`}>

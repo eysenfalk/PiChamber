@@ -109,6 +109,25 @@ describe('createPrWatch', () => {
     expect(emit).toHaveBeenLastCalledWith('w1', 'ci_passed', expect.stringContaining('PR #9'));
   });
 
+  it('keeps the last read of the reported pull request for the overview', async () => {
+    const { watch, document } = setup();
+    expect(watch.statusOf('w1', document.workers.w1.pullRequest)).toBeNull();
+    await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ checks: running }) }]);
+    expect(watch.statusOf('w1', document.workers.w1.pullRequest)).toEqual({
+      status: 'open', url: 'https://github.com/o/r/pull/7', head: 'aaaaaaa1111', checks: { state: 'pending', total: 3, pending: 1 },
+    });
+    await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ checks: green }) }]);
+    expect(watch.statusOf('w1', document.workers.w1.pullRequest).checks).toEqual({ state: 'success', total: 3, pending: 0 });
+    // A stale or partial read keeps the last good status.
+    await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ incomplete: true, checks: red }) }]);
+    expect(watch.statusOf('w1', document.workers.w1.pullRequest).checks.state).toBe('success');
+    await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ state: 'merged' }) }]);
+    expect(watch.statusOf('w1', document.workers.w1.pullRequest)).toMatchObject({ status: 'merged', url: 'https://github.com/o/r/pull/7' });
+    // Another pull request has no status yet.
+    expect(watch.statusOf('w1', { number: 9, repository: 'o/r' })).toBeNull();
+    expect(watch.statusOf('w1', undefined)).toBeNull();
+  });
+
   it('starts over when the worker reports another pull request', async () => {
     const { watch, emit, document } = setup();
     await watch.apply([{ sessionId: 'w1', repository: 'o/r', number: 7, read: read({ state: 'merged' }) }]);

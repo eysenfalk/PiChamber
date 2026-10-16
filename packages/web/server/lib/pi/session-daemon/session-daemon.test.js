@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { appendFile, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -855,10 +855,153 @@ describe('Pi session daemon spike', () => {
       expect(listed.result.incomplete).toBe(true);
       const refused = client.next((message) => message.kind === 'error');
       client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-broken', command: 'sessions.open', payload: { sessionId: 'pi-broken', directory: other } })}\n`);
-      await expect(refused).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+      // The file exists but cannot be read: that is not "does not exist".
+      await expect(refused).resolves.toMatchObject({ error: { code: 'MALFORMED_SESSION_JSONL' } });
     } finally {
       warn.mockRestore();
       await client.close();
+    }
+  });
+
+  it('reports a listed session with a broken transcript line as unreadable, and a missing id as not found', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-broken-body-'));
+    const cwd = join(root, 'project');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd, agentDir });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    await writeFile(join(sessionDirectory, '2026-01-01T00-00-00-000Z_pi-body-broken.jsonl'), `${[
+      JSON.stringify({ type: 'session', version: 3, id: 'pi-body-broken', timestamp, cwd }),
+      JSON.stringify({ type: 'message', id: 'entry-user', parentId: null, timestamp, message: { role: 'user', content: [{ type: 'text', text: 'Readable prompt' }], timestamp: 0 } }),
+      'not json',
+    ].join('\n')}\n`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const listed = await client.request('sessions.list', { directory: cwd });
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-body-broken']);
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-body-broken', command: 'sessions.open', payload: { sessionId: 'pi-body-broken', directory: cwd } })}\n`);
+      await expect(refused).resolves.toMatchObject({ error: { code: 'MALFORMED_SESSION_JSONL' } });
+    } finally {
+      warn.mockRestore();
+      await client.close();
+    }
+
+    // A genuinely absent id still answers INVALID_SESSION on a fresh connection.
+    const second = connectClient(testDaemonEndpoint(root));
+    await second.authenticate();
+    try {
+      const absent = second.next((message) => message.kind === 'error');
+      second.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: cwd } })}\n`);
+      await expect(absent).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('answers an unlistable directory as an incomplete lookup, not as a gone session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-unreadable-'));
+    const cwd = join(root, 'project');
+    const blocked = join(root, 'blocked');
+    const agentDir = join(root, 'agent');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(blocked, { recursive: true });
+    // A file where the session directory belongs makes that directory unlistable.
+    await mkdir(join(agentDir, 'sessions'), { recursive: true });
+    await writeFile(getPiSessionDirectory({ cwd: blocked, agentDir }), 'not a directory');
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: blocked } })}\n`);
+      // A failed lookup proves nothing: INVALID_SESSION would be read as a deletion.
+      await expect(refused).resolves.toMatchObject({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('does not call a session gone because its directory could not be read (#191)', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod cannot hide a directory here
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-denied-'));
+    const cwd = join(root, 'project');
+    const other = join(root, 'other');
+    const agentDir = join(root, 'agent');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(other, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    const seed = async (directory, id) => {
+      const sessionDirectory = getPiSessionDirectory({ cwd: directory, agentDir });
+      await mkdir(sessionDirectory, { recursive: true });
+      await writeFile(join(sessionDirectory, `2026-01-01T00-00-00-000Z_${id}.jsonl`), `${JSON.stringify({ type: 'session', version: 3, id, timestamp, cwd: directory })}\n`);
+      return sessionDirectory;
+    };
+    const deniedDirectory = await seed(cwd, 'pi-denied');
+    await seed(other, 'pi-other');
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession(options.sessionFile.includes('pi-other') ? 'pi-other' : 'pi-denied', options.sessionFile) }),
+    });
+    await daemon.start();
+    // A refused request closes its connection, so every open gets a fresh one.
+    const open = async (sessionId, directory) => {
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      try {
+        const reply = client.next((message) => message.kind === 'error' || message.kind === 'response');
+        client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open', command: 'sessions.open', payload: { sessionId, directory } })}\n`);
+        return await reply;
+      } finally {
+        await client.close();
+      }
+    };
+
+    {
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      const listed = await client.request('sessions.list', { directory: cwd });
+      await client.close();
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-denied']);
+    }
+
+    {
+
+      await chmod(deniedDirectory, 0o000);
+      try {
+        // The session exists but its directory cannot be read: absence is not proven.
+        await expect(open('pi-denied', cwd)).resolves.toMatchObject({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+        // One unreadable directory does not block a session elsewhere.
+        await expect(open('pi-other', other)).resolves.toMatchObject({ result: { session: { id: 'pi-other' } } });
+      } finally {
+        await chmod(deniedDirectory, 0o755);
+      }
+
+      // Once the directory is readable again the session opens without a restart.
+      await expect(open('pi-denied', cwd)).resolves.toMatchObject({ result: { session: { id: 'pi-denied' } } });
     }
   });
 
@@ -1238,6 +1381,34 @@ describe('Pi session daemon spike', () => {
 
     await expect(client.request('orchestration.prWatch', {})).resolves.toMatchObject({ result: { targets: [] } });
     await expect(client.request('orchestration.prWatch', { reads: [] })).resolves.toMatchObject({ result: { targets: [] } });
+    await client.close();
+  });
+
+  it('answers the private overview command, and a broken registry is an error result, not an empty overview', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-overview-'));
+    vi.stubEnv('PICHAMBER_DATA_DIR', root);
+    const endpoint = testDaemonEndpoint(root);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir: join(root, 'agent'),
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.overview', {})).resolves.toMatchObject({
+      result: { value: { orchestrators: [], dialogs: [], limit: { used: 0 }, host: expect.any(Object) } },
+    });
+    await mkdir(join(root, 'pi'), { recursive: true });
+    await writeFile(join(root, 'pi', 'orchestration-registry.json'), '{ broken');
+    const broken = await client.request('orchestration.overview', {});
+    expect(broken.result).toEqual({ error: { code: expect.any(String) } });
+    // The connection survives the failed read.
+    await expect(client.request('runtime.health', {})).resolves.toMatchObject({ result: { state: 'ready' } });
     await client.close();
   });
 
