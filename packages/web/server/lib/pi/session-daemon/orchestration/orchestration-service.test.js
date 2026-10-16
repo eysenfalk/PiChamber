@@ -2307,6 +2307,50 @@ describe('worker reports and digest', () => {
     expect(deps.sendInput.mock.calls.length).toBe(sends);
   });
 
+  it('records who closed the last question, on every close path (#231)', async () => {
+    const harness = createHarness({ now: () => 5_000 });
+    const { service } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });
+    await harness.settle('worker-1', 'first');
+    const ask = async (audience = 'orchestrator') => (await report(harness, audience === 'owner'
+      ? { kind: 'question', summary: 'Which API?', audience, brief: OWNER_QUESTION }
+      : { kind: 'question', summary: 'Which API?', audience })).openQuestion;
+    const closed = async () => (await harness.workers())['worker-1'].closedQuestion;
+
+    let id = await ask();
+    await report(harness, { kind: 'progress', summary: 'decided myself', resolves: id });
+    expect(await closed()).toEqual({ id, by: 'worker', at: 5_000 });
+
+    id = await ask();
+    await service.call('orch', 'session_send', { sessionId: 'worker-1', text: 'use v2', resolves: id });
+    expect(await closed()).toEqual({ id, by: 'orchestrator', at: 5_000 });
+    await harness.settle('worker-1', 'second');
+
+    id = await ask('owner');
+    await service.answer({ sessionId: 'worker-1', questionId: id, text: 'v2' });
+    expect(await closed()).toEqual({ id, by: 'owner', at: 5_000 });
+    await harness.settle('worker-1', 'third');
+
+    id = await ask('owner');
+    await service.resolve({ sessionId: 'worker-1', questionId: id });
+    expect(await closed()).toEqual({ id, by: 'owner', at: 5_000 });
+
+    id = await ask();
+    await service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id });
+    expect(await closed()).toEqual({ id, by: 'orchestrator', at: 5_000 });
+
+    // The owner answered in the orchestrator's chat.
+    id = await ask('owner');
+    await service.call('orch', 'worker_resolve', { sessionId: 'worker-1', questionId: id, answeredBy: 'owner' });
+    expect(await closed()).toEqual({ id, by: 'owner', at: 5_000 });
+    expect((await digest(harness)).workers[0]).toMatchObject({ question: null, closedQuestion: { id, by: 'owner', at: 5_000 } });
+
+    id = await ask();
+    await service.call('orch', 'session_stop', { sessionId: 'worker-1' });
+    expect(await closed()).toEqual({ id, by: 'stop', at: 5_000 });
+    expect((await digest(harness)).workers[0].closedQuestion).toEqual({ id, by: 'stop', at: 5_000 });
+  });
+
   it('takes a brief only with a question or blocker, and only with a recommendation', async () => {
     const harness = createHarness();
     await harness.service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'one' });

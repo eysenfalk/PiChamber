@@ -237,7 +237,11 @@ export const ORCHESTRATION_TOOLS = [
       type: 'object',
       additionalProperties: false,
       required: ['sessionId', 'questionId'],
-      properties: { sessionId, questionId: { ...questionId, description: 'The open question to close, as listed in orchestration_digest.' } },
+      properties: {
+        sessionId,
+        questionId: { ...questionId, description: 'The open question to close, as listed in orchestration_digest.' },
+        answeredBy: { type: 'string', enum: ['orchestrator', 'owner'], description: 'Who settled it, recorded in closedQuestion; owner when the owner answered in your chat. Default orchestrator.' },
+      },
     },
   },
   {
@@ -255,7 +259,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'orchestration_digest',
     label: 'Orchestration digest',
-    description: 'The state of all your workers in one compact call, without opening dormant sessions: lifecycle, live state (busy, retry, waiting_input, idle, dormant), last progress and input, last report, open question, last error, usage at the last settle, pull request, and the slot use. Prefer it over session_read.',
+    description: 'The state of all your workers in one compact call, without opening dormant sessions: lifecycle, live state (busy, retry, waiting_input, idle, dormant), last progress and input, last report, open question, the last closed question with who closed it, last error, usage at the last settle, pull request, and the slot use. Prefer it over session_read.',
     childAllowed: false,
     parameters: {
       type: 'object',
