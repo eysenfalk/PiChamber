@@ -94,6 +94,40 @@ const daemonRequest = (endpoint, command, payload, timeoutMs = 20_000) => new Pr
   });
 });
 
+// Connects the way the server's event stream does without a session id and
+// returns the snapshot the daemon sends as the stream's baseline.
+const daemonSnapshot = (endpoint, timeoutMs = 20_000) => new Promise((resolve, reject) => {
+  const socket = createConnection({ path: endpoint });
+  const decoder = new StringDecoder('utf8');
+  let buffer = '';
+  const timer = setTimeout(() => {
+    socket.destroy();
+    reject(new Error('Timed out waiting for the daemon snapshot'));
+  }, timeoutMs);
+  socket.once('error', (error) => {
+    clearTimeout(timer);
+    reject(error);
+  });
+  socket.on('connect', () => {
+    socket.write(`${JSON.stringify({ kind: 'authenticate', credential })}\n`);
+  });
+  socket.on('data', (chunk) => {
+    buffer += decoder.write(chunk);
+    for (;;) {
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) return;
+      const frame = JSON.parse(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      if (frame.kind === 'event' && frame.event === 'session.snapshot') {
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(frame.payload);
+        return;
+      }
+    }
+  });
+});
+
 async function waitFor(predicate, { timeoutMs = 5_000, intervalMs = 10, message = 'Timed out' } = {}) {
   const start = Date.now();
   while (!predicate()) {
@@ -218,8 +252,68 @@ describe('default runtime after session deletion', () => {
     });
     await daemon.start();
     const request = (command, payload) => daemonRequest(endpoint, command, payload);
-    return { agentDir, runtimes, hold, request };
+    return { home, agentDir, runtimes, hold, request, snapshot: () => daemonSnapshot(endpoint) };
   };
+
+  // The UI asks for providers and settings on every load. The fresh session the
+  // default runtime starts for them was never asked for, so the listing must
+  // not show it as an untitled row that the UI then opens (#104, #89).
+  it('does not list the session the default runtime started for itself (#104, #89)', async () => {
+    const { home, runtimes, request } = await setup();
+
+    expectProviders(await request('providers.list', {}));
+    expect(runtimes.map((entry) => entry.sessionId)).toEqual(['fresh-1']);
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.error).toBeUndefined();
+    expect(listed.result.sessions).toEqual([]);
+  });
+
+  // The client takes a snapshot's session for one to restore, so a reload
+  // after the first load must not get the hidden session back that way.
+  it('does not name the hidden default runtime session in the stream snapshot (#104)', async () => {
+    const { runtimes, request, snapshot } = await setup();
+    expectProviders(await request('providers.list', {}));
+    expect(runtimes.map((entry) => entry.sessionId)).toEqual(['fresh-1']);
+
+    expect((await snapshot()).sessionId).toBeUndefined();
+
+    runtimes[0].runtime.session.messages = [{ role: 'user', content: 'hello', timestamp: 1 }];
+    expect((await snapshot()).sessionId).toBe('fresh-1');
+  });
+
+  it('lists persisted sessions next to the hidden default runtime session (#89)', async () => {
+    const { home, agentDir, runtimes, request } = await setup();
+    await writeSessionFile({ agentDir, cwd: home, sessionId: 'session-a' });
+
+    expectProviders(await request('providers.list', {}));
+    expect(runtimes.map((entry) => entry.sessionId)).toEqual(['fresh-1']);
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['session-a']);
+  });
+
+  it('lists the default runtime session once it holds a conversation (#104)', async () => {
+    const { home, runtimes, request } = await setup();
+    expectProviders(await request('providers.list', {}));
+
+    runtimes[0].runtime.session.messages = [{ role: 'user', content: 'hello', timestamp: 1 }];
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.result.sessions.map((item) => [item.session.id, item.session.messageCount])).toEqual([['fresh-1', 1]]);
+  });
+
+  it('still lists an explicitly created session while it is empty (#104)', async () => {
+    const { home, request } = await setup();
+    expectProviders(await request('providers.list', {}));
+
+    const created = await request('sessions.create', { cwd: home });
+    expect(created.error).toBeUndefined();
+    expect(created.result.session.id).toBe('fresh-2');
+
+    const listed = await request('sessions.list', { directory: home });
+    expect(listed.result.sessions.map((item) => [item.session.id, item.session.messageCount])).toEqual([['fresh-2', 0]]);
+  });
 
   // A second daemon with its own identity on the same agent directory, like
   // another PiChamber instance. It may open session-a only when the lease is

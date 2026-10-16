@@ -71,6 +71,8 @@ export type NewSessionDraftState = {
   initialPrompt?: string;
   syntheticParts?: SyntheticContextPart[];
   targetFolderId?: string;
+  /** Opened as a fallback because no session was shown yet, not by the user. It yields to the session the start selects. */
+  automatic?: boolean;
 };
 
 export type SessionUIState = {

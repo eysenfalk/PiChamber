@@ -28,6 +28,17 @@ describe('session navigation intent', () => {
     })).toBe('current-session');
   });
 
+  test('a draft opened automatically because nothing was shown yields to the Pi store selection (#16)', () => {
+    const draft = { open: true, automatic: true };
+
+    expect(isNewSessionDraftActive(draft, null)).toBe(false);
+    expect(routeSessionIdForState({
+      currentSessionId: null,
+      piSelectedSessionId: 'remembered-session',
+      draft,
+    })).toBe('remembered-session');
+  });
+
   test('the Pi selection supplies the route when no draft is open', () => {
     expect(routeSessionIdForState({
       currentSessionId: null,

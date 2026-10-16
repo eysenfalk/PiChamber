@@ -575,6 +575,15 @@ describe('routeMessage', () => {
     expect(useSessionUIStore.getState().currentSessionId).toBe('session-other');
   });
 
+  test('marks only the fallback draft opened at boot as automatic (#16)', () => {
+    const { openNewSessionDraft } = useSessionUIStore.getState();
+    openNewSessionDraft({ automatic: true });
+    expect(useSessionUIStore.getState().newSessionDraft.automatic).toBe(true);
+
+    openNewSessionDraft({ directoryOverride: '/workspace/proj-1' });
+    expect(useSessionUIStore.getState().newSessionDraft.automatic).toBe(false);
+  });
+
   test('stores a worktree intent and clears it when the draft directory changes', () => {
     const { openNewSessionDraft, setNewSessionDraftTarget } = useSessionUIStore.getState();
     openNewSessionDraft({ selectedProjectId: 'proj-1', directoryOverride: '/workspace/proj-1' });
