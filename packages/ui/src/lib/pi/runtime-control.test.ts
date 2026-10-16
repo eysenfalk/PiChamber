@@ -46,6 +46,27 @@ describe('summarizeReload', () => {
 });
 
 describe('reloadPiRuntime', () => {
+  test('a second reload while one runs sends no second request and shows one toast (#67)', async () => {
+    const { events, notify } = makeNotify();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let requests = 0;
+    const deps: Partial<RuntimeControlDeps> = {
+      client: {
+        reloadRuntime: async () => { requests += 1; await gate; return { reloaded: 1, deferred: 0, failed: 0 }; },
+        restartRuntime: mock(),
+      },
+      notify,
+      refreshResources: () => {},
+    };
+    const first = reloadPiRuntime(deps);
+    const second = reloadPiRuntime(deps);
+    release();
+    await Promise.all([first, second]);
+    expect(requests).toBe(1);
+    expect(events).toHaveLength(1);
+  });
+
   test('shows the summary toast on success', async () => {
     const { events, notify } = makeNotify();
     const ok = await reloadPiRuntime({
@@ -154,6 +175,46 @@ describe('restartPiRuntime', () => {
     });
     expect(ok).toBe(true);
     expect(events.at(-1)?.kind).toBe('success');
+  });
+
+  test('reports a restart already in progress as such and waits for it, never as a failure (#67)', async () => {
+    const { events, notify } = makeNotify();
+    const health = [{ state: 'ready', streamEpoch: 'old' }, { state: 'ready', streamEpoch: 'new' }];
+    const ok = await restartPiRuntime({
+      client: {
+        reloadRuntime: mock(),
+        restartRuntime: async () => { throw new PiRequestError('RESTART_IN_PROGRESS', undefined, 409); },
+      },
+      fetchHealth: (async () => health.shift()) as unknown as RuntimeControlDeps['fetchHealth'],
+      notify,
+      ...clock(),
+    });
+    expect(ok).toBe(true);
+    expect(events.map((event) => event.kind)).toEqual(['loading', 'success']);
+    expect(events[0].message).toContain('already restarting');
+  });
+
+  test('a second restart while one runs sends no second request (#67)', async () => {
+    const { events, notify } = makeNotify();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let requests = 0;
+    const health = [{ state: 'ready', streamEpoch: 'old' }, { state: 'ready', streamEpoch: 'old' }, { state: 'ready', streamEpoch: 'new' }];
+    const deps: Partial<RuntimeControlDeps> = {
+      client: {
+        reloadRuntime: mock(),
+        restartRuntime: async () => { requests += 1; await gate; return { accepted: true, scope: 'process' }; },
+      },
+      fetchHealth: (async () => health.shift() ?? { state: 'ready', streamEpoch: 'new' }) as unknown as RuntimeControlDeps['fetchHealth'],
+      notify,
+      ...clock(),
+    };
+    const first = restartPiRuntime(deps);
+    const second = restartPiRuntime(deps);
+    release();
+    await Promise.all([first, second]);
+    expect(requests).toBe(1);
+    expect(events.filter((event) => event.kind === 'error')).toEqual([]);
   });
 
   test('shows the error and never starts waiting when the restart is rejected', async () => {

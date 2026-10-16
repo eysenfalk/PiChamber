@@ -76,8 +76,30 @@ const defaultDeps = (): RuntimeControlDeps => ({
   refreshResources: refreshDiscoveredResources,
 });
 
+// One reload and one restart at a time for the whole UI (#67). A click that
+// arrives while one runs, from any button, joins it: no second request and
+// no second, contradicting toast. Set synchronously, before the first await,
+// so two clicks in the same tick cannot both pass.
+let reloadInFlight: Promise<boolean> | null = null;
+let restartInFlight: Promise<boolean> | null = null;
+
+const singleFlight = (
+  current: Promise<boolean> | null,
+  run: () => Promise<boolean>,
+  set: (next: Promise<boolean> | null) => void,
+): Promise<boolean> => {
+  if (current) return current;
+  const next = run().finally(() => set(null));
+  set(next);
+  return next;
+};
+
 /** Reloads every loaded Pi session and reports how many reloaded now and how many are deferred. Returns whether the call succeeded. */
-export const reloadPiRuntime = async (overrides: Partial<RuntimeControlDeps> = {}): Promise<boolean> => {
+export const reloadPiRuntime = (overrides: Partial<RuntimeControlDeps> = {}): Promise<boolean> => (
+  singleFlight(reloadInFlight, () => reloadOnce(overrides), (next) => { reloadInFlight = next; })
+);
+
+const reloadOnce = async (overrides: Partial<RuntimeControlDeps>): Promise<boolean> => {
   const deps = { ...defaultDeps(), ...overrides };
   try {
     const result = await deps.client.reloadRuntime();
@@ -118,7 +140,11 @@ const waitForRuntimeReturn = async (
  * Restarts PiChamber and shows a reconnecting state until the runtime is back.
  * A rejected request leaves the running server untouched and reports the error.
  */
-export const restartPiRuntime = async (overrides: Partial<RuntimeControlDeps> = {}): Promise<boolean> => {
+export const restartPiRuntime = (overrides: Partial<RuntimeControlDeps> = {}): Promise<boolean> => (
+  singleFlight(restartInFlight, () => restartOnce(overrides), (next) => { restartInFlight = next; })
+);
+
+const restartOnce = async (overrides: Partial<RuntimeControlDeps>): Promise<boolean> => {
   const deps = { ...defaultDeps(), ...overrides };
   let previousStreamEpoch: string | undefined;
   try {
@@ -127,14 +153,20 @@ export const restartPiRuntime = async (overrides: Partial<RuntimeControlDeps> = 
     previousStreamEpoch = undefined;
   }
 
+  let loadingMessage = 'Restarting PiChamber. Reconnecting...';
   try {
     await deps.client.restartRuntime();
   } catch (error) {
-    deps.notify.error(describeFailure(error, 'PiChamber could not be restarted.'));
-    return false;
+    // Another client (or tab) started the restart first: the server is
+    // going away anyway, so wait for it like for our own restart.
+    if (!(error instanceof PiRequestError && error.code === 'RESTART_IN_PROGRESS')) {
+      deps.notify.error(describeFailure(error, 'PiChamber could not be restarted.'));
+      return false;
+    }
+    loadingMessage = 'PiChamber is already restarting. Reconnecting...';
   }
 
-  deps.notify.loading('Restarting PiChamber. Reconnecting...', { id: RESTART_TOAST_ID, duration: Infinity });
+  deps.notify.loading(loadingMessage, { id: RESTART_TOAST_ID, duration: Infinity });
   if (!(await waitForRuntimeReturn(deps, previousStreamEpoch))) {
     deps.notify.error('PiChamber did not come back in time. Check the server and reload the page.', { id: RESTART_TOAST_ID, duration: 10_000 });
     return false;
