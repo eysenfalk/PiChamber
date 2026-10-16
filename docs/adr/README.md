@@ -23,6 +23,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0015](0015-phone-surface-by-screen-not-viewport.md) | A phone is decided by its physical screen, not by the viewport width | Accepted |
 | [0016](0016-owner-reads-and-answers-orchestration-through-private-daemon-commands.md) | The owner reads and answers orchestration through private daemon commands | Proposed |
 | [0017](0017-owner-questions-carry-a-complete-brief.md) | Owner questions and blockers carry a complete brief, enforced by the daemon | Proposed |
+| [0018](0018-worker-skill-selection.md) | Worker skill selection: a worker's prompt lists the skills its start chose, part of its recorded tool profile | Proposed |
 
 ## Rules
 
