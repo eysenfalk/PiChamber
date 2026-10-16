@@ -1,13 +1,18 @@
 import React from 'react';
 import { Icon } from '@/components/icon/Icon';
 import { Button } from '@/components/ui/button';
+import { openExternalUrl } from '@/lib/url';
 import { createBrowserUuid } from '@/lib/uuid';
 import { cn } from '@/lib/utils';
 import {
   EMPTY_ANSWER_DRAFT,
+  answerAttempt,
   answerDraftReducer,
+  briefOptions,
   markQuestionAnswered,
+  optionAnswerText,
   sendQuestionAnswer,
+  type InboxLink,
   type InboxQuestion,
 } from './decisionInboxModel';
 import { DecisionInboxContext } from './DecisionInboxContext';
@@ -21,28 +26,66 @@ type Props = {
   onOpen: () => void;
 };
 
-/** One open worker question with its brief and an answer box. The caller keys it by question id. */
+function BriefEntry({ term, children }: { term: string; children: React.ReactNode }): React.ReactElement {
+  return (
+    <div>
+      <dt className="font-medium text-muted-foreground">{term}</dt>
+      <dd className="whitespace-pre-wrap">{children}</dd>
+    </div>
+  );
+}
+
+function WorkLink({ link }: { link: InboxLink }): React.ReactElement {
+  if (!link.url) return <span>{link.label}</span>;
+  const url = link.url;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(event) => {
+        event.preventDefault();
+        void openExternalUrl(url);
+      }}
+      className="rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+    >
+      {link.label}
+    </a>
+  );
+}
+
+/**
+ * One open worker question with its brief and an answer box. The caller keys
+ * it by question id. A tap on an option sends that option at once, with the
+ * typed note when there is one (owner decision on #210: no confirmation step).
+ */
 export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen }: Props): React.ReactElement {
   const { question } = item;
   const [draft, dispatch] = React.useReducer(answerDraftReducer, EMPTY_ANSWER_DRAFT);
+  const [choice, setChoice] = React.useState<string | null>(null);
   const target = React.useMemo(() => ({ sessionId: item.sessionId, questionId: question.id }), [item.sessionId, question.id]);
   const forOrchestrator = question.audience === 'orchestrator';
-  const tone = question.kind === 'blocked' ? 'error' : 'warning';
+  const blocked = question.kind === 'blocked';
+  const tone = blocked ? 'error' : 'warning';
   const brief = question.brief;
+  const options = briefOptions(brief);
 
-  const sendAnswer = async () => {
-    const text = draft.text.trim();
+  const send = async (text: string, chosen: string | null) => {
     if (!text || draft.pending) return;
-    const requestId = draft.requestId ?? createBrowserUuid();
-    dispatch({ type: 'start', action: 'answer', requestId });
-    const outcome = await sendQuestionAnswer(target, text, requestId, runtimeKey);
+    const attempt = answerAttempt(draft.attempt, text, createBrowserUuid);
+    setChoice(chosen);
+    dispatch({ type: 'start', action: 'answer', attempt });
+    const outcome = await sendQuestionAnswer(target, text, attempt.id, runtimeKey);
     dispatch({ type: 'settled', action: 'answer', outcome });
     if (outcome.status !== 'failed') onRefresh();
   };
 
+  const sendAnswer = () => send(draft.text.trim(), null);
+  const sendOption = (label: string) => send(optionAnswerText(label, draft.text), label);
+
   const markAnswered = async () => {
     if (draft.pending) return;
-    dispatch({ type: 'start', action: 'resolve', requestId: null });
+    dispatch({ type: 'start', action: 'resolve' });
     const outcome = await markQuestionAnswered(target, runtimeKey);
     dispatch({ type: 'settled', action: 'resolve', outcome });
     if (outcome.status !== 'failed') onRefresh();
@@ -53,7 +96,7 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
       <DecisionInboxContext
         icon="question"
         iconClassName={TONE_TEXT_CLASS[tone]}
-        label={question.kind === 'blocked' ? 'Blocked' : 'Question'}
+        label={blocked ? 'Blocked' : 'Question'}
         labelClassName={TONE_TEXT_CLASS[tone]}
         badge={forOrchestrator ? 'For the orchestrator' : null}
         age={formatAge(question.at, now)}
@@ -62,37 +105,62 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
         onOpen={onOpen}
       />
 
-      <p className="whitespace-pre-wrap typography-ui-label text-foreground">{question.summary}</p>
+      <h3 className="whitespace-pre-wrap typography-ui-label font-semibold text-foreground">{question.summary}</h3>
+
+      {item.links.length > 0 ? (
+        <p className="flex flex-wrap items-center gap-x-3 gap-y-1 typography-micro text-muted-foreground">
+          {item.links.map((link) => <WorkLink key={link.label} link={link} />)}
+        </p>
+      ) : null}
+
+      {brief?.context ? <p className="whitespace-pre-wrap typography-micro text-foreground">{brief.context}</p> : null}
+
+      {brief && (brief.tried || brief.needed) ? (
+        <dl className="flex flex-col gap-1 typography-micro text-foreground">
+          {brief.tried ? <BriefEntry term={"Tried"}>{brief.tried}</BriefEntry> : null}
+          {brief.needed ? <BriefEntry term={"Needed"}>{brief.needed}</BriefEntry> : null}
+        </dl>
+      ) : null}
+
+      {options.length > 0 ? (
+        <div role="group" aria-label={"Answer with an option"} className="flex flex-col gap-1.5">
+          {options.map((option, index) => (
+            <Button
+              key={`${index}:${option.label}`}
+              type="button"
+              variant={option.recommended ? 'default' : 'outline'}
+              size="sm"
+              data-inbox-option={option.label}
+              onClick={() => void sendOption(option.label)}
+              disabled={draft.pending !== null}
+              // An option carries its consequence, so the button grows with the text instead of a fixed height.
+              // The text is the worker's wording (README stays README), so it keeps its case.
+              className="h-auto min-h-8 w-full flex-col items-start gap-0.5 whitespace-normal py-1.5 text-left normal-case"
+            >
+              <span className="flex w-full items-center gap-2 font-medium">
+                {draft.pending === 'answer' && choice === option.label ? <Icon name="loader-4" className="size-3.5 shrink-0 animate-spin" /> : null}
+                <span className="min-w-0">{option.label}</span>
+                {option.recommended ? <span className="ml-auto shrink-0 typography-micro font-normal">{"Recommended"}</span> : null}
+              </span>
+              {option.consequence ? <span className="typography-micro font-normal text-muted-foreground">{option.consequence}</span> : null}
+            </Button>
+          ))}
+        </div>
+      ) : null}
 
       {brief ? (
         <dl className="flex flex-col gap-1 typography-micro text-foreground">
-          {brief.options && brief.options.length > 0 ? (
-            <div>
-              <dt className="font-medium text-muted-foreground">{"Options"}</dt>
-              <dd>
-                <ul className="list-disc pl-4">
-                  {brief.options.map((option) => <li key={option}>{option}</li>)}
-                </ul>
-              </dd>
-            </div>
-          ) : null}
-          <div>
-            <dt className="font-medium text-muted-foreground">{"Recommendation"}</dt>
-            <dd>{brief.recommendation}</dd>
-          </div>
-          {brief.counterargument ? (
-            <div>
-              <dt className="font-medium text-muted-foreground">{"Strongest counterargument"}</dt>
-              <dd>{brief.counterargument}</dd>
-            </div>
-          ) : null}
-          {brief.revisit ? (
-            <div>
-              <dt className="font-medium text-muted-foreground">{"Revisit when"}</dt>
-              <dd>{brief.revisit}</dd>
-            </div>
-          ) : null}
+          <BriefEntry term={"Recommendation"}>{brief.recommendation}</BriefEntry>
+          {brief.counterargument ? <BriefEntry term={"Strongest counterargument"}>{brief.counterargument}</BriefEntry> : null}
+          {brief.revisit ? <BriefEntry term={"Revisit when"}>{brief.revisit}</BriefEntry> : null}
         </dl>
+      ) : null}
+
+      {brief?.meanwhile ? (
+        <p className="whitespace-pre-wrap rounded-md border border-border px-2 py-1.5 typography-micro text-foreground">
+          <span className="font-medium text-muted-foreground">{"Until then: "}</span>
+          {brief.meanwhile}
+        </p>
       ) : null}
 
       {forOrchestrator ? (
@@ -118,7 +186,7 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
           readOnly={draft.pending !== null}
           rows={2}
           aria-label={`Answer to ${item.title}`}
-          placeholder={"Your answer for the worker"}
+          placeholder={options.length > 0 ? "Your answer, or a note sent with the option you tap" : "Your answer for the worker"}
           className="w-full resize-y rounded-md border border-border bg-transparent p-2 typography-ui-label text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-interactive-focus"
         />
         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -134,8 +202,8 @@ export function DecisionInboxQuestion({ item, now, runtimeKey, onRefresh, onOpen
             {"Mark answered"}
           </Button>
           <Button type="submit" variant="default" size="sm" disabled={draft.pending !== null || draft.text.trim().length === 0}>
-            {draft.pending === 'answer' ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : null}
-            {draft.requestId && draft.pending === null ? "Retry" : "Send answer"}
+            {draft.pending === 'answer' && choice === null ? <Icon name="loader-4" className="size-3.5 animate-spin" /> : null}
+            {draft.attempt?.text === draft.text.trim() && draft.pending === null && choice === null ? "Retry" : "Send answer"}
           </Button>
         </div>
       </form>

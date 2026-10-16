@@ -139,7 +139,10 @@ async function readPiSessionJsonlHeader(filePath) {
 /**
  * Locate a persisted Pi session by the SDK filename (`<timestamp>_<id>.jsonl`
  * or `<id>.jsonl`) without listing or fully reading every transcript. A miss
- * is `null`, not an empty success.
+ * is `null`, not an empty success. A file that carries the id in its name but
+ * whose header cannot be read is not a miss: when no readable file matches,
+ * the first such failure is thrown so the caller can tell "found but
+ * unreadable" from "not found".
  */
 export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath = resolve }) {
   if (typeof sessionId !== 'string' || sessionId.length === 0 || typeof agentDir !== 'string') {
@@ -152,6 +155,7 @@ export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath 
   } catch {
     return null;
   }
+  let unreadableMatch;
   for (const dirEntry of dirEntries) {
     if (!dirEntry.isDirectory()) continue;
     const dirPath = join(sessionsRoot, dirEntry.name);
@@ -170,11 +174,12 @@ export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath 
         if (header.id === sessionId) {
           return { id: sessionId, path: fullPath, cwd: header.cwd };
         }
-      } catch {
-        continue;
+      } catch (error) {
+        unreadableMatch ??= error;
       }
     }
   }
+  if (unreadableMatch) throw unreadableMatch;
   return null;
 }
 
