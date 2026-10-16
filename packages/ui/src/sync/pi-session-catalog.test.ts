@@ -997,6 +997,50 @@ describe('PiSessionStore catalog', () => {
     }
   });
 
+  test('a session first seen through an event in an already listed directory is re-listed for its parent', async () => {
+    const listed: string[][] = [[]];
+    const stubs = stubDaemons({
+      listSessions: async () => ({
+        sessions: listed.length === 1
+          ? [listItem('parent', '/repo-a')]
+          : [listItem('parent', '/repo-a'), listItem('worker', '/repo-a', { title: 'Worker', parentId: 'parent' })],
+      }),
+    });
+    const store = new PiSessionStore();
+    try {
+      await store.refreshDirectoryCatalog('/repo-a');
+      listed.push([]);
+      const internal = store as unknown as { commitEvents: (events: PiSessionEvent[]) => void };
+      internal.commitEvents([sessionUpdatedEvent('worker', '/repo-a', 'Worker', 1)]);
+      expect(store.getState().catalog.byId.get('worker')?.parentId).toBeNull();
+      await tickMicrotasks();
+      expect(store.getState().catalog.byId.get('worker')?.parentId).toBe('parent');
+    } finally {
+      stubs.restore();
+      store.dispose();
+    }
+  });
+
+  test('a stub in a directory that was never listed waits for its first listing', async () => {
+    let lists = 0;
+    const stubs = stubDaemons({
+      listSessions: async () => {
+        lists += 1;
+        return { sessions: [] };
+      },
+    });
+    const store = new PiSessionStore();
+    try {
+      const internal = store as unknown as { commitEvents: (events: PiSessionEvent[]) => void };
+      internal.commitEvents([sessionUpdatedEvent('remote', '/repo-a', 'Remote', 1)]);
+      await tickMicrotasks();
+      expect(lists).toBe(0);
+    } finally {
+      stubs.restore();
+      store.dispose();
+    }
+  });
+
   test('session.updated from another device fills a stub title without waiting for a list', async () => {
     const store = new PiSessionStore();
     try {
@@ -1838,6 +1882,40 @@ describe('catalog-owner list/mutation reconciliation', () => {
     );
     expect(reconciled.byId.get('mut')?.title).toBe('local-new');
     expect(reconciled.byDirectory.get('/repo-a')).toContain('mut');
+  });
+
+  test('an incomplete listing adds and updates rows but removes none', () => {
+    const baseline = applyDirectoryListToCatalog(initialCatalog(), '/repo-a', [
+      listItem('keep', '/repo-a', { title: 'keep', updatedAt: 1 }),
+      listItem('skipped', '/repo-a', { title: 'skipped', updatedAt: 1 }),
+      listItem('deleted', '/repo-a', { title: 'deleted', updatedAt: 1 }),
+    ], 10);
+    const reconciled = applyDirectoryListWithReconciliation(
+      baseline,
+      baseline,
+      '/repo-a',
+      [listItem('keep', '/repo-a', { title: 'renamed', updatedAt: 1 }), listItem('fresh', '/repo-a', { title: 'fresh', updatedAt: 2 })],
+      20,
+      new Set(['deleted']),
+      { incomplete: true },
+    );
+    // The server skipped a file it could not read: the omitted row stays, the
+    // listed rows update, a new row arrives, and a tombstone still wins.
+    expect(reconciled.byId.get('skipped')?.title).toBe('skipped');
+    expect(reconciled.byDirectory.get('/repo-a')).toContain('skipped');
+    expect(reconciled.byId.get('keep')?.title).toBe('renamed');
+    expect(reconciled.byId.get('fresh')?.title).toBe('fresh');
+    expect(reconciled.byDirectory.get('/repo-a')).not.toContain('deleted');
+    expect(reconciled.listStatusByDirectory.get('/repo-a')).toBe('ready');
+
+    const complete = applyDirectoryListWithReconciliation(
+      baseline,
+      baseline,
+      '/repo-a',
+      [listItem('keep', '/repo-a', { title: 'keep', updatedAt: 1 })],
+      20,
+    );
+    expect(complete.byId.has('skipped')).toBe(false);
   });
 
   test('delayed list with busy event then remote rename/archive takes remote metadata, keeps busy', async () => {

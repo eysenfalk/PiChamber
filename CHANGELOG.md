@@ -4,7 +4,77 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.13] - 2026-10-15
+
+The control center and two chat fixes since 1.0.12.
+
+- **Control center (#20, #194).** A new main view lists every worker that an orchestrator manages, grouped by orchestrator, with its live state, last report, open question, pull request with CI, and the slot use and host load; selecting a worker opens its session. Its decision inbox collects every open worker question and every pending extension dialog across sessions and projects, newest first, and answering there works like answering in the session; a count shows in the header and on mobile. The session list gets a filter **All / Hide workers / Only workers**, and a worker waiting for an answer shows as waiting. Workers and orchestrator sessions can no longer merge a pull request into `main` or push to `main`; `dev` stays open to them.
+- **Dialogs stay in their session (#212, #215).** An extension dialog of another session no longer covers the open chat. It stays pending and shows in its own session and in the control center inbox.
+- **Composer on short phone screens (#204, #208).** With the keyboard open and only about 200 px visible, the composer of an empty session or a session in a project folder keeps the model row and the send button in view.
+
+## [1.0.12] - 2026-10-15
+
+Mobile fixes and an orchestrator wake fix since 1.0.11.
+
+- **Android navigation bar (#41, #145, #195).** On phones the composer, the sessions drawer and the Add folder dialog end above the system navigation bar, and the scroll to bottom button no longer covers the last message.
+- **Rename on the phone (#143, #196).** Renaming a session in the mobile drawer opens a dialog with a full width name field. Desktop keeps the inline rename.
+- **Landscape phones (#148, #197).** A phone turned to landscape keeps the mobile layout (drawer, composer capped at a third of the height, minimize handle) instead of switching to the desktop layout when it is 768 px or wider. Tablets and desktops keep their layout.
+- **Orchestrator wakes (#190, #198).** A worker report that arrives while an idle orchestrator session is being closed now waits for it, reopens the orchestrator and is delivered once instead of being lost.
+
+## [1.0.11] - 2026-10-15
+
+Worker tool profiles, Pi style slash search and session list and daemon fixes since 1.0.10.
+
+- **Worker tool profiles (#151, #178).** Every worker started by `session_spawn` or `worker_start` runs with a named tool profile. The role picks the default (`review` and `oracle` get `read-only`, `research` keeps `full`), the orchestrator can override it per start, and the session daemon blocks every tool call outside the profile, including calls nested in Fabric or codemode scripts. The digest, `session_read` and `orchestration_capabilities` show the profile and the tools it excludes.
+- **Slash search like Pi (#184, #185).** The slash command search in the composer matches and orders commands like Pi's slash autocomplete, so `/protot` shows `skill:prototype` first and substrings and prefixes find commands.
+- **Session list (#126, #187, #160, #176, #179, #181).** One malformed, unreadable or vanished session file no longer empties the session list of its directory; the list shows every readable session and keeps the skipped one instead of deleting it. A session whose worktree directory is removed and recreated comes back in the sidebar without a reload, and a worker in another worktree than its parent sits under that worktree's row.
+- **Session daemon (#164, #171, #175, #177, #189).** The daemon keeps spawning workers after the orchestrator deletes the default session or removes its worktree, and `session_stop` stops a finished worker whose directory was already removed.
+
+## [1.0.10] - 2026-10-14
+
+A built-in browser on desktop and phone and a live updates fix since 1.0.9.
+
+- **Built-in browser (#163, #166, #168, #169, #170).** The desktop Browser surface keeps its logins in one persistent, PiChamber owned profile (`persist:pichamber-browser`), separate from PiChamber's own session. Pages are sandboxed without preload or Node, load only http, https and about:blank, and get no permissions except fullscreen and sanitized clipboard writes, so visited sites never see PiChamber tokens. In the Capacitor app, hosted mobile and the web the Browser surface is a live remote view of that laptop browser over `/api/browser/ws`, with address bar, back, forward, reload, tap, scroll and keyboard, so the phone reaches every site the laptop reaches, internal ones included. Without the desktop app it says that the browser needs it.
+- **Live updates after a reconnect without a project (#167).** When the session store reconnects without a selected project after an error, it replaces the old event stream, so live replies and busy session states show again instead of being dropped while the socket stayed open.
+
+## [1.0.9] - 2026-10-14
+
+Compact extension messages, inline HTML pages, orchestrator routing and mobile fixes since 1.0.8.
+
+- **Extension messages render compactly (#147, #153).** Pi custom messages such as intercom, subagent notices and context plugin notes are compact, expandable rows inside the chat column with a readable label, and consecutive messages of one kind collapse into one row such as "9 Intercom messages".
+- **No more overlapping rows after long runs (#144, #150).** The live tail and the history rows above it no longer overlap after many wake cycles; the virtualized history list is as tall as its rows.
+- **Agent HTML pages inline (#155, #157).** A Pi session gets an `html_render` tool. The page is stored with the session and shows as its own row in a sandboxed iframe that fits its content, with a maximize dialog that zooms 50 to 200 %.
+- **Orchestrator sessions (#136, #141, #156, #158, #152, #159).** Only a session marked as orchestrator, in the settings file or with a switch in its row menu, gets the orchestrator tools, the roughly 1000 token instructions and worker wakes; other sessions get none of them. Mark an existing orchestrator session after updating. The last writer decides what the orchestrator hears, and a per-worker **Orchestrator: follows / quiet** switch silences all but done, blocker, ready, CI result and merge events. The orchestrator skill distinguishes worker sessions from Pi subagents.
+- **Mobile (#137, #140, #142, #149).** The composer takes at most a third of the visible height and can be minimized to a one-line pill. Settings and the sessions drawer stay clear of the system bars.
+
+## [1.0.8] - 2026-10-13
+
+Pi 1.1.0, the workspace tree in the sidebar and worker orchestration since 1.0.7. Release 1.0.7 build 8 was an Android-only prerelease.
+
+- **Pi 1.1.0 (#93, #94).** The server and session daemon run on Pi SDK 1.1.0 instead of 1.0.2. The daemon advertises its extension runner, so extensions that wrap tool execution, such as pi-fabric 0.114, no longer fail every non-read tool with "unavailable until extension tool hooks initialize".
+- **Extension state stays out of the chat (#101, #102).** Entries an extension appends with `pi.appendEntry`, such as `sandy-context.notebook` and `sandy-context.summary`, no longer get a chat row. They stay in the session history, like in the Pi TUI.
+- **One workspace tree in the sidebar (#95).** Projects, worktrees, folders and sessions live in one tree that replaces both sidebar areas, with drag and drop, folders and keyboard navigation; selecting a project or worktree opens no session (#100, #105, #109). An eye menu picks which projects the tree shows, and the search box searches projects, branches and sessions, including hidden projects (#111). Every visible worktree row shows its change state, ahead and behind, conflicts and pull request (#114), kept current by an optional **Auto fetch** that never waits on a credential prompt (#121). One click on a workspace row starts a session there (#123).
+- **Worker orchestration (#107, #115).** An agent in a PiChamber session can start full PiChamber sessions as workers through the `pichamber` MCP tools, steer them and get their results back without blocking. Workers are ordinary sessions nested under their parent (#113). A fixed orchestrator session owns its workers in a durable registry with reserved slots and takeover (#125), gets structured worker reports and one compact digest (#127), is woken when a worker finishes, fails, asks or stalls (#129), can rewind a worker to an earlier entry (#131), starts branch, worktree and worker in one call (#130), checks host capacity before a start (#119), watches pull requests (#132) and removes a worker's worktree, branches and session only after a proven merge (#133). The `orchestrator` project skill describes the practice (#112).
+
+## [1.0.7] - 2026-10-05
+
+Pairing over Tailscale since 1.0.6.
+
+- **Pair devices over Tailscale first (#46, #47).** When the server is on a tailnet, **Add a device** preselects **Tailscale (recommended)** and the QR code points at the server's Tailscale address, so the phone connects at home and away. **Also try your home Wi-Fi when Tailscale is off** adds the LAN address as a second candidate; the mobile app tries both on every connect, the desktop app only while pairing. Without Tailscale, **Home network only** is preselected and Tailscale is greyed out. Tailscale is detected on Linux (`tailscale0`), Windows and macOS (`utun` with a 100.64.0.0/10 address).
+
+## [1.0.6] - 2026-10-04
+
+Pi 1.0.2, GitHub pull requests and issues, and reconnect and performance work since 1.0.3. Releases 1.0.4 and 1.0.5 were Android-only prereleases.
+
+- **Pi 1.0.2 (#76).** The server and session daemon run on Pi SDK 1.0.2 instead of 0.99.2, matching current Pi installations and extensions built for Pi 1.0. No session, settings or model data migration is needed.
 - **Git identity profiles removed.** PiChamber no longer manages commit-author profiles: the profiles settings UI, the clone-time identity picker, and the silent default auto-apply are gone, along with the server profile storage, credential discovery, and the config-writing routes. Commits, pushes, and clones now use solely the user's own git configuration and credentials. The Git header shows a read-only `Committing as Name <email>` line resolved from git config, which PiChamber never writes. Any previously saved profiles file and any git config previously written into repositories are left untouched; set authorship with plain git (`git config user.email …`).
+- **GitHub pull requests and issues inside PiChamber.** Pull request and issue surfaces with review, files, checks, triage and start-session actions, wired into the context panel, sidebar, mobile and composer, backed by a `gh` CLI server module; pull request creation in the Git view is redesigned. GitHub HTML is sanitized and framing markers in untrusted agent context are neutralized.
+- **Faster startup and lighter polling.** Startup vendors are bundled in one chunk with lazy Shiki, GitHub surfaces, code-block languages and icon sprites; hashed assets are cached immutably; models.dev metadata loads after first paint; Git, worktree and session catalog polling are deduplicated.
+- **Reconnect and live status fixes.** Accepted sends settle after missed lifecycle events or daemon restarts, a reconnecting turn renders instead of a bare chevron, unopened sessions show live status from ordered listings, and a user-selected session survives in-flight focus changes.
+- **Subagents and pi-fabric rendered natively (#31, #43).** pi-subagents async status renders as a native card, extension surfaces collapse, sessions with running subagents stay loaded, supervisor messages are compact and correctly ordered, and pi-fabric runs show as live tool cards.
+- **Unsolicited assistant turns render live (#38)** in the open session, and renamed session names stay in the list of large sessions (#54).
+- **Local dev AppImage (#36, #53).** `bun run electron:build:dev` writes to one stable path and installs to `~/AppImages/pichamber.appimage`.
+- **Smaller fixes.** Mermaid diagrams are pinch-zoomable on touch, the composer clears after resending a reverted message, the git header is unified across layouts, mobile workspace tabs are compact, and status-error surfaces are readable.
 
 ## [1.0.3] - 2026-09-21
 

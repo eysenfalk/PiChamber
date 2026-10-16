@@ -1009,6 +1009,83 @@ describe('PiSessionStore runtime-scoped sessions', () => {
     }
   });
 
+  // #165: an error report left the attached stream (cluster or background
+  // recovery) in place while `connectWithoutProject` bumped the runtime
+  // generation. The attach then reused nothing and replaced nothing: the old
+  // stream stayed healthy on the wire but its events were dropped as stale,
+  // so live replies and busy sessions never showed again.
+  const reconnectAfterReportedError = async (attachFirst: boolean) => {
+    const originalFetch = globalThis.fetch;
+    const encoder = new TextEncoder();
+    const pushes: Array<(event: PiSessionEvent) => void> = [];
+    const eventRequests: AbortSignal[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal ?? new AbortController().signal;
+      if (new URL(String(input), 'http://runtime.test').pathname === '/api/pi/events') eventRequests.push(signal);
+      return new Response(new ReadableStream({
+        start(controller) {
+          pushes.push((event) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)));
+          signal.addEventListener('abort', () => controller.error(signal.reason), { once: true });
+        },
+      }), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const stubs = stubDaemons({
+      listSessions: async () => ({
+        streamEpoch: 'epoch-1',
+        sessions: [{ session: { id: 'worker', directory: '/repo', createdAt: 1, updatedAt: 1 }, updatedAt: 1 }],
+      }),
+      health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: ['events.streamEpoch'], streamEpoch: 'epoch-1' }),
+    });
+    const store = new PiSessionStore();
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    try {
+      if (attachFirst) {
+        await store.connectWithoutProject();
+        await settle();
+      }
+      store.reportError(new PiRequestError('DAEMON_UNAVAILABLE'));
+      expect(asInternal(store).stream).not.toBeNull();
+      // The background recovery stream has not sent its request yet.
+      const requestsBefore = eventRequests.length;
+      expect(requestsBefore).toBe(attachFirst ? 1 : 0);
+      await store.connectWithoutProject();
+      await store.refreshDirectoryCatalog('/repo');
+      await settle();
+      expect(store.getState().connection).toBe('ready');
+      // The old request is aborted and exactly one replacement stream is open.
+      expect(eventRequests.slice(0, requestsBefore).every((signal) => signal.aborted)).toBe(true);
+      expect(eventRequests.filter((signal) => !signal.aborted)).toHaveLength(1);
+      expect(eventRequests.at(-1)?.aborted).toBe(false);
+      expect(store.getState().catalog.byId.get('worker')?.lifecycle).toBe('idle');
+
+      pushes.at(-1)?.({
+        protocolVersion: 1,
+        kind: 'event',
+        name: 'session.lifecycle',
+        sequence: 5,
+        sessionId: 'worker',
+        directory: '/repo',
+        streamEpoch: 'epoch-1',
+        payload: { state: 'busy' },
+      } as PiSessionEvent);
+      await settle();
+      expect(store.getState().catalog.byId.get('worker')?.lifecycle).toBe('busy');
+    } finally {
+      globalThis.fetch = originalFetch;
+      stubs.restore();
+      store.dispose();
+    }
+  };
+
+  test('connecting without a project after a reported error replaces the attached cluster stream', async () => {
+    await reconnectAfterReportedError(true);
+  });
+
+  test('connecting without a project after a reported error replaces the background recovery stream', async () => {
+    await reconnectAfterReportedError(false);
+  });
+
   test('a failed reconnect keeps the stream retry loop alive and clears the error when it reconnects', async () => {
     const originalFetch = globalThis.fetch;
     let disposed = false;

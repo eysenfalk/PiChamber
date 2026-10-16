@@ -423,6 +423,8 @@ describe('updateDesktopSettings', () => {
         favoriteModels: [{ providerID: 'anthropic', modelID: 'claude-sonnet-4' }],
         followUpBehavior: 'steer',
         diffLayoutPreference: 'side-by-side',
+        gitAutoFetchEnabled: true,
+        gitAutoFetchIntervalMinutes: 30,
         // Legacy command starters are parsed defensively but removed on
         // sanitize (never converted to prompts).
         draftStarters: [{ type: 'command', name: 'runtime-a' }] as unknown as SettingsPayload['draftStarters'],
@@ -443,6 +445,8 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().draftStartersVisible).toBe(false);
     expect(useUIStore.getState().expandToolCallsByDefault).toBe(true);
     expect(useUIStore.getState().diffLayoutPreference).toBe('side-by-side');
+    expect(useUIStore.getState().gitAutoFetchEnabled).toBe(true);
+    expect(useUIStore.getState().gitAutoFetchIntervalMinutes).toBe(30);
     expect(useMessageQueueStore.getState().followUpBehavior).toBe('steer');
 
     switchRuntimeEndpoint({ apiBaseUrl: 'https://preferences-b.example', runtimeKey: 'preferences-b' });
@@ -461,6 +465,8 @@ describe('updateDesktopSettings', () => {
     expect(useUIStore.getState().draftStartersVisible).toBe(true);
     expect(useUIStore.getState().expandToolCallsByDefault).toBe(false);
     expect(useUIStore.getState().diffLayoutPreference).toBe('inline');
+    expect(useUIStore.getState().gitAutoFetchEnabled).toBe(false);
+    expect(useUIStore.getState().gitAutoFetchIntervalMinutes).toBe(15);
     expect(useMessageQueueStore.getState().followUpBehavior).toBe('queue');
   });
 

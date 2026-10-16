@@ -1,5 +1,6 @@
 import type { Part } from '@/lib/chat/types';
 import { isShellActionPart, isSubtaskPart } from './userAuxiliaryPartsModel';
+import { readHtmlRenderReference } from './parts/htmlRenderModel';
 
 type PartWithText = Part & { text?: string; content?: string; value?: string };
 
@@ -50,14 +51,18 @@ export const filterRenderableAssistantParts = (parts: Part[]): Part[] => parts.f
 
 /**
  * Remove turn-progress parts from an assistant message whose final response is
- * rendered separately from the shared activity rail.
+ * rendered separately from the shared activity rail. A completed html_render
+ * call stays: its page is part of the response, not of the progress.
  */
 export const filterAssistantFinalParts = (
     parts: Part[],
     activityPartIds: ReadonlySet<string>,
     messageId: string,
 ): Part[] => parts.filter((part, index) => {
-    if (part.type === 'tool' || part.type === 'reasoning') {
+    if (part.type === 'tool') {
+        return readHtmlRenderReference(part) !== undefined;
+    }
+    if (part.type === 'reasoning') {
         return false;
     }
     if (part.type !== 'text') {

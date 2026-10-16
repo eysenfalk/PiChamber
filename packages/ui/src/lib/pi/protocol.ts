@@ -187,6 +187,9 @@ export interface PiSessionListResponse {
    *  A value different from the client's established epoch means the
    *  response predates a daemon restart and must not be committed. */
   streamEpoch?: string;
+  /** Set when the server skipped a session file it could not read. The list
+   *  proves the sessions it contains, not that an omitted one is gone. */
+  incomplete?: true;
 }
 
 export interface PiSessionCreateInput {
@@ -540,7 +543,176 @@ export interface PiSettingsSnapshot {
     smallModel?: PiModelRef;
     walkthroughModel?: PiModelRef;
     defaultRetryLimit?: number;
+    /** Stored overrides only; `orchestration` on the snapshot is the effective value. */
+    orchestration?: {
+      workerLimit?: number;
+      gate?: Partial<PiOrchestrationGate>;
+      roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel>>;
+      orchestrators?: Record<string, true>;
+      quietWorkers?: Record<string, true>;
+    };
   };
+  /** Orchestration roles and worker limit with defaults applied. */
+  orchestration: PiOrchestrationSettings;
+}
+
+export type PiOrchestrationRole = 'orchestrate' | 'plan' | 'oracle' | 'debug'
+  | 'task-easy' | 'task-medium' | 'task-hard' | 'task-extreme'
+ | 'research' | 'small' | 'review';
+
+/** A role names a model id; the provider is resolved from the live catalog when it is omitted. */
+export interface PiOrchestrationRoleModel {
+  providerId?: string;
+  modelId: string;
+  thinking?: PiThinkingLevel;
+}
+
+/** A spawn is refused while the host load exceeds the core count or less memory than `minAvailableBytes` is available. */
+export interface PiOrchestrationGate {
+  enabled: boolean;
+  minAvailableBytes: number;
+}
+
+export interface PiOrchestrationSettings {
+  workerLimit: number;
+  gate: PiOrchestrationGate;
+  roles: Record<PiOrchestrationRole, PiOrchestrationRoleModel>;
+  /** Ids of the sessions marked as orchestrator; only these get the orchestration tools and instructions. */
+  orchestrators: string[];
+  /** Ids of the workers set to "Orchestrator: quiet": their orchestrator hears only done, blocker, ready, CI result and merged or closed. */
+  quietWorkers: string[];
+}
+
+/** A worker's lifecycle in the orchestration registry. */
+export type PiOrchestrationWorkerLifecycle = 'starting' | 'active' | 'done' | 'stopped';
+
+/** Live state from the live channels; `dormant` when no runtime is resident. */
+export type PiOrchestrationLiveState = 'dormant' | 'idle' | 'busy' | 'retry' | 'waiting_input';
+
+/** One possible answer to a worker's question and what it leads to (#210). */
+export interface PiOrchestrationQuestionOption {
+  label: string;
+  consequence?: string;
+  recommended?: boolean;
+}
+
+/**
+ * The decision a worker lays out with its question (#20). For the owner the
+ * daemon requires the full brief (#210, ADR 0017): context, options with
+ * consequences, recommendation and meanwhile, and tried and needed for a blocker.
+ */
+export interface PiOrchestrationQuestionBrief {
+  context?: string;
+  /** Plain strings in questions stored before #210. */
+  options?: Array<PiOrchestrationQuestionOption | string>;
+  recommendation: string;
+  counterargument?: string;
+  revisit?: string;
+  meanwhile?: string;
+  tried?: string;
+  needed?: string;
+}
+
+export interface PiOrchestrationQuestion {
+  id: string;
+  kind: 'question' | 'blocked';
+  audience: 'owner' | 'orchestrator';
+  summary: string;
+  at: number;
+  brief?: PiOrchestrationQuestionBrief;
+}
+
+/** `POST /api/pi/orchestration/questions/:sessionId/:questionId/answer`. */
+export interface PiOrchestrationAnswerInput {
+  text: string;
+  /** Makes a retry return the first receipt instead of prompting twice. */
+  clientRequestId?: string;
+}
+
+export interface PiOrchestrationAnswerResponse {
+  sessionId: string;
+  questionId: string;
+  accepted: true;
+  /** False when a report closed or replaced the question while the answer was sent. */
+  resolved: boolean;
+  deduplicated?: true;
+}
+
+/** `POST /api/pi/orchestration/questions/:sessionId/:questionId/resolve`: closes without a prompt. */
+export interface PiOrchestrationResolveResponse {
+  sessionId: string;
+  questionId: string;
+  resolved: true;
+}
+
+export interface PiOrchestrationReport {
+  kind: 'progress' | 'question' | 'blocked' | 'ready' | 'done';
+  summary: string;
+  at: number;
+  pullRequest?: number;
+  noPullRequest?: string;
+  evidence?: string[];
+}
+
+/** What the last GitHub read said about the reported pull request; null before the first read. */
+export interface PiOrchestrationPullRequestStatus {
+  status: 'open' | 'merged' | 'closed';
+  url: string | null;
+  head: string | null;
+  checks: { state: string; total: number; pending: number } | null;
+}
+
+export interface PiOrchestrationWorker {
+  sessionId: string;
+  title: string | null;
+  role: string | null;
+  profile: { name: string } | null;
+  issue: { repo: string; number: number } | null;
+  branch: string | null;
+  worktree: string | null;
+  pullRequest: { number: number; repository: string | null } | null;
+  pullRequestStatus: PiOrchestrationPullRequestStatus | null;
+  lifecycle: PiOrchestrationWorkerLifecycle;
+  lifecycleSince: number | null;
+  live: PiOrchestrationLiveState | null;
+  liveSince: number | null;
+  lastProgressAt: number | null;
+  lastInputAt: number | null;
+  report: PiOrchestrationReport | null;
+  question: PiOrchestrationQuestion | null;
+  /** The first pending blocking dialog in the worker's session. */
+  dialog: { requestId: string; method: string; title: string | null } | null;
+  /** The error of the worker's last settled turn. */
+  lastError: { message: string; at: number } | null;
+  /** Token use and cost as of the last settled run. */
+  usage: { settled: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }; settledAt: number } | null;
+}
+
+export interface PiOrchestrationOverviewGroup {
+  sessionId: string;
+  /** False when the mark was removed while the session still owns workers. */
+  marked: boolean;
+  /** Null when the orchestrator is not resident. */
+  title: string | null;
+  workers: PiOrchestrationWorker[];
+}
+
+export interface PiOrchestrationPendingDialog {
+  sessionId: string;
+  title: string | null;
+  directory: string | null;
+  /** Set when the session is a worker. */
+  orchestratorSessionId: string | null;
+  dialog: PiExtensionDialogPayload;
+}
+
+/** `GET /api/pi/orchestration/overview`: the owner's control center. */
+export interface PiOrchestrationOverview {
+  at: number;
+  limit: { workerLimit: number; used: number };
+  host: { load1: number; cores: number; availableBytes: number; workers: number; limit: number };
+  orchestrators: PiOrchestrationOverviewGroup[];
+  dialogs: PiOrchestrationPendingDialog[];
 }
 
 export interface PiSettingsUpdateInput {
@@ -563,7 +735,19 @@ export interface PiChamberDefaultsUpdateInput {
   smallModel?: PiModelRef | null;
   walkthroughModel?: PiModelRef | null;
   defaultRetryLimit?: number | null;
+  /** `null` clears every override; a role or the limit set to `null` returns to its default. */
+  orchestration?: {
+    workerLimit?: number | null;
+    gate?: Partial<PiOrchestrationGate> | null;
+    roles?: Partial<Record<PiOrchestrationRole, PiOrchestrationRoleModel | null>> | null;
+    /** `true` marks a session as orchestrator, `null` removes its mark; other sessions keep theirs. */
+    orchestrators?: Record<string, true | null>;
+    /** `true` sets a worker quiet for its orchestrator, `null` makes it follow again; other workers keep theirs. */
+    quietWorkers?: Record<string, true | null>;
+  } | null;
 }
+
+export type PiChamberDefaultsUpdateResponse = Pick<PiSettingsSnapshot, 'pichamber' | 'orchestration'>;
 
 // ---------------------------------------------------------------------------
 // Resources

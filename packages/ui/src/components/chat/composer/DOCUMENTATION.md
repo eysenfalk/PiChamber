@@ -20,7 +20,7 @@ collapse the editor or the in-card footer.
 | `state/` | Composer state with a lifecycle: drafts, mobile shell, history, popup placement, draft targeting, key navigation (`useComposerKeyNavigation`), and autocomplete item selection (`useComposerAutocompleteHandlers`) |
 | `submit/` | Turning what the user has into what gets sent |
 | `attachments/` | Files: paths, drop payloads (`useComposerDrop`), and clipboard paste handling (`useComposerPaste`). `../../input-store.ts` owns preparation and upload state. |
-| `ui/` | Presentation. Dedicated subcomponents isolate visual concerns: `ComposerDragOverlay` renders the drag-over state, the shared Background tasks menu displays asynchronous worktree creation progress and dismissable failure alerts, and `ComposerAttachmentControls` renders the attach button (desktop dropdown, mobile direct picker) immediately to the left of the model picker with the same chrome. Desktop (except mini-chat) uses a stacked card with `1.5rem` corners: editor on top, in-card toolbar with attachments + model picker (name kept visible) + thinking slider after the model name (when the model has levels besides `off`) + send. Dedicated mobile keeps that same stacked composer up at rest (no collapsed pill and no tap-to-grow); the attach button sits immediately to the left of the model and variant controls in the footer with their names always visible and opens the shared native picker (`ATTACHMENT_PICKER_INPUT_PROPS`: `multiple` + `ATTACHMENT_ACCEPT`) directly, reusing the runtime-agnostic preparation/upload pipeline in `input-store.ts`. New-session drafts show folder and local-branch pickers plus a `New worktree` toggle above, with draft starter chips below (prompt chips insert `/name ` and built-in text chips insert literal text, never send immediately). On dedicated mobile, new-session drafts right-align a borderless worktree toggle above the branch, keep the folder at the left of the target row, and omit the changed-file summary. Existing sessions keep their changed-file summary below the read-only branch row. Its tooltip explains that worktrees start from the selected branch's latest commit without copying uncommitted changes. The folder picker includes linked worktrees beneath their owning project. Selecting one targets that directory without registering another project. Selecting a different branch records a draft intent; it never mutates Git from the picker. The first send confirms and completes checkout before creating the session. `New worktree` is an on-demand mode that treats the selected branch as `Start from`, derives a task name with the configured small model (with a local slug fallback), creates a new branch/worktree without changing the source checkout, waits for `setup-ready`, then creates the session and sends against its server-confirmed directory. Existing sessions show only a read-only current-branch label; they never load or display the branch list. Desktop keeps git workspace status on the right of that row (`justify-between`), while dedicated mobile places it below the branch for existing sessions and omits it from new-session drafts. If there is no branch label, git status stays on the row above the composer. Mini-chat keeps a one-line pill with the model picker under the composer. Folder icons in the picker use the sidebar muted grey. Composer thinking is Pi `thinkingLevels`, not a provider-specific `model.variants` field. Opening an existing session locks the composer to that Pi session's last used model and thinking variant so prompt cache identity stays with the transcript; the user can still change them manually. The chrome-less control after the model name opens a compact slider popover above the thinking trigger (centered on it, not flipped below the composer). The card contains the large discrete slider and a min/max legend; the current level stays on the trigger below. The trigger and hover tooltip reserve width for the longest level label so the popover does not drift when the current label changes. Choosing a level writes the composer override and, for an open session, live `sessions.setThinking`. Model picks remain local until send, so a thinking echo for the previous authoritative model must not overwrite the newer manual composer model. Unset/Default does not invent a level. Keyboard `mod+shift+t` and picker `←→` cycle Default plus the model's levels. |
+| `ui/` | Presentation. Dedicated subcomponents isolate visual concerns: `ComposerDragOverlay` renders the drag-over state, the shared Background tasks menu displays asynchronous worktree creation progress and dismissable failure alerts, and `ComposerAttachmentControls` renders the attach button (desktop dropdown, mobile direct picker) immediately to the left of the model picker with the same chrome. Desktop (except mini-chat) uses a stacked card with `1.5rem` corners: editor on top, in-card toolbar with attachments + model picker (name kept visible) + thinking slider after the model name (when the model has levels besides `off`) + send. Dedicated mobile keeps that same stacked composer up at rest (no tap-to-grow); a slim `ComposerMinimizeToggle` above it folds the card away into a one-line "Message" pill and brings it back (not offered on the new-session draft screen, not persisted); the attach button sits immediately to the left of the model and variant controls in the footer with their names always visible and opens the shared native picker (`ATTACHMENT_PICKER_INPUT_PROPS`: `multiple` + `ATTACHMENT_ACCEPT`) directly, reusing the runtime-agnostic preparation/upload pipeline in `input-store.ts`. New-session drafts show folder and local-branch pickers plus a `New worktree` toggle above, with draft starter chips below (prompt chips insert `/name ` and built-in text chips insert literal text, never send immediately). On dedicated mobile, new-session drafts right-align a borderless worktree toggle above the branch, keep the folder at the left of the target row, and omit the changed-file summary. Existing sessions keep their changed-file summary below the read-only branch row. Its tooltip explains that worktrees start from the selected branch's latest commit without copying uncommitted changes. The folder picker includes linked worktrees beneath their owning project. Selecting one targets that directory without registering another project. Selecting a different branch records a draft intent; it never mutates Git from the picker. The first send confirms and completes checkout before creating the session. `New worktree` is an on-demand mode that treats the selected branch as `Start from`, derives a task name with the configured small model (with a local slug fallback), creates a new branch/worktree without changing the source checkout, waits for `setup-ready`, then creates the session and sends against its server-confirmed directory. Existing sessions show only a read-only current-branch label; they never load or display the branch list. Desktop keeps git workspace status on the right of that row (`justify-between`), while dedicated mobile places it below the branch for existing sessions and omits it from new-session drafts. If there is no branch label, git status stays on the row above the composer. Mini-chat keeps a one-line pill with the model picker under the composer. Folder icons in the picker use the sidebar muted grey. Composer thinking is Pi `thinkingLevels`, not a provider-specific `model.variants` field. Opening an existing session locks the composer to that Pi session's last used model and thinking variant so prompt cache identity stays with the transcript; the user can still change them manually. The chrome-less control after the model name opens a compact slider popover above the thinking trigger (centered on it, not flipped below the composer). The card contains the large discrete slider and a min/max legend; the current level stays on the trigger below. The trigger and hover tooltip reserve width for the longest level label so the popover does not drift when the current label changes. Choosing a level writes the composer override and, for an open session, live `sessions.setThinking`. Model picks remain local until send, so a thinking echo for the previous authoritative model must not overwrite the newer manual composer model. Unset/Default does not invent a level. Keyboard `mod+shift+t` and picker `←→` cycle Default plus the model's levels. |
 | `text.ts` | How inserted text meets the text already there |
 | `../../../../lib/dictation/` | Microphone capture, 16 kHz PCM streaming, reconnect/replay, and the final-only dictation state machine |
 
@@ -57,6 +57,15 @@ copy.
   active, with precedence `command > snippet > mention`. Slash autocomplete
   opens only when `/` is the first character of the message; a `/` after any
   other text (including whitespace or a newline) never opens a picker.
+  The palette's search follows Pi's slash autocomplete (pi-tui
+  `CombinedAutocompleteProvider`): `filterAndSortCommands` matches the
+  executable name, ranked by the `piFuzzyFilter` port in
+  `../../../lib/search/piFuzzy.ts`; a `skill:` command matches by its bare name
+  first, then by its full name. Commands that match only by description or
+  search alias (a PiChamber extension, Pi has none) follow all name matches in
+  catalog order, when the query starts a word there (case-insensitive, no
+  scattered letters). Keep the name part
+  identical to Pi's behavior; change it together with Pi, not on its own.
   The command palette (`../../CommandAutocomplete.tsx`) renders the rich
   categorized list on desktop and a compact one-line-per-command list on
   mobile with the same catalog, tap-vs-scroll guards, and listbox semantics.
@@ -222,6 +231,37 @@ frame where nothing is open.
 **Every timeout and `flushSync` in them has a reason recorded next to it, and
 none of them is verifiable outside a real device.** Change them only against
 hardware.
+
+The whole composer on mobile (handle, card, footer, attachments) is capped at
+a third of the visible height of the screen container (`data-composer-bound`).
+`editor/heightLimit.ts` gives the text scroller what is left of that third
+after the measured chrome (form height minus scroller height), never less than
+two lines, and the text scrolls inside itself. On a very small visible height
+the composer can therefore exceed a third; minimizing is the way out.
+The informational branch row above the composer of a session (not the new
+session draft's selectors) is part of that stack. It is dropped only when the
+visible part of the container cannot hold the smallest composer with it:
+152 px (handle, card with its two line floor, bottom padding) plus the 34 px
+row, 186 px (`composerAffordsTargetRow`, `state/useComposerTargetRowFits.ts`).
+Below that the model row and send button fall below the visible area, as at a
+200 px viewport where the container is 144 px (#204); a pending changes bar then
+sits in the status row. A taller visible height keeps the row and its copy
+button. The constants are measured, so re-measure them when the composer chrome
+changes. The visible part of the container is its extent cut by what the
+visual viewport shows (`offsetTop` to `offsetTop + height`, in the same page
+coordinates), because Capacitor shrinks the container for the keyboard while a
+mobile browser only shrinks and pans the visual viewport; a panned header does
+not count against the height, and a pan alone re-measures (the `scroll` event
+of the visual viewport). Desktop has no bound and keeps the line limit.
+A landscape phone (touch, shorter screen side at most 500 px, for example 844x390)
+is the mobile surface too, so it gets this bound, the handle and the drawer even
+though its viewport is wider than 768 px; `detectHostedSurface` decides that
+from the physical screen, not the viewport (ADR 0015). Tablets in landscape and
+desktops keep the desktop composer.
+The minimized state is local to `ChatInput`; restoring focuses the editor
+inside the tap. Queued-message edits and text handed over by other surfaces
+("Add to chat", a reverted prompt; `state/usePendingComposerText.ts`) restore
+it too, because they target the editor; other text updates do not.
 
 ## Testing
 

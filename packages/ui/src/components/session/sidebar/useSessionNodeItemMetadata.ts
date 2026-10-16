@@ -3,7 +3,6 @@ import type { Session } from '@/lib/chat/types';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useGitBranchLabel, useIsGitRepo } from '@/stores/useGitStore';
-import { getGitHubPrStatusKey, useEnsureGitHubPrStatus, usePrVisualSummary } from '@/stores/useGitHubPrStatusStore';
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
 import { useGlobalSessionStatus } from '@/sync/sync-context';
 import { useHasSessionActivityDuration } from '@/sync/session-activity-timing';
@@ -23,18 +22,12 @@ export function useSessionNodeItemMetadata({
   projectId,
   secondaryMeta,
   pinnedSessionIds,
-  expandedParents,
-  expansionKey,
-  hasSessionSearchQuery,
 }: {
   node: SessionNode;
   groupDirectory?: string | null;
   projectId?: string | null;
   secondaryMeta?: SecondaryMeta | null;
   pinnedSessionIds: Set<string>;
-  expandedParents: Set<string>;
-  expansionKey: string;
-  hasSessionSearchQuery: boolean;
 }) {
   const session = node.session;
   const sessionDirectory =
@@ -72,36 +65,6 @@ export function useSessionNodeItemMetadata({
   const subtaskCount = node.children.length;
   const agentName = (session as Session & { agent?: string }).agent;
 
-  const prBranch = worktree?.branch?.trim() || resolvedBranchLabel?.trim() || null;
-  const prDirectory = normalizePath(worktree?.path ?? sessionDirectory);
-  const prLookupKey = React.useMemo(() => {
-    return prBranch && prDirectory ? getGitHubPrStatusKey(prDirectory, prBranch) : null;
-  }, [prBranch, prDirectory]);
-  const prSummary = usePrVisualSummary(prLookupKey);
-  useEnsureGitHubPrStatus(prDirectory, prBranch);
-  const prIconColor = prSummary ? `var(--pr-${prSummary.visualState})` : undefined;
-  const prStatusLabel = React.useMemo(() => {
-    if (!prSummary) return null;
-    switch (prSummary.visualState) {
-      case 'merged':
-        return 'Merged';
-      case 'open':
-        return prSummary.canMerge === true ||
-          prSummary.mergeableState === 'clean' ||
-          prSummary.checks?.state === 'success'
-          ? 'Ready to merge'
-          : 'PR open';
-      case 'blocked':
-        return prSummary.mergeableState === 'dirty' ? 'Merge conflicts' : 'Merge blocked';
-      case 'draft':
-        return 'Draft PR';
-      case 'closed':
-        return 'Closed';
-      default:
-        return null;
-    }
-  }, [prSummary]);
-
   const selectionScopeKey = projectId ?? sessionDirectory ?? null;
   const selectionModeEnabled = useSessionMultiSelectStore((state) => state.enabled);
   const isRowSelected = useSessionMultiSelectStore(
@@ -117,7 +80,6 @@ export function useSessionNodeItemMetadata({
   const sessionTitle = getSessionDisplayTitle(session);
   const hasChildren = node.children.length > 0;
   const isPinnedSession = isSessionPinned(pinnedSessionIds, sessionDirectory, session.id);
-  const isExpanded = hasSessionSearchQuery ? true : expandedParents.has(expansionKey);
 
   const unseenCount = useSessionUnseenCount(session.id);
   const needsAttention = unseenCount > 0;
@@ -136,18 +98,12 @@ export function useSessionNodeItemMetadata({
   return {
     session,
     sessionDirectory,
-    prDirectory,
-    prBranch,
-    prNumber: prSummary?.number ?? null,
     isActive,
     tooltipProjectLabel,
     tooltipBranchLabel,
     isGitRepo,
     subtaskCount,
     agentName,
-    prSummary,
-    prIconColor,
-    prStatusLabel,
     selectionScopeKey,
     selectionModeEnabled,
     isRowSelected,
@@ -158,7 +114,6 @@ export function useSessionNodeItemMetadata({
     sessionTitle,
     hasChildren,
     isPinnedSession,
-    isExpanded,
     needsAttention,
     sessionCompactUpdatedLabel,
     forkSolid,

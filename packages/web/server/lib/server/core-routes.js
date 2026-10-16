@@ -1,3 +1,7 @@
+import { buildDirectPairingCandidates, normalizeCandidateUrl } from './pairing-candidates.js';
+import { isOrchestrationMcpRequest } from '../client-auth/orchestration-credentials.js';
+import { isSignedHtmlRenderRequest } from '../pi/html-render/signed-url.js';
+
 const parseLoopbackUrl = (rawUrl) => {
   if (typeof rawUrl !== 'string') {
     return null;
@@ -434,10 +438,10 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     getRelayPairingCandidate = async () => null,
     // Re-evaluate the relay lifecycle after pairing/device changes.
     reconcileRelay = async () => {},
-    // Returns { local, lan, relayAvailable } — the direct transport URLs the
-    // server can actually be reached on (LAN derived from the server bind, not
-    // the UI origin), for the create-device dialog.
-    getPairingTransports = () => ({ local: null, lan: null, relayAvailable: true }),
+    // Returns { local, lan, tailscale, relayAvailable } — the direct transport
+    // URLs the server can actually be reached on (LAN and Tailscale derived from
+    // the server bind, not the UI origin), for the create-device dialog.
+    getPairingTransports = () => ({ local: null, lan: null, tailscale: null, relayAvailable: true }),
     // Returns ALL direct LAN URLs the server is currently reachable on (client-
     // reached address first, then interface scan) for the candidates-refresh
     // endpoint. Empty when the server is loopback-only.
@@ -613,19 +617,6 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     pairingRedeemAttempts.delete(`${requestIp(req)}:${pairingIdFromRequest(req)}`);
   };
 
-  const normalizeCandidateUrl = (value) => {
-    if (typeof value !== 'string' || !value.trim()) return null;
-    try {
-      const parsed = new URL(value.trim());
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-      parsed.hash = '';
-      parsed.search = '';
-      return parsed.toString().replace(/\/+$/, '');
-    } catch {
-      return null;
-    }
-  };
-
   // `preferredServerUrl` is the caller-supplied externally reachable URL (the
   // desktop UI reaches its own server over loopback, so the request origin is not
   // scannable — it passes the LAN URL instead). Falls back to the request origin
@@ -635,21 +626,13 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
   //   true  → add the relay candidate, enabling the relay host on demand;
   //   false → direct only, never relay;
   //   undefined → legacy: advertise relay only if it is already enabled.
-  // `includeDirect === false` produces a relay-only link (no direct candidate).
-  const pairingServerCandidates = async (req, { preferredServerUrl, includeRelay, includeDirect = true } = {}) => {
-    const candidates = [];
-    if (includeDirect) {
-      const direct = normalizeCandidateUrl(preferredServerUrl) || requestOrigin(req);
-      if (direct) {
-        let type = 'lan';
-        try {
-          const parsed = new URL(direct);
-          type = parsed.protocol === 'https:' ? 'tunnel' : 'lan';
-        } catch {
-        }
-        candidates.push({ type, url: direct, priority: 10 });
-      }
-    }
+  // `fallbackServerUrl` adds a second direct candidate the client tries after
+  // the preferred one (e.g. the home Wi-Fi URL behind a Tailscale URL).
+  const pairingServerCandidates = async (req, { preferredServerUrl, fallbackServerUrl, includeRelay } = {}) => {
+    const candidates = buildDirectPairingCandidates({
+      primaryUrl: normalizeCandidateUrl(preferredServerUrl) || requestOrigin(req),
+      fallbackUrl: fallbackServerUrl,
+    });
     // The client races candidates and falls back to relay only if the direct URL
     // is unreachable (relay carries a higher priority number).
     if (includeRelay !== false) {
@@ -680,6 +663,17 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     const requestScope = tunnelAuthController.classifyRequestScope(req);
     if (requestScope === 'tunnel' || requestScope === 'unknown-public') {
       return tunnelAuthController.requireTunnelSession(req, res, next);
+    }
+    // Orchestration MCP credentials are verified by the route itself (session
+    // scoped, hashed, expiring) and open `/api/pi/mcp` only. Local clients
+    // only: a tunnel request still needs a tunnel session first.
+    if (isOrchestrationMcpRequest(getRequestPathname(req), req)) {
+      return next();
+    }
+    // A sandboxed html_render frame loads its page from a URL signed for that
+    // one page; the route verifies the signature and expiry.
+    if (isSignedHtmlRenderRequest(getRequestPathname(req), req)) {
+      return next();
     }
     return uiAuthController.requireAuth(req, res, next);
   };
@@ -887,8 +881,8 @@ export const registerAuthAndAccessRoutes = (app, dependencies) => {
     await runWithPairingCreateAuth(req, res, next, async (authContext) => {
       const candidates = await pairingServerCandidates(req, {
         preferredServerUrl: req.body?.serverUrl,
+        fallbackServerUrl: req.body?.fallbackServerUrl,
         includeRelay: typeof req.body?.includeRelay === 'boolean' ? req.body.includeRelay : undefined,
-        includeDirect: req.body?.includeDirect !== false,
       });
       const usesRelay = candidates.some((candidate) => candidate.type === 'relay');
       const result = await clientPairingRuntime.createPairingSession({

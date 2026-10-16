@@ -1,0 +1,111 @@
+import { beforeEach, describe, expect, mock, test } from 'bun:test';
+
+let stored: string[] = [];
+let failRead = false;
+let heldReads: Array<() => void> | null = null;
+let reads = 0;
+let runtimeKey = 'runtime-a';
+const updates: unknown[] = [];
+
+const getSettings = mock(async () => {
+  reads += 1;
+  if (failRead) throw new Error('offline');
+  // A held read answers with what the file held when it started.
+  if (heldReads) {
+    const held = [...stored];
+    const queue = heldReads;
+    return new Promise<{ orchestration: { quietWorkers: string[] } }>((resolve) => {
+      queue.push(() => resolve({ orchestration: { quietWorkers: held } }));
+    });
+  }
+  return { orchestration: { quietWorkers: [...stored] } };
+});
+const setPiChamberDefaults = mock(async (input: { orchestration: { quietWorkers: Record<string, true | null> } }) => {
+  updates.push(input);
+  for (const [id, value] of Object.entries(input.orchestration.quietWorkers)) {
+    stored = stored.filter((entry) => entry !== id);
+    if (value) stored.push(id);
+  }
+});
+
+mock.module('@/lib/pi/client', () => ({ piClient: { getSettings, setPiChamberDefaults } }));
+mock.module('@/lib/runtime-switch', () => ({ getRuntimeKey: () => runtimeKey }));
+
+const { useQuietWorkersStore } = await import('./useQuietWorkersStore');
+
+describe('useQuietWorkersStore', () => {
+  beforeEach(() => {
+    stored = [];
+    failRead = false;
+    heldReads = null;
+    runtimeKey = 'runtime-a';
+    updates.length = 0;
+    useQuietWorkersStore.setState({ quiet: null, runtimeKey: null });
+  });
+
+  test('stays unknown until the settings were read, and a failed read does not pass for nobody quiet', async () => {
+    failRead = true;
+    await expect(useQuietWorkersStore.getState().load()).rejects.toThrow('offline');
+    expect(useQuietWorkersStore.getState().quiet).toBeNull();
+  });
+
+  test('reads the quiet workers from the settings', async () => {
+    stored = ['worker-1'];
+    await useQuietWorkersStore.getState().load();
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-1')).toBe(true);
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-2')).toBe(false);
+  });
+
+  test('keeps the quiet state when an older read answers after a change and its read back', async () => {
+    heldReads = [];
+    const old = useQuietWorkersStore.getState().load();
+    const release = heldReads;
+    heldReads = null;
+    await useQuietWorkersStore.getState().setQuiet('worker-C', true);
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-C')).toBe(true);
+
+    release.forEach((answer) => answer());
+    await old;
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-C')).toBe(true);
+  });
+
+  test('reads again on another host while the read of the first host is still open', async () => {
+    stored = ['worker-A'];
+    heldReads = [];
+    const first = useQuietWorkersStore.getState().load();
+    const release = heldReads;
+    heldReads = null;
+
+    runtimeKey = 'runtime-b';
+    stored = ['worker-B'];
+    await useQuietWorkersStore.getState().load();
+    expect(useQuietWorkersStore.getState().runtimeKey).toBe('runtime-b');
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-B')).toBe(true);
+
+    release.forEach((answer) => answer());
+    await first;
+    expect(useQuietWorkersStore.getState().runtimeKey).toBe('runtime-b');
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-B')).toBe(true);
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-A')).toBe(false);
+  });
+
+  test('lets rows that load at the same time share one read', async () => {
+    stored = ['worker-1'];
+    reads = 0;
+    await Promise.all([useQuietWorkersStore.getState().load(), useQuietWorkersStore.getState().load(), useQuietWorkersStore.getState().load()]);
+    expect(reads).toBe(1);
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-1')).toBe(true);
+    await useQuietWorkersStore.getState().load();
+    expect(reads).toBe(2);
+  });
+
+  test('sets a worker quiet with true, makes it follow again with null, and shows what the file holds', async () => {
+    await useQuietWorkersStore.getState().setQuiet('worker-1', true);
+    expect(updates[0]).toEqual({ orchestration: { quietWorkers: { 'worker-1': true } } });
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-1')).toBe(true);
+
+    await useQuietWorkersStore.getState().setQuiet('worker-1', false);
+    expect(updates[1]).toEqual({ orchestration: { quietWorkers: { 'worker-1': null } } });
+    expect(useQuietWorkersStore.getState().quiet?.has('worker-1')).toBe(false);
+  });
+});

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { createPiSettingsStore } from './settings-store.js';
+import { createPiSettingsStore, DEFAULT_ORCHESTRATION_SETTINGS, resolveOrchestrationSettings } from './settings-store.js';
 
 describe('Pi settings sidecar', () => {
   it('round-trips PiChamber defaults without mixing them into Pi settings', async () => {
@@ -142,5 +142,177 @@ describe('Pi settings sidecar', () => {
     expect(resolveEffective(7, 5)).toBe(7);
     expect(resolveEffective(undefined, undefined)).toBe(3);
     expect(resolveEffective(0, 5)).toBe(0);
+  });
+
+  it('stores orchestration overrides and merges them over the role defaults', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const file = join(root, 'pi', 'settings.json');
+    const store = createPiSettingsStore({ file });
+
+    expect(resolveOrchestrationSettings(await store.read())).toEqual({
+      workerLimit: 4,
+      wakes: { coalesceMs: 3_000 },
+      watchdog: { stallAfterMs: 600_000, enabled: true },
+      github: { enabled: true },
+      gate: { enabled: true, minAvailableBytes: 8 * 1024 ** 3 },
+      roles: DEFAULT_ORCHESTRATION_SETTINGS.roles,
+      orchestrators: [],
+      quietWorkers: [],
+    });
+
+    await store.update({ orchestration: { workerLimit: 2, roles: { review: { providerId: 'openai', modelId: ' gpt-6.1-sol ', thinking: 'xhigh' } } } });
+    await store.update({ orchestration: { roles: { small: { modelId: 'tiny' } } } });
+    const stored = await store.read();
+    expect(stored.orchestration).toEqual({
+      workerLimit: 2,
+      roles: {
+        review: { providerId: 'openai', modelId: 'gpt-6.1-sol', thinking: 'xhigh' },
+        small: { modelId: 'tiny' },
+      },
+    });
+    const resolved = resolveOrchestrationSettings(stored);
+    expect(resolved.workerLimit).toBe(2);
+    expect(resolved.roles.small).toEqual({ modelId: 'tiny', thinking: 'medium' });
+    expect(resolved.roles['task-hard']).toEqual({ modelId: 'claude-opus-5-5', thinking: 'high' });
+
+    // The gate merges field by field; null returns it to its default.
+    await store.update({ orchestration: { gate: { enabled: false } } });
+    await store.update({ orchestration: { gate: { minAvailableBytes: 4 * 1024 ** 3 } } });
+    const gated = await store.read();
+    expect(gated.orchestration.gate).toEqual({ enabled: false, minAvailableBytes: 4 * 1024 ** 3 });
+    expect(resolveOrchestrationSettings(gated).gate).toEqual({ enabled: false, minAvailableBytes: 4 * 1024 ** 3 });
+    await store.update({ orchestration: { gate: null } });
+    expect((await store.read()).orchestration).not.toHaveProperty('gate');
+
+    // A role set to null returns to its default; null clears every override.
+    await store.update({ orchestration: { roles: { small: null } } });
+    expect((await store.read()).orchestration.roles).not.toHaveProperty('small');
+    await expect(store.update({ orchestration: null })).resolves.toEqual({ version: 1 });
+  });
+
+  it('stores wake and watchdog settings field by field over their defaults', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { wakes: { coalesceMs: 0 }, watchdog: { stallAfterMs: 60_000 } } });
+    await store.update({ orchestration: { watchdog: { enabled: false } } });
+    const stored = await store.read();
+    expect(stored.orchestration).toEqual({ wakes: { coalesceMs: 0 }, watchdog: { stallAfterMs: 60_000, enabled: false } });
+    expect(resolveOrchestrationSettings(stored)).toMatchObject({
+      wakes: { coalesceMs: 0 },
+      watchdog: { stallAfterMs: 60_000, enabled: false },
+    });
+    await store.update({ orchestration: { watchdog: null } });
+    expect(resolveOrchestrationSettings(await store.read()).watchdog).toEqual({ stallAfterMs: 600_000, enabled: true });
+  });
+
+  it('stores the pull request watch switch and returns to on with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { github: { enabled: false } } });
+    expect(resolveOrchestrationSettings(await store.read()).github).toEqual({ enabled: false });
+    await store.update({ orchestration: { github: null } });
+    expect(resolveOrchestrationSettings(await store.read()).github).toEqual({ enabled: true });
+  });
+
+  it('marks sessions as orchestrator one by one and removes a mark with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    expect(resolveOrchestrationSettings(await store.read()).orchestrators).toEqual([]);
+    await store.update({ orchestration: { orchestrators: { 'session-a': true } } });
+    await store.update({ orchestration: { orchestrators: { 'session-b': true } } });
+    expect(resolveOrchestrationSettings(await store.read()).orchestrators).toEqual(['session-a', 'session-b']);
+    await store.update({ orchestration: { orchestrators: { 'session-a': null } } });
+    expect(resolveOrchestrationSettings(await store.read()).orchestrators).toEqual(['session-b']);
+    // A new store on the same file is a restart.
+    const restarted = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    expect(resolveOrchestrationSettings(await restarted.read()).orchestrators).toEqual(['session-b']);
+  });
+
+  it('keeps quiet workers per session and survives a restart (#156)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const file = join(root, 'pi', 'settings.json');
+    const store = createPiSettingsStore({ file });
+    expect(resolveOrchestrationSettings(await store.read()).quietWorkers).toEqual([]);
+    await store.update({ orchestration: { quietWorkers: { 'worker-a': true } } });
+    await store.update({ orchestration: { quietWorkers: { 'worker-b': true }, orchestrators: { 'orch-a': true } } });
+    await store.update({ orchestration: { quietWorkers: { 'worker-a': null } } });
+    const resolved = resolveOrchestrationSettings(await createPiSettingsStore({ file }).read());
+    expect(resolved.quietWorkers).toEqual(['worker-b']);
+    expect(resolved.orchestrators).toEqual(['orch-a']);
+  });
+
+  it('stores an absolute worktree root and clears it with null', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const store = createPiSettingsStore({ file: join(root, 'pi', 'settings.json') });
+    await store.update({ orchestration: { worktreeRoot: '/srv/worktrees' } });
+    await store.update({ orchestration: { workerLimit: 2 } });
+    expect(resolveOrchestrationSettings(await store.read())).toMatchObject({ workerLimit: 2, worktreeRoot: '/srv/worktrees' });
+    await store.update({ orchestration: { worktreeRoot: null } });
+    expect(resolveOrchestrationSettings(await store.read())).not.toHaveProperty('worktreeRoot');
+  });
+
+  it('defaults the eleven roles to the owner\'s models and thinking levels, never off', () => {
+    expect(DEFAULT_ORCHESTRATION_SETTINGS.roles).toEqual({
+      orchestrate: { modelId: 'claude-opus-5-5', thinking: 'high' },
+      plan: { modelId: 'claude-opus-5-5', thinking: 'high' },
+      oracle: { modelId: 'gpt-6.1-sol', thinking: 'high' },
+      debug: { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
+      'task-easy': { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
+      'task-medium': { modelId: 'claude-sonnet-5-5', thinking: 'high' },
+      'task-hard': { modelId: 'claude-opus-5-5', thinking: 'high' },
+      'task-extreme': { modelId: 'claude-opus-5-5', thinking: 'xhigh' },
+      research: { modelId: 'claude-sonnet-5-5', thinking: 'medium' },
+      small: { modelId: 'claude-haiku-5-5', thinking: 'medium' },
+      review: { modelId: 'gpt-6.1-sol', thinking: 'high' },
+    });
+    // Claude 5.5 models reject thinking off; no default may ask for it.
+    for (const role of Object.values(DEFAULT_ORCHESTRATION_SETTINGS.roles)) {
+      expect(['off', 'minimal']).not.toContain(role.thinking);
+    }
+  });
+
+  it('rejects invalid orchestration settings without changing stored state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-settings-'));
+    const file = join(root, 'pi', 'settings.json');
+    const store = createPiSettingsStore({ file });
+    await store.update({ orchestration: { workerLimit: 3 } });
+    for (const orchestration of [
+      { workerLimit: 0 },
+      { workerLimit: 17 },
+      { workerLimit: 2.5 },
+      { gate: true },
+      { gate: [] },
+      { gate: { enabled: 'yes' } },
+      { gate: { minAvailableBytes: -1 } },
+      { gate: { minAvailableBytes: 1.5 } },
+      { gate: { minAvailableBytes: 1024 ** 4 + 1 } },
+      { roles: { planner: { modelId: 'x' } } },
+      { roles: { implementation: { modelId: 'x' } } },
+      { roles: { implement: { modelId: 'x' } } },
+      { roles: { 'implement-easy': { modelId: 'x' } } },
+      { roles: { task: { modelId: 'x' } } },
+      { roles: { small: { modelId: '' } } },
+      { roles: { small: { modelId: 'x', thinking: 'loud' } } },
+      { roles: [] },
+      { wakes: { coalesceMs: -1 } },
+      { wakes: { coalesceMs: 60_001 } },
+      { watchdog: { stallAfterMs: 59_999 } },
+      { watchdog: { stallAfterMs: 7_200_001 } },
+      { watchdog: { enabled: 'yes' } },
+      { github: { enabled: 'yes' } },
+      { wakes: [] },
+      { worktreeRoot: 'relative/path' },
+      { worktreeRoot: 7 },
+      { orchestrators: ['session-a'] },
+      { orchestrators: { 'session-a': false } },
+      { orchestrators: { 'session-a': 'yes' } },
+      { orchestrators: { ' ': true } },
+      { quietWorkers: ['worker-a'] },
+      { quietWorkers: { 'worker-a': false } },
+      'four',
+    ]) {
+      await expect(store.update({ orchestration })).rejects.toMatchObject({ code: 'PI_SETTINGS_INVALID' });
+    }
+    await expect(store.read()).resolves.toEqual({ version: 1, orchestration: { workerLimit: 3 } });
   });
 });

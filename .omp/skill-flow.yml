@@ -1,0 +1,18 @@
+# Authority: AGENTS.md, Project Skills trigger table.
+path_skills:
+  - paths: ["packages/*/src/**/*.ts", "packages/*/src/**/*.tsx", "packages/*/src/**/*.css", "packages/*/src/**/*.json", "packages/mobile/scripts/**/*.mjs", "packages/mobile/**/*.swift", "packages/mobile/**/*.java", "packages/mobile/**/*.gradle", "packages/mobile/**/*.xml", "packages/mobile/**/*.plist", "packages/mobile/**/*.pbxproj", "packages/mobile/**/*.ts", "packages/mobile/**/*.mjs", "packages/mobile/**/*.json", "packages/mobile/**/*.png", "packages/mobile/**/*.svg", "packages/web/server/**/*.js", "packages/web/server/**/*.ts", "packages/web/bin/**/*.js", "packages/electron/**/*.mjs", "packages/electron/**/*.cjs", "scripts/**/*.mjs", "package.json", "packages/*/package.json", "bun.lock", "bun-patches/**", "Dockerfile", "docker-compose*.yml", "eslint.config.js", "postcss.config.js", "tsconfig.json", "vite.config.ts"]
+    must: [pichamber-change-discipline]
+  - paths: ["packages/electron/**/*.mjs", "packages/electron/**/*.cjs"]
+    must: [desktop-shell]
+  - paths: ["packages/ui/src/sync/*.ts", "packages/ui/src/sync/*.tsx", "packages/ui/src/stores/**/*.ts", "packages/ui/src/stores/**/*.tsx"]
+    must: [sync-state-invariants]
+  - paths: ["packages/ui/src/components/**/*.tsx", "packages/ui/src/components/**/*.ts", "packages/ui/src/styles/*.css", "packages/ui/src/App.css", "packages/ui/src/index.css"]
+    must: [theme-system]
+  - paths: ["packages/web/bin/**/*.js"]
+    must: [clack-cli-patterns]
+  - paths: ["packages/web/server/**/*.js", "packages/web/server/**/*.ts", "packages/ui/src/lib/runtime-fetch*.ts"]
+    must: [ui-api-decoupling]
+  - paths: ["packages/ui/src/lib/relay/*.ts", "packages/web/server/lib/relay/*.js"]
+    must: [relay-transport]
+  - paths: ["packages/ui/src/components/views/settings/*.tsx", "packages/ui/src/components/views/settings/*.ts", "packages/ui/src/components/views/Settings*.tsx"]
+    must: [settings-ui-patterns]

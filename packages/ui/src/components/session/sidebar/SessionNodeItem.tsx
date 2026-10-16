@@ -6,16 +6,17 @@ import { cn } from '@/lib/utils';
 import { canUseElectronDesktopIPC, invokeDesktop } from '@/lib/desktop';
 import { Icon } from '@/components/icon/Icon';
 import { AgentThinkingLoader } from '@/components/chat/AgentThinkingLoader';
-import { DraggableSessionRow } from './sessionFolderDnd';
 import type { SessionNodeChildRenderExtras } from './sessionNodeItemUtils';
 import { renderHighlightedText } from './highlightedText';
 import { SessionActivityDuration } from '@/components/session/SessionActivityDuration';
 import { SessionUnreadDot } from './SessionUnreadDot';
+import { QuietWorkerMarker } from './QuietWorkerMarker';
 import { getRuntimeBearerTokenSync } from '@/lib/runtime-auth';
 import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
 import { QuickSessionAction } from './QuickSessionAction';
 import { SessionNodeExportDialog } from './SessionNodeExportDialog';
+import { SessionRenameDialog } from './SessionRenameDialog';
 import { SessionNodeContextMenuContent, SessionNodeDropdownMenuContent } from './SessionNodeContextMenu';
 import { holdSessionRowPosition } from './sessionRowAnchor';
 import { collectNodeDescendantIds, useSessionExport } from './useSessionExport';
@@ -23,47 +24,6 @@ import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore'
 import type { SessionNodeItemProps } from './sessionNodeTypes';
 import { areSessionNodeItemPropsEqual } from './sessionNodeComparators';
 import { useSessionNodeItemMetadata } from './useSessionNodeItemMetadata';
-import { useGitHubSelectedRepo } from '@/stores/useGitHubScopeStore';
-import { openPullRequestInSurface } from '@/components/views/github/openPullRequestInSurface';
-
-/** Clickable PR badge: opens the PR in the Pull requests surface (§6.6). */
-const PrBadgeButton: React.FC<{
-  prDirectory: string | null;
-  prNumber: number;
-  prStatusLabel: string | null;
-  prIconColor: string | undefined;
-}> = ({ prDirectory, prNumber, prStatusLabel, prIconColor }) => {
-  const repo = useGitHubSelectedRepo(prDirectory);
-  if (!prDirectory || !repo) {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1"
-        style={prIconColor ? { color: prIconColor } : undefined}
-        title={prStatusLabel ? `PR #${prNumber} — ${prStatusLabel}` : `PR #${prNumber}`}
-      >
-        <Icon name="git-pull-request" className="size-3.5 shrink-0" />
-        <span>#{prNumber}</span>
-      </span>
-    );
-  }
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        openPullRequestInSurface(prDirectory, repo, prNumber);
-      }}
-      className="inline-flex shrink-0 items-center gap-1 rounded hover:bg-interactive-hover"
-      style={prIconColor ? { color: prIconColor } : undefined}
-      title={prStatusLabel ? `PR #${prNumber} — ${prStatusLabel}. Open in Pull requests` : `Open PR #${prNumber} in Pull requests`}
-      aria-label={prStatusLabel ? `Open pull request #${prNumber}, ${prStatusLabel}, in Pull requests` : `Open pull request #${prNumber} in Pull requests`}
-    >
-      <Icon name="git-pull-request" className="size-3.5 shrink-0" />
-      <span>#{prNumber}</span>
-    </button>
-  );
-};
-
 export type { Folder, SecondaryMeta, SessionNodeItemProps } from './sessionNodeTypes';
 
 function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode {
@@ -75,7 +35,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     projectId,
     archivedBucket = false,
     pinnedSessionIds,
-    expandedParents,
     hasSessionSearchQuery,
     normalizedSessionSearchQuery,
     editingId,
@@ -84,7 +43,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     setEditTitle,
     handleSaveEdit,
     handleCancelEdit,
-    toggleParent,
     handleSessionSelect,
     handleSessionDoubleClick,
     togglePinnedSession,
@@ -107,7 +65,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     allowQuickArchiveAction,
     renderSessionNode,
     secondaryMeta,
-    renderContext = 'project',
+    renderContext = 'tree',
+    mobileVariant,
     subtreeContainsEditing,
     menuOpenSessionId,
     childRenderExtrasFor,
@@ -128,23 +87,16 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const formRef = React.useRef<HTMLFormElement>(null);
 
   const menuInstanceKey = `${renderContext}:${archivedBucket ? 'archived' : 'active'}:${node.session.id}`;
-  const expansionKey = menuInstanceKey;
 
   const {
     session,
     sessionDirectory,
-    prDirectory,
-    prBranch,
-    prNumber,
     isActive,
     tooltipProjectLabel,
     tooltipBranchLabel,
     isGitRepo,
     subtaskCount,
     agentName,
-    prSummary,
-    prIconColor,
-    prStatusLabel,
     selectionScopeKey,
     selectionModeEnabled,
     isRowSelected,
@@ -155,7 +107,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     sessionTitle,
     hasChildren,
     isPinnedSession,
-    isExpanded,
     needsAttention,
     sessionCompactUpdatedLabel,
     forkSolid,
@@ -166,9 +117,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     projectId,
     secondaryMeta,
     pinnedSessionIds,
-    expandedParents,
-    expansionKey,
-    hasSessionSearchQuery,
   });
 
   const {
@@ -196,7 +144,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   }, [session.id, sessionDirectory]);
 
   React.useEffect(() => {
-    if (editingId !== session.id) return;
+    if (editingId !== session.id || mobileVariant) return;
     const handleDocMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       const withinRenameForm = target?.closest?.(`[data-session-rename-form="${CSS.escape(session.id)}"]`);
@@ -206,7 +154,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     };
     document.addEventListener('mousedown', handleDocMouseDown);
     return () => document.removeEventListener('mousedown', handleDocMouseDown);
-  }, [editingId, session.id]);
+  }, [editingId, mobileVariant, session.id]);
 
   React.useLayoutEffect(() => {
     if (editingId !== session.id) {
@@ -226,30 +174,14 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const pinnedMarkerContent = (
     <Icon name="pushpin" className="h-3 w-3 flex-shrink-0 text-primary" aria-label={'Pinned session'} />
   );
-  const leadingIndicators = showPinnedMarker ? (
-    <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">{pinnedMarkerContent}</span>
+  const leadingIndicators = showPinnedMarker || session.parentID ? (
+    <>
+      {showPinnedMarker ? (
+        <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">{pinnedMarkerContent}</span>
+      ) : null}
+      {session.parentID && !archivedBucket ? <QuietWorkerMarker sessionId={session.id} /> : null}
+    </>
   ) : null;
-  const subsessionChevron = hasChildren ? (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        toggleParent(expansionKey);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          event.stopPropagation();
-          toggleParent(expansionKey);
-        }
-      }}
-      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
-      aria-label={isExpanded ? 'Collapse subsessions' : 'Expand subsessions'}
-    >
-      {isExpanded ? <Icon name="arrow-down-s" className="h-3 w-3" /> : <Icon name="arrow-right-s" className="h-3 w-3" />}
-    </button>
-  ) : null;
-
   const handleMenuOpenChange = (open: boolean) => {
     if (open) {
       setIsContextMenuOpen(false);
@@ -358,7 +290,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
 
   return (
     <React.Fragment key={session.id}>
-      <DraggableSessionRow sessionId={session.id} sessionDirectory={sessionDirectory ?? null} sessionTitle={sessionTitle}>
         <ContextMenu.Root
           open={isContextMenuOpen}
           onOpenChange={handleContextMenuOpenChange}
@@ -374,16 +305,13 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                 data-global-session={secondaryMeta?.globalSession ? '1' : undefined}
                 onClick={handleRowBackgroundClick}
                 style={{
-                  ...(depth > 0 ? { marginLeft: `${depth * 14}px` } : undefined),
                   ...(rowBackground ? { backgroundColor: rowBackground } : undefined),
                 }}
                 className={cn(
-                  'group relative my-0.5 flex cursor-pointer items-center rounded-xl px-3 py-2 transition-colors',
-                  !rowBackground && depth > 0
-                    ? 'bg-secondary/30 hover:bg-interactive-hover'
-                    : !rowBackground
-                      ? 'hover:bg-interactive-hover'
-                      : 'hover:brightness-[1.07] dark:hover:brightness-[1.18]',
+                  'group relative flex min-h-6 min-w-0 flex-1 cursor-pointer items-center rounded-md px-1.5 transition-colors',
+                  !rowBackground
+                    ? 'hover:bg-interactive-hover'
+                    : 'hover:brightness-[1.07] dark:hover:brightness-[1.18]',
                   !rowBackground && isActive && !isRowSelected && 'bg-interactive-selection',
                   !rowBackground && isRowSelected && 'bg-interactive-selection',
                 )}
@@ -391,9 +319,8 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
             }
           >
             <div className="flex min-w-0 flex-1 items-center gap-1.5">
-              {subsessionChevron}
               {leadingIndicators}
-              {editingId === session.id ? (
+              {editingId === session.id && !mobileVariant ? (
                 <form
                   ref={formRef}
                   data-session-rename-form={session.id}
@@ -458,63 +385,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                     </div>
                   </div>
 
-                  {(secondaryMeta?.showFolderLabel && tooltipProjectLabel) ||
-                  tooltipBranchLabel ||
-                  isGitRepo ||
-                  prSummary ||
-                  subtaskCount > 0 ||
-                  (agentName && agentName !== 'default') ||
-                  showActivityDuration ? (
-                    <div className="flex w-full min-w-0 items-center gap-2 overflow-hidden pt-0.5 typography-ui-label font-normal text-muted-foreground">
-                      {secondaryMeta?.showFolderLabel && tooltipProjectLabel ? (
-                        <span className="min-w-0 max-w-[110px] shrink-0 truncate">{tooltipProjectLabel}</span>
-                      ) : null}
-
-                      {tooltipBranchLabel ? (
-                        <span className="inline-flex min-w-0 max-w-[160px] shrink-0 items-center gap-1">
-                          <Icon
-                            name="git-branch"
-                            className={cn('size-3.5 shrink-0', !prIconColor && 'text-muted-foreground')}
-                            style={prIconColor ? { color: prIconColor } : undefined}
-                          />
-                          <span className="truncate">{tooltipBranchLabel}</span>
-                        </span>
-                      ) : isGitRepo ? (
-                        <span className="inline-flex shrink-0 items-center gap-1">
-                          <Icon name="git-repository" className="size-3.5 shrink-0 text-muted-foreground" />
-                          <span>git</span>
-                        </span>
-                      ) : null}
-
-                      {prSummary && prNumber != null ? (
-                        <PrBadgeButton
-                          prDirectory={prDirectory}
-                          prNumber={prNumber}
-                          prStatusLabel={prStatusLabel}
-                          prIconColor={prIconColor}
-                        />
-                      ) : null}
-
-                      {subtaskCount > 0 ? (
-                        <span className="inline-flex shrink-0 items-center gap-1">
-                          <Icon name="node-tree" className="size-3.5 shrink-0" />
-                          <span>{subtaskCount}</span>
-                        </span>
-                      ) : null}
-
-                      {agentName && agentName !== 'default' ? (
-                        <span className="min-w-0 max-w-[80px] shrink-0 truncate">{agentName}</span>
-                      ) : null}
-
-                      {showActivityDuration ? (
-                        <SessionActivityDuration
-                          sessionId={session.id}
-                          running={isStreaming}
-                          className="text-muted-foreground/70"
-                        />
-                      ) : null}
-                    </div>
-                  ) : null}
                 </button>
               )}
             </div>
@@ -573,32 +443,16 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           </ContextMenu.Trigger>
           {contextMenuContent}
         </ContextMenu.Root>
-      </DraggableSessionRow>
-      {hasChildren && isExpanded
-        ? node.children.map((child): React.ReactNode => {
-            const childRenderExtras: SessionNodeChildRenderExtras = childRenderExtrasFor
-              ? childRenderExtrasFor(child)
-              : {
-                  subtreeContainsEditing,
-                  menuOpenSessionId,
-                  nodeStructureKey: '',
-                };
-            return (
-              <React.Fragment key={child.session.id}>
-                {renderSessionNode(
-                  child,
-                  depth + 1,
-                  sessionDirectory ?? groupDirectory,
-                  projectId,
-                  archivedBucket,
-                  secondaryMeta?.globalSession ? { globalSession: true } : undefined,
-                  renderContext,
-                  childRenderExtras,
-                )}
-              </React.Fragment>
-            );
-          })
-        : null}
+      {/* The dedicated mobile drawer indents rows, which leaves the inline field about 55 px: rename in a dialog there. */}
+      {mobileVariant && editingId === session.id ? (
+        <SessionRenameDialog
+          open
+          value={renameDraft}
+          onChange={setRenameDraft}
+          onSave={() => handleSaveEdit(renameDraft)}
+          onCancel={handleCancelEdit}
+        />
+      ) : null}
       <SessionNodeExportDialog
         open={exportDialogOpen}
         onOpenChange={setExportDialogOpen}

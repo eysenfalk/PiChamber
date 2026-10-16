@@ -1,4 +1,4 @@
-<!-- The description is the plan (docs/workflow.md). Open the pull request as a draft and wait for approval before implementing. The pull-request check requires every section below. -->
+<!-- The description is the plan (docs/workflow.md). Open the pull request as a draft at the first plan, after exploring. Slices go into Acceptance criteria (the checklist) and Approach (ordered steps, one commit each); name the lane (fast or slow) in Approach. In the slow lane wait for the go before implementing; the fast lane builds right away. The pull-request check requires every section below. -->
 
 ## Issue
 
@@ -10,7 +10,7 @@
 
 ## Acceptance criteria
 
-<!-- A checklist. Each item is an observable result plus the proof that shows it (test, recording or screenshots, CI job). Check an item off ("- [x]") as soon as it is done and proven; open items are allowed only while the pull request is a draft. -->
+<!-- A checklist. Each item is an observable result plus the proof that shows it (test, recording or screenshots, CI job). Check an item off ("- [x]") as soon as it is done and proven; open items are allowed only while the pull request is a draft. Work that can only happen after the merge (for example publishing a release) is not a criterion: put it in Approach and give it its own issue. -->
 
 ## Approach
 

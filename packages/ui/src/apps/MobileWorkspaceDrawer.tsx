@@ -5,6 +5,7 @@ import { motion } from 'motion/react';
 import { Icon } from '@/components/icon/Icon';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { TerminalView } from '@/components/views/TerminalView';
+import { RemoteBrowserPane } from '@/components/browser/RemoteBrowserPane';
 import { cn } from '@/lib/utils';
 import { MOBILE_DRAWER_DURATION_MS, MOBILE_DRAWER_EASING, useDrawerSwipe } from './useDrawerSwipe';
 import { getVisibleMobileWorkspaceTabs } from './mobileWorkspaceTabs';
@@ -143,7 +144,8 @@ export const MobileWorkspaceDrawer = React.memo(function MobileWorkspaceDrawer({
     const previousOverflow = document.body.style.overflow;
     if (variant === 'drawer') document.body.style.overflow = 'hidden';
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && tab !== 'terminal') handleClose();
+      // Terminal and Browser forward Escape to their own targets.
+      if (event.key === 'Escape' && tab !== 'terminal' && tab !== 'browser') handleClose();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
@@ -286,6 +288,13 @@ export const MobileWorkspaceDrawer = React.memo(function MobileWorkspaceDrawer({
           <div className={cn('h-full', tab !== 'terminal' && 'hidden')}>
             <ErrorBoundary>
               <TerminalView visible={open && tab === 'terminal'} />
+            </ErrorBoundary>
+          </div>
+        ) : null}
+        {visitedTabs.has('browser') ? (
+          <div className={cn('relative h-full', tab !== 'browser' && 'hidden')}>
+            <ErrorBoundary>
+              <RemoteBrowserPane density="touch" visible={open && tab === 'browser'} />
             </ErrorBoundary>
           </div>
         ) : null}

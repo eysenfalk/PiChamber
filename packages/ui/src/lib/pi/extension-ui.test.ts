@@ -1,5 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-import { normalizeExtensionCommandArgs, parseExtensionChatItem, PI_EXTENSION_UI_CUSTOM_TYPE } from './extension-ui'
+import { isChatVisibleExtensionItem, normalizeExtensionCommandArgs, parseExtensionChatItem, PI_EXTENSION_UI_CUSTOM_TYPE } from './extension-ui'
+
+describe('isChatVisibleExtensionItem', () => {
+  test('hides state entries an extension appends for itself', () => {
+    expect(isChatVisibleExtensionItem({ customType: 'sandy-context.notebook' })).toBe(false)
+    expect(isChatVisibleExtensionItem({ customType: 'sandy-context.summary', text: '' })).toBe(false)
+  })
+
+  test('shows displayed messages and entries PiChamber renders', () => {
+    expect(isChatVisibleExtensionItem({ customType: 'my-extension', text: 'hello' })).toBe(true)
+    expect(isChatVisibleExtensionItem({ customType: 'my-extension', details: { a: 1 } })).toBe(true)
+    expect(isChatVisibleExtensionItem({ customType: PI_EXTENSION_UI_CUSTOM_TYPE })).toBe(true)
+    expect(isChatVisibleExtensionItem({ customType: 'pichamber.explore' })).toBe(true)
+    expect(isChatVisibleExtensionItem({ customType: 'subagent_supervisor_reply' })).toBe(true)
+  })
+})
 
 describe('normalizeExtensionCommandArgs', () => {
   test('removes command separators and control characters', () => {

@@ -2,6 +2,9 @@ import React from 'react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { Icon } from "@/components/icon/Icon";
+import { ProjectVisibilityMenu, type ProjectVisibilityEntry } from './ProjectVisibilityMenu';
+import { WorkerFilterMenu } from './WorkerFilterMenu';
+import type { WorkerFilterMode } from './workspaceTree';
 
 type Props = {
   hideDirectoryControls: boolean;
@@ -20,6 +23,17 @@ type Props = {
   setSessionSearchQuery: (value: string) => void;
   hasSessionSearchQuery: boolean;
   searchMatchCount: number;
+  /** Hidden projects that appear because they hold a match. */
+  hiddenProjectMatchCount: number;
+  visibilityEntries: readonly ProjectVisibilityEntry[];
+  hiddenProjectIds: ReadonlySet<string>;
+  onSetProjectHidden: (id: string, hidden: boolean) => void;
+  onShowAllProjects: () => void;
+  onHideAllProjects: () => void;
+  workerFilter: WorkerFilterMode;
+  onWorkerFilterChange: (mode: WorkerFilterMode) => void;
+  /** False until the orchestration registry was read; the filter then shows every session. */
+  workersKnown: boolean;
   selectionModeEnabled: boolean;
   onToggleSelectionMode: () => void;
   /** Dedicated mobile: occupy the same header band as the chat and workspace drawers. */
@@ -44,6 +58,15 @@ export function SidebarHeader(props: Props): React.ReactNode {
     setSessionSearchQuery,
     hasSessionSearchQuery,
     searchMatchCount,
+    hiddenProjectMatchCount,
+    visibilityEntries,
+    hiddenProjectIds,
+    onSetProjectHidden,
+    onShowAllProjects,
+    onHideAllProjects,
+    workerFilter,
+    onWorkerFilterChange,
+    workersKnown,
     selectionModeEnabled,
     onToggleSelectionMode,
     mobileVariant = false,
@@ -153,19 +176,37 @@ export function SidebarHeader(props: Props): React.ReactNode {
           </div>
 
           <div className={cn('flex shrink-0 items-center', mobileVariant ? 'gap-1' : 'gap-1.5')}>
+            <ProjectVisibilityMenu
+              entries={visibilityEntries}
+              hidden={hiddenProjectIds}
+              onSetHidden={onSetProjectHidden}
+              onShowAll={onShowAllProjects}
+              onHideAll={onHideAllProjects}
+              buttonClassName={actionClassName}
+              iconClassName={headerActionIconClass}
+            />
+
+            <WorkerFilterMenu
+              mode={workerFilter}
+              onChange={onWorkerFilterChange}
+              workersKnown={workersKnown}
+              buttonClassName={actionClassName}
+              iconClassName={headerActionIconClass}
+            />
+
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   onClick={() => setIsSessionSearchOpen((prev) => !prev)}
                   className={actionClassName}
-                  aria-label={"Search sessions"}
+                  aria-label={"Search"}
                   aria-expanded={isSessionSearchOpen}
                 >
                   <Icon name="search" className={headerActionIconClass} />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom" sideOffset={4}><p>{"Search sessions"}</p></TooltipContent>
+              <TooltipContent side="bottom" sideOffset={4}><p>{"Search"}</p></TooltipContent>
             </Tooltip>
 
             <Tooltip>
@@ -194,25 +235,20 @@ export function SidebarHeader(props: Props): React.ReactNode {
 
         {isSessionSearchOpen ? (
           <div className={cn(mobileVariant ? 'pb-2' : 'pb-1')}>
-            <div className="mb-1 flex items-center justify-between px-0.5 typography-micro text-muted-foreground/80">
-              {hasSessionSearchQuery ? (
-                <span>{searchMatchCount === 1
-                  ? `${searchMatchCount} match`
-                  : `${searchMatchCount} matches`}</span>
-              ) : <span />}
-            </div>
             <div className="relative">
               <Icon name="search" className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
                 ref={sessionSearchInputRef}
+                autoFocus
+                aria-label={"Search projects, branches and sessions"}
                 value={sessionSearchQuery}
                 onChange={(event) => setSessionSearchQuery(event.target.value)}
-                placeholder={"Search sessions..."}
+                placeholder={"Search projects, branches, sessions…"}
                 className="h-8 w-full rounded-md border border-border bg-transparent pl-8 pr-8 typography-ui-label text-foreground outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                 onKeyDown={(event) => {
                   if (event.key === 'Escape') {
                     event.stopPropagation();
-                    if (hasSessionSearchQuery) {
+                    if (sessionSearchQuery.length > 0) {
                       setSessionSearchQuery('');
                     } else {
                       setIsSessionSearchOpen(false);
@@ -231,6 +267,22 @@ export function SidebarHeader(props: Props): React.ReactNode {
                 </button>
               ) : null}
             </div>
+            {hasSessionSearchQuery ? (
+              <div role="status" className="mt-1 flex items-center justify-between px-1 typography-micro text-muted-foreground">
+                <span>{searchMatchCount === 1 ? '1 match' : `${searchMatchCount} matches`}</span>
+                {hiddenProjectMatchCount > 0 ? (
+                  <span
+                    role="img"
+                    aria-label={hiddenProjectMatchCount === 1 ? 'Matches in 1 hidden project' : `Matches in ${hiddenProjectMatchCount} hidden projects`}
+                    title={hiddenProjectMatchCount === 1 ? 'Matches in 1 hidden project' : `Matches in ${hiddenProjectMatchCount} hidden projects`}
+                    className="inline-flex items-center gap-1"
+                  >
+                    <Icon name="eye-off" className="size-3" />
+                    {hiddenProjectMatchCount}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

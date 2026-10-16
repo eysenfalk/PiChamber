@@ -9,8 +9,10 @@ import type { IconName } from '@/components/icon/icons';
  * - PR detail shows Overview and Checks: the drawer renders
  *   `PullRequestsSurface hideFilesTab`. Files/review on mobile is a follow-up.
  * - No composer link picker on mobile (no attach-menu entry point).
+ * - Browser is the remote view of the laptop desktop app's browser (#163,
+ *   ADR 0012), the same view hosted web shows outside Electron.
  */
-export type MobileWorkspaceTab = 'changes' | 'files' | 'terminal' | 'pull-requests' | 'issues';
+export type MobileWorkspaceTab = 'changes' | 'files' | 'terminal' | 'browser' | 'pull-requests' | 'issues';
 
 export type MobileWorkspaceTabDef = {
   id: MobileWorkspaceTab;
@@ -22,6 +24,7 @@ export const MOBILE_WORKSPACE_TABS: readonly MobileWorkspaceTabDef[] = [
   { id: 'changes', label: 'Changes', icon: 'git-branch' },
   { id: 'files', label: 'Files', icon: 'file-text' },
   { id: 'terminal', label: 'Terminal', icon: 'terminal-box' },
+  { id: 'browser', label: 'Browser', icon: 'global' },
   // Intentional mobile difference: GitHub tabs are availability-gated (see
   // `getVisibleMobileWorkspaceTabs`) and keep-alive mounted like the core
   // tabs once visited, while desktop remounts these singleton surfaces on

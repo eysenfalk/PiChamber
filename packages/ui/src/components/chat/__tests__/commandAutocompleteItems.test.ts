@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   commandMatchesCategory,
-  commandMatchesSearch,
   mergeCommandAutocompleteItems,
 } from '../commandAutocompleteItems';
 
@@ -65,7 +64,6 @@ describe('mergeCommandAutocompleteItems', () => {
       ...skills[0],
       searchAliases: ['Plugin command description'],
     }]);
-    expect(commandMatchesSearch(merged[0], 'plugin command')).toBe(true);
   });
 
   test('built-ins win collisions with commands and skills without losing search aliases', () => {

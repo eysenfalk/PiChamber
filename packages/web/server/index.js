@@ -19,6 +19,7 @@ import { createDockerInitialLocalSettings, createPiUiSettingsStore } from './lib
 import { detectLinuxDistribution } from './lib/server/linux-distribution.js';
 import { createNotificationDeliveryRuntime } from './lib/notifications/delivery-runtime.js';
 import { createPiNotificationWatcher } from './lib/notifications/pi-notification-watcher.js';
+import { createPrWatchPoller } from './lib/pi/pr-watch-poller.js';
 import { registerNotificationRoutes } from './lib/notifications/routes.js';
 import { registerWorkspaceIntegrations } from './lib/workspace/host.js';
 import { createPiSessionDaemonSupervisor } from './lib/pi/session-daemon/supervisor.js';
@@ -162,6 +163,7 @@ export async function startWebUiServer(options = {}) {
   // the getter and report unavailable until it exists.
   let piSessionDaemonRuntime = null;
   let notificationWatcher = null;
+  let prWatchPoller = null;
   const uiSettingsStore = createPiUiSettingsStore({
     initialLocalSettings: process.env.PICHAMBER_DEPLOYMENT_KIND === 'docker'
       ? createDockerInitialLocalSettings()
@@ -278,7 +280,7 @@ export async function startWebUiServer(options = {}) {
   app.get('/api/pichamber/tunnel/doctor', requireTunnelAuth, async (req, res) => {
     try { const status = await tunnelService.getStatus(); const checkResult = await tunnelService.check(); res.json({ ok: true, status, check: checkResult, query: req.query }); } catch (error) { res.status(500).json({ ok: false, error: error?.message || 'Doctor failed' }); }
   });
-  const workspaceRuntime = registerWorkspaceIntegrations({ app, server, express, uiAuthController, dataDir: PICHAMBER_DATA_DIR, liveRevocation });
+  const workspaceRuntime = registerWorkspaceIntegrations({ app, server, express, uiAuthController, dataDir: PICHAMBER_DATA_DIR, liveRevocation, remoteBrowserHost: options.remoteBrowserHost ?? null });
   registerStaticRoutes(app, { apiOnly });
 
   await listen(server, port, host);
@@ -306,12 +308,15 @@ export async function startWebUiServer(options = {}) {
     uiSettingsStore,
     delivery: notificationDelivery,
   });
+  prWatchPoller = createPrWatchPoller({ supervisor: piSessionDaemonRuntime, readPullWatch: workspaceRuntime.readPullWatch });
   void piSessionDaemonRuntime.start()
     .catch((error) => {
       console.warn(`[PiSessionDaemon] unavailable: ${error?.code ?? 'DAEMON_UNAVAILABLE'}`);
     })
     .finally(() => {
-      if (!stopped) return notificationWatcher?.start();
+      if (stopped) return undefined;
+      prWatchPoller?.start();
+      return notificationWatcher?.start();
     });
   const controller = {
     expressApp: app,
@@ -334,6 +339,7 @@ export async function startWebUiServer(options = {}) {
       piRuntimeRoutes.closeEventStreams();
       await Promise.allSettled([
         notificationWatcher?.stop(),
+        prWatchPoller?.stop(),
         workspaceRuntime.shutdown(),
         piSessionDaemonRuntime ? piSessionDaemonRuntime.stop() : Promise.resolve(),
         close(server),

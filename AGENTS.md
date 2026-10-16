@@ -49,17 +49,17 @@ Shared contracts must define intentional behavior for every applicable runtime: 
 
 ## Workflow
 
-Work follows [docs/workflow.md](docs/workflow.md) ([ADR 0002](docs/adr/0002-workflow-from-jira-connector.md)); `workflow.json` names the tracker.
+Work follows [docs/workflow.md](docs/workflow.md) ([ADR 0002](docs/adr/0002-workflow-from-jira-connector.md), [ADR 0013](docs/adr/0013-one-pull-request-with-slices.md)); `workflow.json` names the tracker.
 
 1. A GitHub issue in `eysenfalk/PiChamber` says what is missing and how we know it is done. Planned work is a roadmap item: an issue labeled `roadmap` and a sub-issue of the roadmap issue (`tracker.roadmap` in `workflow.json`), whose order is the order of work.
-2. Branch `<issue>-short-name` from `origin/main`, push it, and open a **draft** pull request from `.github/PULL_REQUEST_TEMPLATE.md`. The description is the plan.
-3. Wait for the user to approve the plan. Do not implement before.
+2. Explore first; notes go into an issue comment, there is no pull request yet. At the first plan, branch `<issue>-short-name` from `origin/dev`, push it, and open a **draft** pull request from `.github/PULL_REQUEST_TEMPLATE.md`. The description is the plan: slices are checklist items in Acceptance criteria and ordered steps in Approach (one slice, one commit), and Approach names the lane. One pull request per undertaking; several only when a part must be live before the rest ([ADR 0013](docs/adr/0013-one-pull-request-with-slices.md)).
+3. **Fast lane:** a bug fix with a red test first, or a one-slice change with clear acceptance criteria, no new dependency and no change to an external contract (API, persisted data, config format, visible UI behavior). Build right away. A change that only touches documentation is never fast. **Slow lane:** everything else, and every documentation only change (several slices, an external contract, a migration or deletion, a new dependency, a one-way door, a product question, questions left open). Wait for the user's go after the draft; meanwhile only read, probe, prototype and write red tests, no production code. A worker may move to slow, never to fast.
 4. Implement and prove: tests, and for anything a user sees, a recording or screenshots of the real program that you have looked at completely, with how to reproduce them. Check off each acceptance criterion in the description as soon as it is done and proven.
 5. Decisions go into `docs/adr/`, findings from outside the code into `CONTEXT.md`, settled entries leave `CONTEXT.md`, all in the same pull request. The squash merge closes the issue, which takes it off the roadmap.
 6. Before the hand-over, check the whole description against the current code, CI result and proof, then mark the pull request ready. The user merges (squash only).
 
-Without asking, agents may: create and push branches other than `main`, open and update draft pull requests in `eysenfalk/PiChamber`, create issues, place and reorder roadmap items and add ideas to the roadmap issue (`node scripts/workflow/roadmap-sync.mjs`, docs/workflow.md), and add `Proposed` decision records.
-Only with approval: implement a plan, mark a pull request ready or merge it, push to `main`, rewrite pushed history, tags and releases, repository settings, close issues, and anything in an upstream repository.
+Without asking, agents may: create and push branches other than `main` and `dev`, open and update draft pull requests in `eysenfalk/PiChamber`, create issues, including ideas, place and reorder roadmap items (`node scripts/workflow/roadmap-sync.mjs`, docs/workflow.md), and add `Proposed` decision records.
+Only with approval: implement a slow lane plan (the go), mark a pull request ready or merge it, push to `main` or `dev` (pull requests merge into `dev`; `main` only fast-forwards to stable states, [ADR 0008](docs/adr/0008-dev-integration-branch.md)), rewrite pushed history, tags and releases, repository settings, close issues, and anything in an upstream repository.
 
 ## Correctness Invariants
 
@@ -91,12 +91,13 @@ skill matching the character of the change before editing; multiple skills may
 apply, including companion skills required by another skill. Read every
 task-required reference named by those skills. Skills are canonical for their
 detailed workflows and checklists. Treating this table as optional advice is a
-process violation.
+process violation. In omp sessions, `.omp/skill-flow.yml` enforces a path-based subset of this table and must be kept in sync with it.
 
 | Trigger | Required skill |
 |---|---|
 | Any source, dependency, export, build-config, generated-asset, package-contract, or module-ownership change | `pichamber-change-discipline` |
 | Visual proof, lab tours, recordings or proof publishing | `pichamber-verify` |
+| Hunting unknown bugs: QA, chaos or exploratory testing, "try to break it", or checking a change's assumptions against the real environment | `chaos-qa` |
 | CLI commands, prompts, terminal output, non-TTY, `--quiet`, or `--json` behavior | `clack-cli-patterns` |
 | Shared UI data access, Pi API, `RuntimeAPIs`, runtime fetch/auth/URLs, bridges/proxies, runtime switching, or server API routes | `ui-api-decoupling` |
 | Electron main/preload, IPC, native UI, updater, deep links, SSH/tunnels, packaging, or child processes | `desktop-shell` |
@@ -108,6 +109,7 @@ process violation.
 | Settings UI, settings dialogs, configuration surfaces, or settings search | `settings-ui-patterns` |
 | Sortable or drag-to-reorder behavior, especially `@dnd-kit` and touch/wrapping layouts | `drag-to-reorder` |
 | iOS Simulator build, launch, preview, gestures, or `serve-sim` control | `serve-sim` |
+| Acting as the owner's standing orchestrator session: overview, taking in work, spawning, briefing, watching, unsticking or stopping workers, review rounds, host capacity, cleanup after merge, model roles | `orchestrator` |
 
 Pure code-reading or explanation does not require implementation skills unless needed to interpret a specialized subsystem.
 

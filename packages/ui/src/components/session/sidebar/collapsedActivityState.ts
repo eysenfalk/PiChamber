@@ -1,8 +1,8 @@
 import type { SessionNode } from './types';
 
-export type CollapsedActivityState = 'active' | 'unread' | null;
+type CollapsedActivityState = 'active' | 'unread' | null;
 
-export const mergeCollapsedActivityStates = (
+const mergeCollapsedActivityStates = (
   current: CollapsedActivityState,
   next: CollapsedActivityState,
 ): CollapsedActivityState => {

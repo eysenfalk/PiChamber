@@ -11,6 +11,11 @@ import { getStoredMobileKeyboardMode, type MobileKeyboardMode } from '@/lib/mobi
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { normalizeDirectoryPathKey } from '@/lib/directoryPathKey';
 import type { TerminalShell } from '@/lib/api/types';
+import {
+  DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
+  normalizeAutoFetchIntervalMinutes,
+  type AutoFetchIntervalMinutes,
+} from '@/lib/autoFetchSettings';
 import { useFilesViewTabsStore } from './useFilesViewTabsStore';
 import {
   type MainTab,
@@ -165,6 +170,9 @@ interface UIStore {
   /** Width of the walkthrough table of contents, in pixels. */
   walkthroughTocWidth: number;
   gitChangesViewMode: 'flat' | 'tree';
+  /** Fetch the remotes of the repositories in the sidebar on a timer (slice 6 of #95). */
+  gitAutoFetchEnabled: boolean;
+  gitAutoFetchIntervalMinutes: AutoFetchIntervalMinutes;
   isTimelineDialogOpen: boolean;
   isPromptNavigatorPanelOpen: boolean;
   isImagePreviewOpen: boolean;
@@ -294,6 +302,8 @@ interface UIStore {
   setDiffWrapLines: (wrap: boolean) => void;
   setWalkthroughTocWidth: (width: number) => void;
   setGitChangesViewMode: (mode: 'flat' | 'tree') => void;
+  setGitAutoFetchEnabled: (enabled: boolean) => void;
+  setGitAutoFetchIntervalMinutes: (minutes: AutoFetchIntervalMinutes) => void;
   setTimelineDialogOpen: (open: boolean) => void;
   setPromptNavigatorPanelOpen: (open: boolean) => void;
   togglePromptNavigatorPanel: () => void;
@@ -391,6 +401,8 @@ export const useUIStore = create<UIStore>()(
         diffWrapLines: false,
         walkthroughTocWidth: 224,
         gitChangesViewMode: 'flat',
+        gitAutoFetchEnabled: false,
+        gitAutoFetchIntervalMinutes: DEFAULT_AUTO_FETCH_INTERVAL_MINUTES,
         isTimelineDialogOpen: false,
         isPromptNavigatorPanelOpen: false,
         isImagePreviewOpen: false,
@@ -952,6 +964,9 @@ export const useUIStore = create<UIStore>()(
 
         closeMainSurfaces: () => {
           const state = get();
+          if (state.activeMainTab === 'control') {
+            get().setActiveMainTab('chat');
+          }
           if (!state.isArchivePageOpen) {
             return;
           }
@@ -1182,6 +1197,14 @@ export const useUIStore = create<UIStore>()(
 
         setGitChangesViewMode: (mode) => {
           set({ gitChangesViewMode: mode });
+        },
+
+        setGitAutoFetchEnabled: (enabled) => {
+          set({ gitAutoFetchEnabled: enabled === true });
+        },
+
+        setGitAutoFetchIntervalMinutes: (minutes) => {
+          set({ gitAutoFetchIntervalMinutes: normalizeAutoFetchIntervalMinutes(minutes) });
         },
  
         setInputBarOffset: (offset) => {
@@ -1705,6 +1728,9 @@ export const useUIStore = create<UIStore>()(
 
           state.fileEditorKeymap = normalizeFileEditorKeymap(state.fileEditorKeymap);
 
+          state.gitAutoFetchEnabled = state.gitAutoFetchEnabled === true;
+          state.gitAutoFetchIntervalMinutes = normalizeAutoFetchIntervalMinutes(state.gitAutoFetchIntervalMinutes);
+
           state.githubSelectedRepoByDirectory = clampGitHubSelectionRoots(
             sanitizeGitHubSelectionByDirectory(state.githubSelectedRepoByDirectory),
             GITHUB_SELECTION_MAX_ROOTS,
@@ -1765,6 +1791,8 @@ export const useUIStore = create<UIStore>()(
           diffWrapLines: state.diffWrapLines,
           walkthroughTocWidth: state.walkthroughTocWidth,
           gitChangesViewMode: state.gitChangesViewMode,
+          gitAutoFetchEnabled: state.gitAutoFetchEnabled,
+          gitAutoFetchIntervalMinutes: state.gitAutoFetchIntervalMinutes,
           nativeNotificationsEnabled: state.nativeNotificationsEnabled,
           notificationMode: state.notificationMode,
           showTerminalQuickKeysOnDesktop: state.showTerminalQuickKeysOnDesktop,

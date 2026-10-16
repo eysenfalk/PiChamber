@@ -12,9 +12,12 @@ import { useOlderHistoryDemand } from './hooks/useOlderHistoryDemand';
 import { applyCompactionOverlay } from './lib/turns/applyCompactionOverlay';
 import { applyRetryOverlay } from './lib/turns/applyRetryOverlay';
 import { buildLiveStreamingEntry, type StreamingTailEntry } from './lib/turns/streamingTailEntry';
+import { groupExtensionRuns, type ExtensionRunEntry } from './lib/turns/extensionRuns';
+import { ExtensionMessageRun } from './message/parts/extension/ExtensionMessageRun';
 import { collectUngroupedAfterTailTurn } from './lib/turns/tailTurnUngrouped';
 import { revealTurnAssistantMessage } from './lib/turns/turnAssistantReveal';
 import { getNormalizedMessageForDisplay, hasCompactionPart } from './lib/messageDisplayNormalization';
+import { isChatVisibleExtensionItem } from '@/lib/pi/extension-ui';
 import { FadeInDisabledProvider } from './message/FadeInOnReveal';
 import { hasPendingUserSendAnimation, consumePendingUserSendAnimation } from '@/lib/userSendAnimation';
 import { streamPerfCount, streamPerfMark, streamPerfMeasure } from '@/stores/utils/streamDebug';
@@ -40,8 +43,18 @@ import {
 
 const MESSAGE_LIST_VIRTUALIZE_THRESHOLD = 5;
 const EMPTY_STATIC_ENTRY_MESSAGES: ChatMessageEntry[] = [];
+
+const isChatVisibleMessage = (message: ChatMessageEntry): boolean => {
+    const info = message.info as { role?: string; customType?: string; text?: unknown; details?: unknown };
+    if (info.role !== 'extension') return true;
+    return isChatVisibleExtensionItem({
+        customType: info.customType,
+        text: typeof info.text === 'string' ? info.text : undefined,
+        details: info.details,
+    });
+};
 const EMPTY_UNGROUPED_MESSAGE_IDS = new Set<string>();
-const EMPTY_TRAILING_UNGROUPED_ENTRIES: StreamingTailEntry[] = [];
+const EMPTY_TRAILING_UNGROUPED_ENTRIES: Array<StreamingTailEntry | ExtensionRunEntry> = [];
 const TIMELINE_CACHE_LIMIT = 16;
 
 const sameKeys = (a: readonly string[] | undefined, b: readonly string[] | undefined): boolean => {
@@ -207,6 +220,7 @@ type RenderEntry =
         previousMessage?: ChatMessageEntry;
         nextMessage?: ChatMessageEntry;
     }
+    | ExtensionRunEntry
     | { kind: 'history-gate'; key: string; turns: TurnRecord[] }
     | { kind: 'turn'; key: string; turn: TurnRecord; isLastTurn: boolean; nextEntryFirstMessage?: ChatMessageEntry };
 
@@ -257,6 +271,10 @@ const MessageListEntry = React.memo(({
                 activeStreamingPhase={activeStreamingPhase}
                 />
         );
+    }
+
+    if (entry.kind === 'extension-run') {
+        return <ExtensionMessageRun customType={entry.customType} messages={entry.messages} />;
     }
 
     if (entry.kind === 'history-gate') {
@@ -570,11 +588,16 @@ const StaticHistoryList = React.memo(({ entries, engine, contentRef, scrollRef, 
                         const entry = renderEntries[item.index];
                         if (!entry) return null;
                         return (
+                            // flow-root: measureElement reads the row's border box, so a
+                            // child margin collapsing out of the row would add layout
+                            // height the virtualizer never counts, and the live tail
+                            // below would be drawn over the last history rows.
                             <div
                                 key={entry.key}
                                 data-index={item.index}
                                 ref={tanstackVirtualizer.measureElement}
                                 data-turn-entry={entry.key}
+                                className="flow-root"
                             >
                                 {renderEntry(entry)}
                             </div>
@@ -747,6 +770,9 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                 }
                 seenIds.add(messageId);
             }
+            if (!isChatVisibleMessage(message)) {
+                continue;
+            }
             dedupedMessages.push(getNormalizedMessageForDisplay(
                 typeof messageId === 'string' ? latestById.get(messageId) ?? message : message,
             ));
@@ -875,10 +901,10 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
             });
         });
 
-        return orderedEntries;
+        return groupExtensionRuns(orderedEntries);
     }), [projection.lastTurnId, staticEntryMessages, staticEntryUngroupedIds, staticTurns, tailTurnUngroupedIds]);
 
-    const trailingUngroupedEntries = React.useMemo<StreamingTailEntry[]>(() => {
+    const trailingUngroupedEntries = React.useMemo<Array<StreamingTailEntry | ExtensionRunEntry>>(() => {
         if (tailTurnUngroupedIds.size === 0) {
             return EMPTY_TRAILING_UNGROUPED_ENTRIES;
         }
@@ -893,7 +919,7 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                 nextMessage: index < staticEntryMessages.length - 1 ? staticEntryMessages[index + 1] : undefined,
             });
         });
-        return entries;
+        return groupExtensionRuns(entries);
     }, [staticEntryMessages, tailTurnUngroupedIds]);
 
     const trailingStreamingEntry = React.useMemo<StreamingTailEntry | undefined>(() => {
@@ -944,7 +970,9 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                     const nextEntry = staticRenderEntries[index + 1];
                     return nextEntry && nextEntry.kind === 'turn'
                         ? nextEntry.turn.userMessage
-                        : nextEntry?.kind === 'ungrouped' ? nextEntry.message : undefined;
+                        : nextEntry?.kind === 'ungrouped'
+                            ? nextEntry.message
+                            : nextEntry?.kind === 'extension-run' ? nextEntry.messages[0] : undefined;
                 })()
                 : trailingEntryFirstMessage;
             if (!nextEntryFirstMessage) {
@@ -1094,6 +1122,12 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
         allEntries.forEach((entry, index) => {
             if (entry.kind === 'ungrouped') {
                 indexMap.set(entry.message.info.id, index);
+                return;
+            }
+            if (entry.kind === 'extension-run') {
+                entry.messages.forEach((message) => {
+                    indexMap.set(message.info.id, index);
+                });
                 return;
             }
             if (entry.kind === 'history-gate') {
@@ -1446,7 +1480,13 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                                 activeStreamingPhase={activeStreamingPhase}
                                                 />
                         ) : null}
-                        {trailingStreamingEntry?.kind === 'turn' ? trailingUngroupedEntries.map((ungroupedEntry) => (
+                        {trailingStreamingEntry?.kind === 'turn' ? trailingUngroupedEntries.map((ungroupedEntry) => ungroupedEntry.kind === 'extension-run' ? (
+                            <ExtensionMessageRun
+                                key={ungroupedEntry.key}
+                                customType={ungroupedEntry.customType}
+                                messages={ungroupedEntry.messages}
+                            />
+                        ) : (
                             <StreamingTailContent
                                 key={ungroupedEntry.key}
                                 entry={ungroupedEntry}

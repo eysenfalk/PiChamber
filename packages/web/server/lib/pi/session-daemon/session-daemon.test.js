@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { appendFile, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createConnection } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -108,8 +108,9 @@ class FakeRuntime {
     await this.rebindSession?.(session);
   }
 
-  async newSession({ setup } = {}) {
+  async newSession({ setup, parentSession } = {}) {
     const session = new FakeSession('pi-session-new');
+    if (parentSession) session.sessionManager.getHeader = () => ({ timestamp: '2026-01-01T00:00:00.000Z', parentSession });
     await setup?.(session.sessionManager);
     this.session = session;
     await this.rebindSession?.(session);
@@ -225,7 +226,15 @@ describe('Pi session daemon spike', () => {
   afterEach(async () => {
     await daemon?.stop();
     daemon = undefined;
+    vi.unstubAllEnvs();
   });
+
+  // Only a marked session may orchestrate (#136); the daemon reads the mark from its data root.
+  const markCallerAsOrchestrator = async (root) => {
+    vi.stubEnv('PICHAMBER_DATA_DIR', root);
+    await mkdir(join(root, 'pi'), { recursive: true });
+    await writeFile(join(root, 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration: { orchestrators: { caller: true } } }));
+  };
 
   it('uses the selected cwd and agent directory, restricts its Unix socket, and retains event sequencing across a client reconnect', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
@@ -812,6 +821,190 @@ describe('Pi session daemon spike', () => {
     await client.close();
   });
 
+  it('lists the readable sessions of a directory with a broken session file and still refuses to open the broken one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-broken-file-'));
+    const cwd = join(root, 'project');
+    const other = join(root, 'other');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd: other, agentDir });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(other, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    await writeFile(join(sessionDirectory, '2026-01-01T00-00-00-000Z_pi-valid.jsonl'), `${[
+      JSON.stringify({ type: 'session', version: 3, id: 'pi-valid', timestamp, cwd: other }),
+      JSON.stringify({ type: 'message', id: 'entry-user', parentId: null, timestamp, message: { role: 'user', content: [{ type: 'text', text: 'Readable prompt' }], timestamp: 0 } }),
+    ].join('\n')}\n`);
+    await writeFile(join(sessionDirectory, '2026-01-02T00-00-00-000Z_pi-broken.jsonl'), 'not json\n');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('listing and a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const listed = await client.request('sessions.list', { directory: other });
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-valid']);
+      // A partial list must say so, or a client takes the skipped session as deleted.
+      expect(listed.result.incomplete).toBe(true);
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-broken', command: 'sessions.open', payload: { sessionId: 'pi-broken', directory: other } })}\n`);
+      // The file exists but cannot be read: that is not "does not exist".
+      await expect(refused).resolves.toMatchObject({ error: { code: 'MALFORMED_SESSION_JSONL' } });
+    } finally {
+      warn.mockRestore();
+      await client.close();
+    }
+  });
+
+  it('reports a listed session with a broken transcript line as unreadable, and a missing id as not found', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-broken-body-'));
+    const cwd = join(root, 'project');
+    const agentDir = join(root, 'agent');
+    const sessionDirectory = getPiSessionDirectory({ cwd, agentDir });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(sessionDirectory, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    await writeFile(join(sessionDirectory, '2026-01-01T00-00-00-000Z_pi-body-broken.jsonl'), `${[
+      JSON.stringify({ type: 'session', version: 3, id: 'pi-body-broken', timestamp, cwd }),
+      JSON.stringify({ type: 'message', id: 'entry-user', parentId: null, timestamp, message: { role: 'user', content: [{ type: 'text', text: 'Readable prompt' }], timestamp: 0 } }),
+      'not json',
+    ].join('\n')}\n`);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const listed = await client.request('sessions.list', { directory: cwd });
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-body-broken']);
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-body-broken', command: 'sessions.open', payload: { sessionId: 'pi-body-broken', directory: cwd } })}\n`);
+      await expect(refused).resolves.toMatchObject({ error: { code: 'MALFORMED_SESSION_JSONL' } });
+    } finally {
+      warn.mockRestore();
+      await client.close();
+    }
+
+    // A genuinely absent id still answers INVALID_SESSION on a fresh connection.
+    const second = connectClient(testDaemonEndpoint(root));
+    await second.authenticate();
+    try {
+      const absent = second.next((message) => message.kind === 'error');
+      second.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: cwd } })}\n`);
+      await expect(absent).resolves.toMatchObject({ error: { code: 'INVALID_SESSION' } });
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('answers an unlistable directory as an incomplete lookup, not as a gone session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-unreadable-'));
+    const cwd = join(root, 'project');
+    const blocked = join(root, 'blocked');
+    const agentDir = join(root, 'agent');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(blocked, { recursive: true });
+    // A file where the session directory belongs makes that directory unlistable.
+    await mkdir(join(agentDir, 'sessions'), { recursive: true });
+    await writeFile(getPiSessionDirectory({ cwd: blocked, agentDir }), 'not a directory');
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async () => { throw new Error('a refused open must not start a runtime'); },
+    });
+    await daemon.start();
+    const client = connectClient(testDaemonEndpoint(root));
+    await client.authenticate();
+
+    try {
+      const refused = client.next((message) => message.kind === 'error');
+      client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open-absent', command: 'sessions.open', payload: { sessionId: 'pi-absent', directory: blocked } })}\n`);
+      // A failed lookup proves nothing: INVALID_SESSION would be read as a deletion.
+      await expect(refused).resolves.toMatchObject({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('does not call a session gone because its directory could not be read (#191)', async () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return; // chmod cannot hide a directory here
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-dir-denied-'));
+    const cwd = join(root, 'project');
+    const other = join(root, 'other');
+    const agentDir = join(root, 'agent');
+    await mkdir(cwd, { recursive: true });
+    await mkdir(other, { recursive: true });
+    const timestamp = '2026-01-01T00:00:00.000Z';
+    const seed = async (directory, id) => {
+      const sessionDirectory = getPiSessionDirectory({ cwd: directory, agentDir });
+      await mkdir(sessionDirectory, { recursive: true });
+      await writeFile(join(sessionDirectory, `2026-01-01T00-00-00-000Z_${id}.jsonl`), `${JSON.stringify({ type: 'session', version: 3, id, timestamp, cwd: directory })}\n`);
+      return sessionDirectory;
+    };
+    const deniedDirectory = await seed(cwd, 'pi-denied');
+    await seed(other, 'pi-other');
+    daemon = createSessionDaemon({
+      endpoint: testDaemonEndpoint(root),
+      credential,
+      cwd,
+      agentDir,
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession(options.sessionFile.includes('pi-other') ? 'pi-other' : 'pi-denied', options.sessionFile) }),
+    });
+    await daemon.start();
+    // A refused request closes its connection, so every open gets a fresh one.
+    const open = async (sessionId, directory) => {
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      try {
+        const reply = client.next((message) => message.kind === 'error' || message.kind === 'response');
+        client.socket.write(`${JSON.stringify({ protocolVersion: 1, kind: 'request', requestId: 'open', command: 'sessions.open', payload: { sessionId, directory } })}\n`);
+        return await reply;
+      } finally {
+        await client.close();
+      }
+    };
+
+    {
+      const client = connectClient(testDaemonEndpoint(root));
+      await client.authenticate();
+      const listed = await client.request('sessions.list', { directory: cwd });
+      await client.close();
+      expect(listed.result.sessions.map((item) => item.session.id)).toEqual(['pi-denied']);
+    }
+
+    {
+
+      await chmod(deniedDirectory, 0o000);
+      try {
+        // The session exists but its directory cannot be read: absence is not proven.
+        await expect(open('pi-denied', cwd)).resolves.toMatchObject({ error: { code: 'SESSION_JSONL_UNREADABLE' } });
+        // One unreadable directory does not block a session elsewhere.
+        await expect(open('pi-other', other)).resolves.toMatchObject({ result: { session: { id: 'pi-other' } } });
+      } finally {
+        await chmod(deniedDirectory, 0o755);
+      }
+
+      // Once the directory is readable again the session opens without a restart.
+      await expect(open('pi-denied', cwd)).resolves.toMatchObject({ result: { session: { id: 'pi-denied' } } });
+    }
+  });
+
   it('publishes session.updated when a session is first prompted', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-'));
     const endpoint = testDaemonEndpoint(root);
@@ -1028,6 +1221,197 @@ describe('Pi session daemon spike', () => {
     })).rejects.toThrow('Daemon connection closed');
   });
 
+  it('disposes sessions an orchestration call activated once they are idle again', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-idle-'));
+    await markCallerAsOrchestrator(root);
+    const endpoint = testDaemonEndpoint(root);
+    const callerFile = join(root, 'caller.jsonl');
+    const targetFile = join(root, 'target.jsonl');
+    await writeFile(callerFile, `{"type":"session","id":"caller","cwd":"${root}"}\n`);
+    await writeFile(targetFile, `{"type":"session","id":"target","cwd":"${root}"}\n`);
+    const runtimes = [
+      new FakeRuntime({ cwd: root, session: new FakeSession('caller', callerFile) }),
+      new FakeRuntime({ cwd: root, session: new FakeSession('target', targetFile) }),
+      new FakeRuntime({ cwd: root, session: new FakeSession('caller', callerFile) }),
+    ];
+    let created = 0;
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      idleTimeoutMs: 10,
+      listSessions: async () => [{ path: callerFile, id: 'caller', cwd: root }, { path: targetFile, id: 'target', cwd: root }],
+      createRuntime: async () => runtimes[created++],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.call', { sessionId: 'caller', tool: 'session_read', args: { sessionId: 'target' } }))
+      .resolves.toMatchObject({ result: { value: { sessionId: 'target' } } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[0].disposed).toBe(true);
+    expect(runtimes[1].disposed).toBe(true);
+
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[2].disposed).toBe(true);
+    await client.close();
+  });
+
+  it('keeps a target an orchestration abort activated alive until the abort ended, then disposes it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-abort-'));
+    await markCallerAsOrchestrator(root);
+    const endpoint = testDaemonEndpoint(root);
+    const callerFile = join(root, 'caller.jsonl');
+    const targetFile = join(root, 'target.jsonl');
+    await writeFile(callerFile, `{"type":"session","id":"caller","cwd":"${root}"}\n`);
+    await writeFile(targetFile, `{"type":"session","id":"target","cwd":"${root}"}\n`);
+    const target = new FakeSession('target', targetFile);
+    let finishAbort;
+    target.abort = () => new Promise((resolve) => { finishAbort = resolve; });
+    const runtimes = [
+      new FakeRuntime({ cwd: root, session: new FakeSession('caller', callerFile) }),
+      new FakeRuntime({ cwd: root, session: target }),
+    ];
+    let created = 0;
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      idleTimeoutMs: 10,
+      listSessions: async () => [{ path: callerFile, id: 'caller', cwd: root }, { path: targetFile, id: 'target', cwd: root }],
+      createRuntime: async () => runtimes[created++],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    const interrupted = client.request('orchestration.call', { sessionId: 'caller', tool: 'session_interrupt', args: { sessionId: 'target' } });
+    await vi.waitFor(() => expect(finishAbort).toBeTypeOf('function'));
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[1].disposed).toBe(false);
+    finishAbort();
+    await expect(interrupted).resolves.toMatchObject({ result: { value: { sessionId: 'target', interrupted: true } } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(runtimes[0].disposed).toBe(true);
+    expect(runtimes[1].disposed).toBe(true);
+    await client.close();
+  });
+
+  it('finds a caller behind a same-id transcript that does not validate', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-scan-'));
+    const endpoint = testDaemonEndpoint(root);
+    const agentDir = join(root, 'agent');
+    const storeA = join(agentDir, 'sessions', 'a');
+    const storeB = join(agentDir, 'sessions', 'b');
+    await mkdir(storeA, { recursive: true });
+    await mkdir(storeB, { recursive: true });
+    // Neither name carries the id, so only the header scan can find them.
+    const header = JSON.stringify({ type: 'session', id: 'caller', cwd: root });
+    await writeFile(join(storeA, 'broken.jsonl'), `${header}\nnot json\n`);
+    await writeFile(join(storeB, 'renamed.jsonl'), `${header}\n`);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir,
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
+    await client.close();
+  });
+
+  it('reports a failed caller lookup as retryable instead of a gone caller', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-orchestration-lookup-'));
+    const endpoint = testDaemonEndpoint(root);
+    const sessionFile = join(root, 'caller.jsonl');
+    await writeFile(sessionFile, `{"type":"session","id":"caller","cwd":"${root}"}\n`);
+    let listing = 'fail';
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      listSessions: async () => {
+        if (listing === 'fail') throw Object.assign(new Error('EIO'), { code: 'EIO' });
+        if (listing === 'incomplete') return Object.assign([], { incomplete: true });
+        return listing === 'empty' ? [] : [{ path: sessionFile, id: 'caller', cwd: root }];
+      },
+      createRuntime: async () => new FakeRuntime({ cwd: root, session: new FakeSession('caller', sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
+      .resolves.toMatchObject({ result: { error: { code: 'SESSION_LOOKUP_FAILED' } } });
+    // A listing that skipped a file it could not read may hide the caller.
+    listing = 'incomplete';
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
+      .resolves.toMatchObject({ result: { error: { code: 'SESSION_LOOKUP_FAILED' } } });
+    listing = 'empty';
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' }))
+      .resolves.toMatchObject({ result: { error: { code: 'ORCHESTRATION_CALLER_GONE' } } });
+    listing = 'found';
+    await expect(client.request('orchestration.caller', { sessionId: 'caller' })).resolves.toMatchObject({ result: { value: expect.anything() } });
+    await client.close();
+  });
+
+  it('answers the private pull request watch command with targets and accepts reads', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-prwatch-'));
+    // The daemon reads its orchestration registry from the data dir; keep it out of the host's.
+    vi.stubEnv('PICHAMBER_DATA_DIR', root);
+    const endpoint = testDaemonEndpoint(root);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir: join(root, 'agent'),
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.prWatch', {})).resolves.toMatchObject({ result: { targets: [] } });
+    await expect(client.request('orchestration.prWatch', { reads: [] })).resolves.toMatchObject({ result: { targets: [] } });
+    await client.close();
+  });
+
+  it('answers the private overview command, and a broken registry is an error result, not an empty overview', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-overview-'));
+    vi.stubEnv('PICHAMBER_DATA_DIR', root);
+    const endpoint = testDaemonEndpoint(root);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      agentDir: join(root, 'agent'),
+      listSessions: async () => [],
+      createRuntime: async (options) => new FakeRuntime({ cwd: options.cwd, session: new FakeSession('caller', options.sessionFile) }),
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    await expect(client.request('orchestration.overview', {})).resolves.toMatchObject({
+      result: { value: { orchestrators: [], dialogs: [], limit: { used: 0 }, host: expect.any(Object) } },
+    });
+    await mkdir(join(root, 'pi'), { recursive: true });
+    await writeFile(join(root, 'pi', 'orchestration-registry.json'), '{ broken');
+    const broken = await client.request('orchestration.overview', {});
+    expect(broken.result).toEqual({ error: { code: expect.any(String) } });
+    // The connection survives the failed read.
+    await expect(client.request('runtime.health', {})).resolves.toMatchObject({ result: { state: 'ready' } });
+    await client.close();
+  });
+
   it('keeps live message aliases across idle disposal and runtime reopening', async () => {
     const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-message-alias-idle-'));
     const endpoint = testDaemonEndpoint(root);
@@ -1181,6 +1565,83 @@ describe('Pi session daemon spike', () => {
     await expect(delta).resolves.toMatchObject({
       payload: { sessionId: 'pi-session-2', contentIndex: 0, delta: 'current' },
     });
+    await client.close();
+  });
+
+  it('lists the parent of a live session whose file Pi has not written yet', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-live-parent-'));
+    const endpoint = testDaemonEndpoint(root);
+    const parentFile = join(root, 'parent.jsonl');
+    await writeFile(parentFile, `{"type":"session","id":"pi-session-parent","cwd":"${root}"}\n`);
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      createRuntime: async () => new FakeRuntime({ cwd: root, session: new FakeSession('pi-session-1') }),
+      listSessions: async () => [{
+        path: parentFile,
+        id: 'pi-session-parent',
+        cwd: root,
+        created: new Date('2026-01-01T00:00:00.000Z'),
+        modified: new Date('2026-01-01T00:00:01.000Z'),
+      }],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+
+    // An orchestration worker is listed before its first message reaches
+    // disk; the sidebar nests it only if the live row names its parent.
+    await expect(client.request('sessions.create', { cwd: root, parentId: 'pi-session-parent' }))
+      .resolves.toMatchObject({ result: { session: { id: 'pi-session-new' } } });
+    const listed = await client.request('sessions.list', { directory: root });
+    expect(listed.result.sessions.find((item) => item.session.id === 'pi-session-new')?.session.parentId).toBe('pi-session-parent');
+    await client.close();
+  });
+
+  it('lists the parent of a worker whose parent lives in another directory or is unpersisted', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'pichamber-pi-daemon-foreign-parent-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(worktree);
+    const endpoint = testDaemonEndpoint(root);
+    // The orchestrator is live in `root` and has not written its file yet.
+    const liveParentFile = join(root, 'sessions', 'not-yet-written.jsonl');
+    daemon = createSessionDaemon({
+      endpoint,
+      credential,
+      cwd: root,
+      createRuntime: async () => {
+        const runtime = new FakeRuntime({ cwd: root, session: new FakeSession('pi-session-live-parent', liveParentFile) });
+        runtime.newSession = async () => ({ cancelled: false });
+        return runtime;
+      },
+      listSessions: async ({ cwd }) => cwd !== worktree ? [] : [
+        {
+          path: join(worktree, 'a.jsonl'), id: 'worker-of-persisted', cwd: worktree,
+          parentSessionPath: join(root, 'sessions', '2026-01-01T00-00-00-000Z_pi-session-orchestrator.jsonl'),
+          created: new Date('2026-01-01T00:00:00.000Z'), modified: new Date('2026-01-01T00:00:01.000Z'),
+        },
+        {
+          path: join(worktree, 'b.jsonl'), id: 'worker-of-live', cwd: worktree, parentSessionPath: liveParentFile,
+          created: new Date('2026-01-01T00:00:00.000Z'), modified: new Date('2026-01-01T00:00:01.000Z'),
+        },
+        {
+          path: join(worktree, 'c.jsonl'), id: 'worker-of-unknown', cwd: worktree, parentSessionPath: join(root, 'renamed.jsonl'),
+          created: new Date('2026-01-01T00:00:00.000Z'), modified: new Date('2026-01-01T00:00:01.000Z'),
+        },
+      ],
+    });
+    await daemon.start();
+    const client = connectClient(endpoint);
+    await client.authenticate();
+    await client.request('sessions.create', { cwd: root });
+
+    // Each worker sits in its own worktree, so its parent is not in this listing.
+    const listed = await client.request('sessions.list', { directory: worktree });
+    const parentOf = (id) => listed.result.sessions.find((item) => item.session.id === id)?.session.parentId;
+    expect(parentOf('worker-of-persisted')).toBe('pi-session-orchestrator');
+    expect(parentOf('worker-of-live')).toBe('pi-session-live-parent');
+    expect(parentOf('worker-of-unknown')).toBeUndefined();
     await client.close();
   });
 

@@ -66,13 +66,13 @@ describe('ExtensionMessageCard', () => {
         expect(markup).toContain('Reindex');
     });
 
-    test('starts non-GUI extension content as one collapsed row with the custom type and first line', () => {
+    test('starts non-GUI extension content as one collapsed row with a readable kind and first line', () => {
         const markup = renderCard({
             customType: 'my-extension',
             text: '\n  Status update\nsecond line',
             details: { count: 3 },
         });
-        expect(markup).toContain('my-extension');
+        expect(markup).toContain('My extension');
         expect(markup).toContain('Status update');
         expect(markup).toContain('aria-expanded="false"');
         expect(markup).toContain('data-extension-disclosure="collapsed"');
@@ -80,14 +80,38 @@ describe('ExtensionMessageCard', () => {
         expect(markup).not.toContain('second line');
     });
 
-    test('expanding the fallback row shows the preformatted content', () => {
+    test('labels an intercom message by its sender without Markdown markers', () => {
+        const markup = renderCard({
+            customType: 'intercom_message',
+            text: '**From #137 mobile composer (task-medium)** (/home/u/wt)\n\nBody',
+        });
+        expect(markup).toContain('Intercom');
+        expect(markup).toContain('From #137 mobile composer (task-medium)');
+        expect(markup).not.toContain('**');
+        expect(markup).not.toContain('intercom_message:');
+        expect(markup).not.toContain('/home/u/wt');
+    });
+
+    test('expanding the fallback row renders its text as Markdown', () => {
         const markup = renderCard({
             customType: 'my-extension',
-            text: 'Status update',
+            text: 'Status **update**',
             details: { count: 3 },
             defaultExpanded: true,
         });
         expect(markup).toContain('aria-expanded="true"');
+        expect(markup).toContain('data-markdown-content="true"');
+        expect(markup).toContain('Status **update**');
+        expect(markup).not.toContain('<pre');
+    });
+
+    test('expanding a fallback row without text shows the preformatted payload', () => {
+        const markup = renderCard({
+            customType: 'my-extension',
+            details: { count: 3 },
+            defaultExpanded: true,
+        });
+        expect(markup).toContain('<pre');
         expect(markup).toContain('&quot;count&quot;: 3');
     });
 
@@ -205,6 +229,47 @@ describe('ExtensionMessageCard supervisor rows', () => {
             expect(markup).toContain(props.customType ?? '');
             expect(markup).toContain('data-extension-disclosure="collapsed"');
             expect(markup).not.toContain('data-supervisor-message');
+        }
+    });
+});
+
+describe('ExtensionMessageCard orchestration results', () => {
+    const resultDetails = (overrides: Record<string, unknown> = {}) => ({
+        sessionId: 'worker-1',
+        title: 'Fix the parser',
+        cwd: '/work/repo',
+        outcome: 'completed',
+        role: 'task-medium',
+        ...overrides,
+    });
+    const resultText = 'Worker "Fix the parser" (worker-1) finished.\n\nParser fixed.\nAll tests pass.';
+
+    test('renders a worker result as one compact row with title, outcome, role and first reply line', () => {
+        const markup = renderCard({ customType: 'pichamber.orchestration.result', text: resultText, details: resultDetails() });
+        expect(markup).toContain('data-orchestration-result="completed"');
+        expect(markup).toContain('Fix the parser');
+        expect(markup).toContain('finished');
+        expect(markup).toContain('Parser fixed.');
+        expect(markup).toContain('task-medium');
+        expect(markup).toContain('aria-label="Open worker Fix the parser"');
+        expect(markup).toContain('aria-expanded="false"');
+        expect(markup).not.toContain('All tests pass.');
+        expect(markup).not.toContain('(worker-1) finished');
+    });
+
+    test('expands to the full reply and labels failed workers', () => {
+        const expanded = renderCard({ customType: 'pichamber.orchestration.result', text: resultText, details: resultDetails(), defaultExpanded: true });
+        expect(expanded).toContain('All tests pass.');
+        expect(expanded).toContain('/work/repo');
+        expect(renderCard({ customType: 'pichamber.orchestration.result', text: 'Worker failed.', details: resultDetails({ outcome: 'error' }) }))
+            .toContain('data-orchestration-result="error"');
+    });
+
+    test('falls back to the generic card for malformed result details', () => {
+        for (const details of [undefined, 'x', resultDetails({ outcome: 'done' }), resultDetails({ sessionId: '' }), resultDetails({ cwd: 3 })]) {
+            const markup = renderCard({ customType: 'pichamber.orchestration.result', text: resultText, details });
+            expect(markup).not.toContain('data-orchestration-result');
+            expect(markup).toContain('data-extension-disclosure="collapsed"');
         }
     });
 });

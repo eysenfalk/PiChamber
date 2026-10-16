@@ -256,6 +256,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['retry', 'retries', 'retry limit', 'auto retry', 'max retries', 'agent run'],
   },
   {
+    id: 'sessions.orchestration-worker-limit',
+    page: 'sessions',
+    title: "Worker limit",
+    description: "How many unfinished worker sessions one orchestrating session tree may run.",
+    keywords: ['orchestration', 'workers', 'worker limit', 'subagents', 'parallel', 'concurrency', 'pichamber tools'],
+  },
+  {
+    id: 'sessions.orchestration-roles',
+    page: 'sessions',
+    title: "Worker roles",
+    description: "Model and thinking level for each worker role, from orchestrate and plan to small tasks and review.",
+    keywords: ['orchestration', 'workers', 'roles', 'model', 'orchestrate', 'plan', 'oracle', 'debug', 'task', 'easy', 'medium', 'hard', 'extreme', 'research', 'review', 'small', 'effort', 'subagents'],
+  },
+  {
     id: 'sessions.thinking-defaults',
     page: 'sessions',
     title: "Thinking defaults",
@@ -395,6 +409,20 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     page: 'git',
     title: "Display Gitignored Files",
     keywords: ['ignored', 'files', 'gitignore'],
+  },
+  {
+    id: 'git.auto-fetch',
+    page: 'git',
+    title: "Auto fetch",
+    description: "Fetches the remotes of the repositories in the sidebar in the background.",
+    keywords: ['fetch', 'remote', 'ahead', 'behind', 'sync', 'background', 'pull'],
+  },
+  {
+    id: 'git.auto-fetch-interval',
+    page: 'git',
+    title: "Auto fetch interval",
+    description: "5, 15, 30 or 60 minutes between fetches.",
+    keywords: ['fetch', 'interval', 'minutes', 'hour', 'frequency'],
   },
   {
     id: 'projects.name',

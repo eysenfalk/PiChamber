@@ -11,6 +11,18 @@ One record per architecture or process decision: why it was made, what was decid
 | [0003](0003-roadmap-in-issues.md) | Roadmap in issues: one roadmap issue with ordered sub-issues and a generated graph | Accepted |
 | [0004](0004-proof-lab.md) | Proof lab in rootless podman with synthetic SDK sessions | Accepted |
 | [0005](0005-proof-attached-to-pull-requests.md) | Proof recorded in the lab and attached to the pull request | Accepted |
+| [0006](0006-intent-as-the-primitive.md) | Intent as the primitive: work organized by accepted intents, not by sessions | Proposed |
+| [0007](0007-ideas-as-issues.md) | Ideas as records of their own, kept as issues of the tracker | Accepted |
+| [0008](0008-dev-integration-branch.md) | Work merges into `dev`; `main` only fast-forwards to stable states | Accepted |
+| [0009](0009-spec-folder-for-multi-pr-features.md) | A feature delivered in several pull requests gets a temporary spec folder | Superseded by 0013 |
+| [0010](0010-orchestration-through-daemon-tools.md) | Orchestration through daemon-owned tools, an in-process adapter and a session-scoped MCP endpoint | Proposed |
+| [0011](0011-fixed-orchestrator.md) | Fixed orchestrator: registry, wakes and proven-merge cleanup | Proposed |
+| [0012](0012-phone-browser-as-remote-view.md) | The phone browser is a remote view of a page the laptop renders in the PiChamber browser profile | Accepted |
+| [0013](0013-one-pull-request-with-slices.md) | One pull request with slices, a draft at the first plan, a fast and a slow lane | Accepted |
+| [0014](0014-worker-tool-profiles.md) | Worker tool profiles: a recorded tool limit per worker, enforced by the daemon, not a sandbox | Proposed |
+| [0015](0015-phone-surface-by-screen-not-viewport.md) | A phone is decided by its physical screen, not by the viewport width | Accepted |
+| [0016](0016-owner-reads-and-answers-orchestration-through-private-daemon-commands.md) | The owner reads and answers orchestration through private daemon commands | Proposed |
+| [0017](0017-owner-questions-carry-a-complete-brief.md) | Owner questions and blockers carry a complete brief, enforced by the daemon | Proposed |
 
 ## Rules
 

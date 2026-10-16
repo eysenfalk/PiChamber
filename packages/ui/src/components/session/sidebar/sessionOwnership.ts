@@ -24,6 +24,10 @@ export type SessionOwnershipIndex = {
   sessionsByProject: Map<string, Session[]>;
   archivedSessionsByProject: Map<string, Session[]>;
   sessionsByScope: Map<string, Set<string>>;
+  /** Active sessions in a global directory ("Don't work in a folder"); they belong to no project. */
+  globalSessions: Session[];
+  /** Active sessions whose directory belongs to no registered project or worktree. */
+  unownedSessions: Session[];
   directoryResolutions: number;
 };
 
@@ -131,6 +135,8 @@ export const createSessionOwnershipIndex = (
   const sessionsByProject = new Map<string, Session[]>();
   const archivedSessionsByProject = new Map<string, Session[]>();
   const sessionsByScope = new Map<string, Set<string>>();
+  const globalSessions: Session[] = [];
+  const unownedSessions: Session[] = [];
 
   const resolveOwner = (directory: string | null): DirectoryOwner | null => {
     if (!directory) return null;
@@ -161,16 +167,21 @@ export const createSessionOwnershipIndex = (
     input: Session[],
     target: Map<string, Session[]>,
     scopeTarget?: Map<string, Set<string>>,
+    unplaced?: { global: Session[]; unowned: Session[] },
   ): void => {
     for (const session of input) {
       const directory = resolveSessionDirectory(session);
       if (isGlobalSessionDirectory(directory)) {
         // A global/home session intentionally has no project owner. Attaching it
         // to project buckets makes every folder show and select the same session.
+        unplaced?.global.push(session);
         continue;
       }
       const owner = resolveOwner(directory);
-      if (!owner) continue;
+      if (!owner) {
+        unplaced?.unowned.push(session);
+        continue;
+      }
       bySessionId.set(session.id, owner);
       const projectSessions = target.get(owner.projectId);
       if (projectSessions) {
@@ -188,7 +199,7 @@ export const createSessionOwnershipIndex = (
     }
   };
 
-  bucket(sessions, sessionsByProject, sessionsByScope);
+  bucket(sessions, sessionsByProject, sessionsByScope, { global: globalSessions, unowned: unownedSessions });
   bucket(archivedSessions, archivedSessionsByProject);
 
   return {
@@ -196,6 +207,8 @@ export const createSessionOwnershipIndex = (
     sessionsByProject,
     archivedSessionsByProject,
     sessionsByScope,
+    globalSessions,
+    unownedSessions,
     directoryResolutions: resolvedOwners.size,
   };
 };

@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { mkdir, readFile, writeFile, utimes, rm, readdir, lstat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -6,6 +7,7 @@ import { SessionManager } from '../../packages/web/node_modules/@earendil-works/
 import { getPiSessionDirectory } from '../../packages/web/server/lib/pi/session-daemon/session-jsonl.js';
 
 import { SEED_MANIFEST } from './seed-spec.mjs';
+import { LAB_HTML_RENDER_PROMPT, LAB_WORKTREE_WORKER, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 export { SessionManager, SEED_MANIFEST };
 
 const usage = { input: 80, output: 40, cacheRead: 0, cacheWrite: 0, totalTokens: 120,
@@ -35,6 +37,116 @@ function seedRenamedFork({ sourcePath, cwd, sessionDir, title, createdAt }) {
   return fork;
 }
 
+// SessionManager owns entry/header timestamps and has no clock parameter.
+// Seed synchronously under a scoped clock, then restore Date before any await or server starts.
+function withSeedClock(createdAt, write) {
+  const RealDate = Date;
+  let tick = 0;
+  globalThis.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [createdAt + tick++ * 1000])); }
+    static now() { return createdAt + tick * 1000; }
+  };
+  try { return write(); } finally { globalThis.Date = RealDate; }
+}
+
+function git(cwd, args, { allowFailure = false } = {}) {
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env,
+    GIT_AUTHOR_NAME: 'Lab', GIT_AUTHOR_EMAIL: 'lab@example.invalid', GIT_COMMITTER_NAME: 'Lab', GIT_COMMITTER_EMAIL: 'lab@example.invalid',
+    GIT_EDITOR: 'true' } });
+  if (result.error || (result.status !== 0 && !allowFailure)) throw result.error ?? new Error(result.stderr);
+  return result.status;
+}
+
+function commitFile(cwd, file, content, message) {
+  writeFileSync(join(cwd, file), content);
+  git(cwd, ['add', file]);
+  git(cwd, ['commit', '--quiet', '-m', message]);
+}
+
+/** The local bare remote of a project's remote-ahead worktree; a sibling of the project, discarded on a reseed. */
+export const remotePath = (root, project) => join(root, 'projects', `${project}-remote.git`);
+
+// The worktree pushes its branch to a local bare remote and tracks it; then a second clone adds one
+// commit to the remote branch. The worktree's remote-tracking ref stays behind until it fetches.
+function seedRemoteAhead(root, project, worktreePath, branch) {
+  const remote = remotePath(root, project);
+  git(root, ['init', '--bare', '--quiet', '--initial-branch=main', remote]);
+  git(worktreePath, ['remote', 'add', 'origin', remote]);
+  git(worktreePath, ['push', '--quiet', '--set-upstream', 'origin', branch]);
+  const clone = mkdtempSync(join(tmpdir(), 'pichamber-seed-remote-'));
+  try {
+    git(root, ['clone', '--quiet', '--branch', branch, remote, clone]);
+    commitFile(clone, 'remote-change.md', 'A commit made on the remote.\n', 'Remote change');
+    git(clone, ['push', '--quiet', 'origin', branch]);
+  } finally {
+    rmSync(clone, { recursive: true, force: true });
+  }
+}
+
+// Put the worktrees into the states the sidebar git pills show (slice 5 of #95).
+function seedWorktreeGitStates(root, projects) {
+  const stated = SEED_MANIFEST.worktrees.filter((worktree) => worktree.git);
+  for (const project of projects.filter((candidate) => stated.some((worktree) => worktree.project === candidate.name))) {
+    commitFile(project.path, 'README.md', `# ${project.name}\n\nSynthetic proof lab project. Main moved on.\n`, 'Main moves on');
+  }
+  for (const worktree of stated) {
+    const path = join(root, 'projects', `${worktree.project}-worktrees`, worktree.name);
+    if (worktree.git === 'remote-ahead') {
+      seedRemoteAhead(root, worktree.project, path, worktree.name);
+      continue;
+    }
+    git(path, ['branch', '--quiet', '--set-upstream-to=main']);
+    if (worktree.git === 'dirty') {
+      writeFileSync(join(path, 'README.md'), '# Work in progress\n');
+      writeFileSync(join(path, 'notes.md'), 'Uncommitted notes.\n');
+    } else if (worktree.git === 'ahead-behind') {
+      commitFile(path, 'filter-1.md', 'First filter change.\n', 'First filter change');
+      commitFile(path, 'filter-2.md', 'Second filter change.\n', 'Second filter change');
+    } else if (worktree.git === 'rebase') {
+      commitFile(path, 'README.md', '# Conflicting change\n', 'Conflicting change');
+      if (git(path, ['rebase', '--quiet', 'main'], { allowFailure: true }) === 0) throw new Error(`Rebase in ${path} did not stop on a conflict`);
+    } else {
+      throw new Error(`Unknown worktree git state: ${worktree.git}`);
+    }
+  }
+}
+
+// A two-turn session, named before its first prompt.
+function seedShortSession({ cwd, sessionDir, title, createdAt }) {
+  const manager = SessionManager.create(cwd, sessionDir);
+  manager.appendModelChange('openai', 'gpt-4.1');
+  manager.appendSessionInfo(title);
+  for (let turn = 0; turn < 2; turn++) {
+    const timestamp = createdAt + turn * 60000;
+    manager.appendMessage({ role: 'user', content: `Synthetic question ${turn + 1}: ${title}.`, timestamp });
+    manager.appendMessage(assistant(`Synthetic answer ${turn + 1} for the proof lab.`, timestamp + 1000));
+  }
+  return manager;
+}
+
+// Issue #147: Pi custom messages as extensions append them. Two turns, nine intercom
+// messages between them, then subagent notices and an extension PiChamber does not know.
+function seedExtensionMessages({ cwd, sessionDir, title, createdAt }) {
+  const manager = SessionManager.create(cwd, sessionDir);
+  manager.appendModelChange('openai', 'gpt-4.1');
+  manager.appendSessionInfo(title);
+  manager.appendMessage({ role: 'user', content: 'Coordinate the lab workers and tell me when they report.', timestamp: createdAt });
+  manager.appendMessage(assistant('I am waiting for the workers to report over intercom.', createdAt + 1000));
+  const workers = ['#137 mobile composer (task-medium)', '#140 lab tours (task-easy)', '#141 docs index (task-easy)'];
+  for (let index = 0; index < 9; index++) {
+    const sender = workers[index % workers.length];
+    manager.appendCustomMessageEntry('intercom_message',
+      `**From ${sender}** (/lab/projects/lab-beta)\nReply with intercom to this session.\n\n_Delivered at 10:${String(index).padStart(2, '0')}_\n\nStatus ${index + 1}: the synthetic check **passed**. Next: \`bun run test\`.`, true);
+  }
+  manager.appendMessage({ role: 'user', content: 'Thanks. Start the background checks.', timestamp: createdAt + 60000 });
+  manager.appendMessage(assistant('The background checks are running.', createdAt + 61000));
+  for (let index = 0; index < 3; index++) {
+    manager.appendCustomMessageEntry('subagent-notify', `Background task completed: **check-${index + 1}**\n\nResult: all synthetic checks passed.`, true);
+  }
+  manager.appendCustomMessageEntry('lab-context-note', '## Context note\n\nOlder history was summarized for the lab.', true);
+  return manager;
+}
+
 // Every SDK operation gets an explicit volume-local session directory. Tests never use host Pi state.
 export async function seedLab(root, now = Date.now()) {
   if (!root || !resolve(root).endsWith('/lab')) throw new Error('Seed root must be an explicit directory named lab.');
@@ -52,18 +164,28 @@ export async function seedLab(root, now = Date.now()) {
   }
   let agentEntries = [];
   try { agentEntries = await readdir(agentDir); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (agentEntries.some(name => name !== 'sessions')) throw new Error('Seed agent directory must contain only sessions.');
+  if (agentEntries.some(name => !['sessions', 'extensions'].includes(name))) throw new Error('Seed agent directory must contain only sessions and the lab extensions.');
   // A previous interrupted seed has no marker: discard only manifest-owned project names.
-  for (const fixture of SEED_MANIFEST.projects) await rm(join(root, 'projects', fixture.name), { recursive: true, force: true });
+  for (const fixture of SEED_MANIFEST.projects) {
+    await rm(join(root, 'projects', fixture.name), { recursive: true, force: true });
+    await rm(join(root, 'projects', `${fixture.name}-worktrees`), { recursive: true, force: true });
+    await rm(remotePath(root, fixture.name), { recursive: true, force: true });
+  }
+  for (const fixture of SEED_MANIFEST.sessions) {
+    if (fixture.folder) await rm(join(root, 'folders', fixture.folder), { recursive: true, force: true });
+  }
   await rm(join(agentDir, 'sessions'), { recursive: true, force: true });
+  await rm(join(agentDir, 'extensions'), { recursive: true, force: true });
   const projects = [];
   const sessions = [];
   for (const [index, fixture] of SEED_MANIFEST.projects.entries()) {
     const cwd = join(root, 'projects', fixture.name);
     await mkdir(cwd, { recursive: true });
     await writeFile(join(cwd, 'README.md'), `# ${fixture.name}\n\nSynthetic proof lab project. No real user data.\n`);
-    const git = spawnSync('git', ['init', '--quiet', cwd], { encoding: 'utf8' });
-    if (git.error || git.status !== 0) throw git.error ?? new Error(git.stderr);
+    const init = spawnSync('git', ['init', '--quiet', '--initial-branch=main', cwd], { encoding: 'utf8' });
+    if (init.error || init.status !== 0) throw init.error ?? new Error(init.stderr);
+    git(cwd, ['add', 'README.md']);
+    git(cwd, ['commit', '--quiet', '-m', 'Initial commit']);
     projects.push({ name: fixture.name, path: cwd });
     const sessionDir = getPiSessionDirectory({ cwd, agentDir });
     const spec = SEED_MANIFEST.sessions.find((session) => session.project === fixture.name && ['long', 'short'].includes(session.role));
@@ -111,7 +233,7 @@ export async function seedLab(root, now = Date.now()) {
         const child = SessionManager.create(cwd, sessionDir, { parentSession: file });
         child.appendMessage({ role: 'user', content: 'Check the documentation in a subsession.', timestamp: createdAt + 2000000 });
         child.appendMessage(assistant('The README contains only synthetic proof lab data.', createdAt + 2001000));
-        child.appendSessionInfo('Lab: documentation subsession');
+        child.appendSessionInfo('Lab: docs check');
         files.push({ path: child.getSessionFile(), modified: createdAt + 2001000 });
         sessions.push({ project: fixture.name, title: child.getSessionName(), role: 'child',
           id: child.getSessionId(), path: child.getSessionFile(), directory: cwd, parentId: manager.getSessionId() });
@@ -127,7 +249,94 @@ export async function seedLab(root, now = Date.now()) {
     }
     for (const file of files) await utimes(file.path, new Date(createdAt), new Date(file.modified));
   }
+  await seedTreeFixtures({ root, agentDir, now, projects, sessions });
+  await seedOrchestrator({ root, agentDir, now, projects, sessions });
   const seed = { projects, sessions };
   await writeFile(marker, JSON.stringify(seed, null, 2) + '\n');
   return seed;
+}
+
+// Issue #107: an orchestrating session on the scripted faux model, which the
+// extension in the lab agent directory registers. It spawns one worker in its own directory
+// and one in a linked worktree of the same project (#179).
+async function seedOrchestrator({ root, agentDir, now, projects, sessions }) {
+  const spec = SEED_MANIFEST.sessions.find((session) => session.role === 'orchestrator');
+  const cwd = projects.find((project) => project.name === spec.project).path;
+  await mkdir(join(agentDir, 'extensions'), { recursive: true });
+  await writeFile(join(agentDir, 'extensions', 'faux-orchestration.js'), fauxOrchestrationExtension({ fauxUrl: resolveFauxUrl(), workerCwd: cwd,
+    worktreeWorkerCwd: join(root, 'projects', `${spec.project}-worktrees`, LAB_WORKTREE_WORKER.worktree) }));
+  const createdAt = now - 600000;
+  let manager;
+  withSeedClock(createdAt, () => {
+    manager = SessionManager.create(cwd, getPiSessionDirectory({ cwd, agentDir }));
+    manager.appendModelChange('faux', 'faux-1');
+    manager.appendSessionInfo(spec.title);
+    manager.appendMessage({ role: 'user', content: 'You orchestrate the lab. Wait for my word.', timestamp: createdAt });
+    manager.appendMessage(assistant('Scripted lab model: send ORCHESTRATE, STATUS or GO.', createdAt + 1000));
+  });
+  await utimes(manager.getSessionFile(), new Date(createdAt), new Date(createdAt + 1000));
+  // The pod's 4 GiB would always trip the host gate (lab.yaml: PICHAMBER_DATA_DIR=/lab/pichamber); the host protects itself.
+  // Only a marked session orchestrates (#136), so the seed marks this one.
+  await mkdir(join(root, 'pichamber', 'pi'), { recursive: true });
+  const orchestration = { gate: { enabled: false }, orchestrators: { [manager.getSessionId()]: true } };
+  await writeFile(join(root, 'pichamber', 'pi', 'settings.json'), JSON.stringify({ version: 1, orchestration }) + '\n');
+  sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory: cwd });
+}
+
+// Fixtures for the sidebar tree: a fork of the renamed fork, one session in each
+// linked worktree, a chat in the lab home and a session in an unregistered folder.
+async function seedTreeFixtures({ root, agentDir, now, projects, sessions }) {
+  const createdAt = now - 3600000;
+  const created = [];
+  for (const worktree of SEED_MANIFEST.worktrees) {
+    const project = projects.find((candidate) => candidate.name === worktree.project);
+    const path = join(root, 'projects', `${worktree.project}-worktrees`, worktree.name);
+    await mkdir(join(root, 'projects', `${worktree.project}-worktrees`), { recursive: true });
+    git(project.path, ['worktree', 'add', '--quiet', '-b', worktree.name, path]);
+  }
+  seedWorktreeGitStates(root, projects);
+  for (const folder of SEED_MANIFEST.sessions.filter((spec) => spec.folder)) {
+    await mkdir(join(root, 'folders', folder.folder), { recursive: true });
+  }
+  withSeedClock(createdAt, () => {
+    for (const [index, spec] of SEED_MANIFEST.sessions.entries()) {
+      const at = createdAt + index * 120000;
+      if (spec.role === 'fork-child') {
+        const parent = sessions.find((session) => session.role === 'fork' && session.project === spec.project);
+        const fork = SessionManager.forkFrom(parent.path, parent.directory, SessionManager.open(parent.path).getSessionDir());
+        fork.appendSessionInfo(spec.title);
+        fork.appendMessage({ role: 'user', content: 'Continue the fork in a second fork.', timestamp: at });
+        fork.appendMessage(assistant('The second fork continues from the renamed fork.', at + 1000));
+        created.push({ path: fork.getSessionFile(), modified: at + 1000 });
+        sessions.push({ ...spec, id: fork.getSessionId(), path: fork.getSessionFile(), directory: parent.directory, parentId: parent.id });
+        continue;
+      }
+      const cwd = spec.role === 'worktree' ? join(root, 'projects', `${spec.project}-worktrees`, spec.worktree)
+        : spec.role === 'chat' ? root
+          : spec.role === 'foreign' ? join(root, 'folders', spec.folder) : null;
+      if (spec.role === 'extensions') {
+        const directory = projects.find((candidate) => candidate.name === spec.project).path;
+        const manager = seedExtensionMessages({ cwd: directory, sessionDir: getPiSessionDirectory({ cwd: directory, agentDir }), title: spec.title, createdAt: at });
+        created.push({ path: manager.getSessionFile(), modified: at + 61000 });
+        sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory });
+        continue;
+      }
+      if (spec.role === 'html-render') {
+        const directory = projects.find((candidate) => candidate.name === spec.project).path;
+        const manager = SessionManager.create(directory, getPiSessionDirectory({ cwd: directory, agentDir }));
+        manager.appendModelChange('faux', 'faux-1');
+        manager.appendSessionInfo(spec.title);
+        manager.appendMessage({ role: 'user', content: 'Show me the build report when I ask.', timestamp: at });
+        manager.appendMessage(assistant(LAB_HTML_RENDER_PROMPT, at + 1000));
+        created.push({ path: manager.getSessionFile(), modified: at + 1000 });
+        sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory });
+        continue;
+      }
+      if (!cwd) continue;
+      const manager = seedShortSession({ cwd, sessionDir: getPiSessionDirectory({ cwd, agentDir }), title: spec.title, createdAt: at });
+      created.push({ path: manager.getSessionFile(), modified: at + 61000 });
+      sessions.push({ ...spec, id: manager.getSessionId(), path: manager.getSessionFile(), directory: cwd });
+    }
+  });
+  for (const file of created) await utimes(file.path, new Date(createdAt), new Date(file.modified));
 }

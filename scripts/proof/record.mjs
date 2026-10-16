@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
 import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from '../perf/cdp.mjs';
 import { evidenceExpression } from './visibility.mjs';
 import { createPageDiagnostics, captureFailureDiagnostics, writeFailureReport, diagnosticText } from './diagnostics.mjs';
-import { fixture, brokenFixture, forkRenameTour, labTour, validateTour, VIEWPORTS } from './tours.mjs';
+import { KEYS, addDeviceTour, controlCenterTour, extensionMessagesTour, fixture, brokenFixture, forkRenameTour, htmlRenderTour, labTour, orchestrationTour, recreatedWorktreeTour, sidebarTreeTour, toolProfilesTour, validateTour, VIEWPORTS, worktreeWorkerTour } from './tours.mjs';
 import { planFiles, captionArgs, videoArgs, contactSheetArgs, frameTimeline, proofIndex, wrapCaption } from './media.mjs';
 import { checkoutRevision, validateCheckout } from './checkout.mjs';
 
@@ -23,7 +23,7 @@ export function recordingUrl(value) {
 }
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
+const usage = 'node scripts/proof/record.mjs <fixture|fixture-broken|lab|fork-rename|add-device|sidebar-tree|orchestration|worktree-worker|extension-messages|html-render|recreated-worktree|tool-profiles|control-center> [--url URL] [--chrome PATH] [--ffmpeg PATH] [--manifest PATH]';
 const idleProbe = 'window.__proofLastMutation = performance.now(); new MutationObserver(() => { window.__proofLastMutation = performance.now(); }).observe(document, {subtree:true, childList:true, attributes:true, characterData:true});';
 
 // CDP defines an empty loaderId as a request fetched from a worker. Its finish
@@ -34,12 +34,16 @@ export const isStreamingResponse = event => event.type === 'EventSource' || even
 export function createPageNetworkGate(now = Date.now) {
   const pending = new Map();
   let changed = now();
+  let mainFrameId;
   const finished = event => { if (pending.delete(event.requestId)) changed = now(); };
   return {
     quiet: () => pending.size === 0 && now() - changed >= 500,
     handlers: {
       'Network.requestWillBeSent': event => {
-        if (tracksPageRequest(event)) { pending.set(event.requestId, event.loaderId); changed = now(); }
+        // A child frame's document may load in its own process (a sandboxed
+        // cross-origin iframe does), so its finish events never reach this target.
+        const childDocument = event.type === 'Document' && mainFrameId !== undefined && event.frameId !== mainFrameId;
+        if (tracksPageRequest(event) && !childDocument) { pending.set(event.requestId, event.loaderId); changed = now(); }
       },
       'Network.loadingFinished': finished,
       'Network.loadingFailed': finished,
@@ -48,6 +52,7 @@ export function createPageNetworkGate(now = Date.now) {
       // may never reach this target. Keep the new document's pending requests.
       'Page.frameNavigated': event => {
         if (event.frame.parentId) return;
+        mainFrameId = event.frame.id;
         for (const [id, loader] of pending) if (loader !== event.frame.loaderId) pending.delete(id);
         changed = now();
       },
@@ -60,6 +65,7 @@ function targetPoint(target) {
   const normalize = text => text.replace(/\s+/g, ' ').trim();
   const elements = target.selector ? [...document.querySelectorAll(target.selector)] : [...document.querySelectorAll('body *')]
     .filter(element => normalize(element.textContent) === normalize(target.text) && ![...element.children].some(child => normalize(child.textContent) === normalize(target.text)));
+  let covered = '';
   for (const element of elements) {
     const box = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -68,9 +74,10 @@ function targetPoint(target) {
       const x = box.left + box.width / 2, y = box.top + box.height / 2;
       const top = document.elementFromPoint(x, y);
       if (top && (element.contains(top) || top.contains(element))) return { x, y };
+      covered = top ? ` (covered by ${top.tagName.toLowerCase()}${top.getAttribute('aria-label') ? ` "${top.getAttribute('aria-label')}"` : ''})` : '';
     }
   }
-  throw new Error('Action target is missing, offscreen or covered');
+  throw new Error('Action target is missing, offscreen or covered' + covered);
 }
 
 export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputRoot = join(root, '.proof'), holdMs = 1200, signal, checkout, runtime = runtimeDefaults } = {}) {
@@ -115,10 +122,15 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
     await until(async () => network.quiet() &&
       await evaluate('document.readyState === "complete" && performance.now() - (window.__proofLastMutation || 0) >= 500'), 'page idle (500ms DOM and finite network quiet)');
   };
+  // Turning touch emulation off resets the pointer media queries to headless's "none", so only toggle it on a change.
+  let touch = false;
   const viewport = async name => {
     const size = VIEWPORTS[name];
     await send('Emulation.setDeviceMetricsOverride', { ...size, screenWidth: size.width, screenHeight: size.height, deviceScaleFactor: 1 });
-    await send('Emulation.setTouchEmulationEnabled', { enabled: size.mobile, maxTouchPoints: size.mobile ? 5 : 1 });
+    if (size.mobile !== touch) {
+      await send('Emulation.setTouchEmulationEnabled', { enabled: size.mobile, maxTouchPoints: size.mobile ? 5 : 1 });
+      touch = size.mobile;
+    }
   };
   const theme = async mode => {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: mode }] });
@@ -136,7 +148,10 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
   try {
     signal?.throwIfAborted();
     const port = await runtime.reservePort();
-    browser = runtime.launchChrome({ chrome: runtime.resolveChrome(chrome), profileDir, port, headless: true });
+    browser = runtime.launchChrome({ chrome: runtime.resolveChrome(chrome), profileDir, port, headless: true,
+      // Headless Chromium reports no mouse (hover: none). Desktop steps get a fine, hovering pointer as on a desktop;
+      // mobile steps turn on touch emulation, which switches the media queries to coarse and no hover.
+      extraArgs: ['--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4'] });
     const target = await runtime.createPageTarget(port);
     client = runtime.createClient(target.webSocketDebuggerUrl);
     await client.connect();
@@ -180,13 +195,39 @@ export async function recordTour(tour, { url, chrome, ffmpeg = 'ffmpeg', outputR
             (await evaluate(evidenceExpression([{ text: action.text }]))).ok, 'wait target');
         } else if (action.type === 'click' || action.type === 'type') {
           const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
-          await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
-          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+          const button = action.button ?? 'left';
+          await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button, clickCount: 1 });
+          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount: 1 });
           if (action.type === 'type') {
-            await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
-            await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
+            // A synthetic Ctrl+A is no editing command in Chromium; name the command so typing replaces the field.
+            await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2, commands: ['selectAll'] });
+            await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
             await send('Input.insertText', { text: action.value });
           }
+        } else if (action.type === 'hover') {
+          // Moves the pointer without pressing, so :hover styles and pointer-enter handlers apply.
+          const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
+          await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+        } else if (action.type === 'long-press') {
+          // A held finger on a touch viewport, longer than the 500 ms long press menus wait for.
+          const point = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action) + ')');
+          await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+          await runtime.wait(700);
+          await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        } else if (action.type === 'press') {
+          const key = { key: action.key, code: action.key, windowsVirtualKeyCode: KEYS[action.key] };
+          await send('Input.dispatchKeyEvent', action.key === 'Enter' ? { type: 'keyDown', ...key, text: '\r' } : { type: 'rawKeyDown', ...key });
+          await send('Input.dispatchKeyEvent', { type: 'keyUp', ...key });
+        } else if (action.type === 'drag') {
+          // Small pointer steps with the button held, so drag libraries pass their activation distance.
+          const from = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action.from) + ')');
+          const to = await evaluate('(' + targetPoint.toString() + ')(' + JSON.stringify(action.to) + ')');
+          await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...from, button: 'left', buttons: 1, clickCount: 1 });
+          for (let step = 1; step <= 12; step += 1) {
+            await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: from.x + ((to.x - from.x) * step) / 12, y: from.y + ((to.y - from.y) * step) / 12, button: 'left', buttons: 1 });
+            await runtime.wait(30);
+          }
+          await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...to, button: 'left', buttons: 0, clickCount: 1 });
         } else if (action.type === 'scroll') await evaluate('(() => { const element = document.querySelector(' + JSON.stringify(action.selector) + '); if (!element) throw new Error("Missing scroll target"); ' +
           (action.x === undefined && action.y === undefined ? 'element.scrollIntoView({block:"center", inline:"nearest"});' : 'element.scrollTo(' + JSON.stringify({ left: action.x ?? 0, top: action.y ?? 0, behavior: 'instant' }) + ');') + ' })()');
       }
@@ -253,9 +294,9 @@ async function main() {
   } });
   if (values.help) { console.log(usage); return; }
   const [name] = positionals;
-  const labTours = { lab: labTour, 'fork-rename': forkRenameTour };
+  const labTours = { lab: labTour, 'fork-rename': forkRenameTour, 'add-device': addDeviceTour, 'sidebar-tree': sidebarTreeTour, orchestration: orchestrationTour, 'worktree-worker': worktreeWorkerTour, 'extension-messages': extensionMessagesTour, 'html-render': htmlRenderTour, 'recreated-worktree': recreatedWorktreeTour, 'tool-profiles': toolProfilesTour, 'control-center': controlCenterTour };
   const fixtureTours = { fixture, 'fixture-broken': brokenFixture };
-  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab or fork-rename; see --help');
+  if (positionals.length !== 1 || !(Object.hasOwn(labTours, name) || Object.hasOwn(fixtureTours, name))) throw new Error('Choose fixture, fixture-broken, lab, fork-rename, add-device, sidebar-tree, orchestration, worktree-worker, extension-messages, html-render, recreated-worktree, tool-profiles or control-center; see --help');
   const isLab = Object.hasOwn(labTours, name);
   const tour = isLab ? labTours[name](JSON.parse(await readFile(resolve(values.manifest || join(root, 'lab/seed-manifest.json')), 'utf8'))) : fixtureTours[name];
   let server;

@@ -32,9 +32,14 @@ import {
   type PiProviderLoginResponse,
   type PiProviderLogoutInput,
   type PiSettingsSnapshot,
+  type PiOrchestrationOverview,
+  type PiOrchestrationAnswerInput,
+  type PiOrchestrationAnswerResponse,
+  type PiOrchestrationResolveResponse,
   type PiSettingsUpdateInput,
   type PiSettingsUpdateResponse,
   type PiChamberDefaultsUpdateInput,
+  type PiChamberDefaultsUpdateResponse,
   type PiProviderSetModelsInput,
   type PiProviderAddModelInput,
   type PiProviderConfigResponse,
@@ -900,6 +905,39 @@ export class PiService {
     });
   }
 
+  // ----- Orchestration (#20) ---------------------------------------------
+
+  /** The owner's view of all orchestrators and their workers; throws when the daemon cannot read it. */
+  async getOrchestrationOverview(scope?: PiClientScope): Promise<PiOrchestrationOverview> {
+    assertRuntimeUnchanged(scope);
+    return jsonRequest<undefined, PiOrchestrationOverview>('/api/pi/orchestration/overview', {
+      method: 'GET', ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
+    });
+  }
+
+  /** Answers a worker's open question as the owner; throws when the question is not open or Pi refused the prompt. */
+  async answerOrchestrationQuestion(
+    sessionId: string,
+    questionId: string,
+    input: PiOrchestrationAnswerInput,
+    scope?: PiClientScope,
+  ): Promise<PiOrchestrationAnswerResponse> {
+    assertRuntimeUnchanged(scope);
+    return jsonRequest<PiOrchestrationAnswerInput, PiOrchestrationAnswerResponse>(
+      `/api/pi/orchestration/questions/${encodeURIComponent(sessionId)}/${encodeURIComponent(questionId)}/answer`,
+      { method: 'POST', body: input, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}) },
+    );
+  }
+
+  /** Marks a worker's open question answered without prompting it; throws when it is not open. */
+  async resolveOrchestrationQuestion(sessionId: string, questionId: string, scope?: PiClientScope): Promise<PiOrchestrationResolveResponse> {
+    assertRuntimeUnchanged(scope);
+    return jsonRequest<Record<string, never>, PiOrchestrationResolveResponse>(
+      `/api/pi/orchestration/questions/${encodeURIComponent(sessionId)}/${encodeURIComponent(questionId)}/resolve`,
+      { method: 'POST', body: {}, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}) },
+    );
+  }
+
   async setPiSettings(input: PiSettingsUpdateInput, scope?: PiClientScope): Promise<PiSettingsUpdateResponse> {
     assertRuntimeUnchanged(scope);
     return jsonRequest<PiSettingsUpdateInput, PiSettingsUpdateResponse>('/api/pi/settings/pi', {
@@ -907,9 +945,9 @@ export class PiService {
     });
   }
 
-  async setPiChamberDefaults(input: PiChamberDefaultsUpdateInput, scope?: PiClientScope): Promise<Pick<PiSettingsSnapshot, 'pichamber'>> {
+  async setPiChamberDefaults(input: PiChamberDefaultsUpdateInput, scope?: PiClientScope): Promise<PiChamberDefaultsUpdateResponse> {
     assertRuntimeUnchanged(scope);
-    return jsonRequest<PiChamberDefaultsUpdateInput, Pick<PiSettingsSnapshot, 'pichamber'>>('/api/pi/settings/defaults', {
+    return jsonRequest<PiChamberDefaultsUpdateInput, PiChamberDefaultsUpdateResponse>('/api/pi/settings/defaults', {
       method: 'PUT', body: input, ...(scope?.runtimeKey ? { runtimeKey: scope.runtimeKey } : {}),
     });
   }

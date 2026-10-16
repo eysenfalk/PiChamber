@@ -61,6 +61,20 @@ describe('proof lab repository rules', () => {
     expect(run).toContain('verify_limits "$infra" "$infra_quota" "$infra_bytes"');
   });
 
+  test('one checkout holds the lab: the holder comes from the pod label, and only a vanished checkout is taken over', () => {
+    // The holder is the label on the pod, never the caller's path.
+    expect(run).toContain('io.pichamber.lab.checkout');
+    expect(run).toMatch(/^\s+status\)[\s\S]*?echo "Holder: /m);
+    // Only a labelled checkout whose directory is gone counts as abandoned; an unlabeled pod stays refused.
+    expect(run).toMatch(/^abandoned\(\) \{[\s\S]*?\[\[ -n "\$1" \]\] \|\| return 1[\s\S]*?stat -- "\$1"[\s\S]*?No such file or directory/m);
+    // Removal of an abandoned lab goes through the one cleanup under the lifecycle lock.
+    expect(run.indexOf('flock 9')).toBeLessThan(run.indexOf('abandoned "$owner"'));
+    expect(run).toMatch(/if abandoned "\$holder_checkout"; then\s+cleanup \|\| exit 1/);
+    expect(run).toContain('Lab already exists and belongs to');
+    // record keeps the ownership check; the lab is not recorded from a foreign checkout.
+    expect(run).toMatch(/record\)\s+check_checkout \|\| exit 1/);
+  });
+
   test('the runtime has only a read-only checkout and a volume, offline state and no privileges', () => {
     expect(pod.spec.volumes).toHaveLength(2);
     expect(pod.spec.volumes[0].hostPath.path).toBe('LAB_REPOSITORY');

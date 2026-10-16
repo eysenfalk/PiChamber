@@ -162,7 +162,7 @@ const seed = (store: PiSessionStore, options: SeedOptions = {}) => {
 };
 
 interface StubOverrides {
-  listSessions?: (scope: { directory?: string }) => Promise<{ sessions: ReturnType<typeof listItem>[]; streamEpoch?: string }>;
+  listSessions?: (scope: { directory?: string }) => Promise<{ sessions: ReturnType<typeof listItem>[]; streamEpoch?: string; incomplete?: true }>;
   getSession?: (id: string) => Promise<unknown>;
   getSessionMessages?: (id: string) => Promise<unknown>;
   deleteSession?: (input: { sessionId: string }) => Promise<unknown>;
@@ -530,6 +530,48 @@ describe('session deletion propagation', () => {
     });
   });
 
+  test('an incomplete list on focus keeps the session the server skipped', async () => {
+    for (const incomplete of [true, false]) {
+      await withStore({
+        listSessions: async () => ({ sessions: [listItem('healthy', '/repo-b')], ...(incomplete ? { incomplete: true as const } : {}) }),
+      }, async (store) => {
+        seed(store, { directory: '/repo-b', sessions: ['healthy', 'skipped'], selectedSessionId: 'healthy' });
+        internal(store).state = { ...store.getState(), directory: '/repo-a' };
+
+        await store.focusProject('/repo-b', 'healthy');
+
+        const catalog = store.getState().catalog;
+        expect(store.isDeleted('skipped')).toBe(false);
+        expect(catalog.listStatusByDirectory.get('/repo-b')).toBe('ready');
+        // A complete list still proves the omitted session is gone.
+        expect(catalog.byDirectory.get('/repo-b')?.includes('skipped')).toBe(incomplete);
+      });
+    }
+  });
+
+  test('an incomplete list on first attach keeps the session the server skipped', async () => {
+    for (const incomplete of [true, false]) {
+      await withStore({
+        health: async () => ({ state: 'ready', protocolVersion: 1, capabilities: ['events.streamEpoch'], streamEpoch: 'epoch-open' }),
+        listSessions: async () => ({
+          sessions: [listItem('healthy', '/repo-a')],
+          streamEpoch: 'epoch-open',
+          ...(incomplete ? { incomplete: true as const } : {}),
+        }),
+        getSession: async () => ({ ...detail('healthy', '/repo-a'), isStreaming: false, lifecycle: 'idle', streamEpoch: 'epoch-open' }),
+      }, async (store) => {
+        seed(store, { sessions: ['healthy', 'skipped'], selectedSessionId: 'healthy' });
+        internal(store).state = { ...store.getState(), connection: 'error' };
+
+        await store.open('/repo-a', 'healthy');
+
+        const catalog = store.getState().catalog;
+        expect(store.isDeleted('skipped')).toBe(false);
+        expect(catalog.byDirectory.get('/repo-a')?.includes('skipped')).toBe(incomplete);
+      });
+    }
+  });
+
   test('a tombstoned preferred session falls through to an active session on focus', async () => {
     await withStore({
       listSessions: async () => ({ sessions: [listItem('active', '/repo-b'), listItem('deleted', '/repo-b')] }),
@@ -677,6 +719,58 @@ describe('session deletion propagation', () => {
       expect(store.isDeleted('leased')).toBe(false);
       expect(store.getState().selectedSessionId).toBe('leased');
       expect(store.getState().sessionLoadErrorById.get('leased')?.code).toBe('SESSION_IN_USE');
+    });
+  });
+
+  for (const code of ['MALFORMED_SESSION_JSONL', 'SESSION_JSONL_UNREADABLE']) {
+    test(`a focusProject preferred id whose file is unreadable (${code}) stays listed with a load error, never deleted`, async () => {
+      let repaired = false;
+      await withStore({
+        listSessions: async () => ({ sessions: [listItem('active', '/repo-b'), listItem('broken', '/repo-b')] }),
+        getSession: async (id: string) => {
+          if (id === 'broken' && !repaired) throw new PiRequestError(code, 'unreadable');
+          return detail(id, '/repo-b');
+        },
+      }, async (store) => {
+        seed(store, { sessions: ['other'], selectedSessionId: 'other' });
+
+        await store.focusProject('/repo-b', 'broken');
+
+        expect(store.isDeleted('broken')).toBe(false);
+        expect(store.getState().selectedSessionId).toBe('broken');
+        expect(store.getState().sessionLoadErrorById.get('broken')?.code).toBe(code);
+        expect(store.getState().sessions.map((item) => item.session.id)).toContain('broken');
+        // A broken file is one failed session, not a failed runtime.
+        expect(store.getState().connection).toBe('ready');
+        expect(store.getState().error).toBeNull();
+
+        // After the file is repaired, "Try again" (ensureHydrated) loads it without a restart.
+        repaired = true;
+        await store.ensureHydrated('broken');
+        expect(await waitFor(() => store.getState().hydratedSessionIds.has('broken'))).toBe(true);
+        expect(store.getState().sessionLoadErrorById.has('broken')).toBe(false);
+      });
+    });
+  }
+
+  test('a rejected archive of an unreadable session keeps the row, archives nothing and tombstones nothing', async () => {
+    await withStore({
+      archiveSession: async () => { throw new PiRequestError('SESSION_JSONL_UNREADABLE', 'unreadable', 503); },
+    }, async (store) => {
+      seed(store, { sessions: ['broken'], selectedSessionId: 'broken' });
+
+      let rejection: unknown;
+      try {
+        await store.archive('broken', true);
+      } catch (error) {
+        rejection = error;
+      }
+      expect((rejection as PiRequestError | undefined)?.code).toBe('SESSION_JSONL_UNREADABLE');
+
+      expect(store.isDeleted('broken')).toBe(false);
+      expect(store.getState().sessions.map((item) => item.session.id)).toEqual(['broken']);
+      expect(store.getState().sessions[0]?.session.archived).toBeFalsy();
+      expect(store.getState().selectedSessionId).toBe('broken');
     });
   });
 

@@ -2,6 +2,7 @@ import type { DesktopSettings } from '@/lib/desktop';
 import { sanitizeStarterRefs } from '@/lib/draftStarters';
 import { isFollowUpBehavior, normalizeFollowUpBehavior } from '@/stores/messageQueueStore';
 import { isTerminalShell } from '@/lib/terminalShell';
+import { isAutoFetchIntervalMinutes } from '@/lib/autoFetchSettings';
 import { isUiFontOption, isMonoFontOption } from '@/lib/fontOptions';
 import { normalizePwaName } from '@/lib/pwaKeys';
 import { sanitizeCommandTriggers } from '@/lib/pi/command-triggers';
@@ -139,6 +140,10 @@ export const sanitizeWebSettings = (payload: unknown): DesktopSettings | null =>
         )
       )
     );
+  }
+  const hiddenProjectIds = sanitizeStringArray(candidate.hiddenProjectIds);
+  if (hiddenProjectIds) {
+    result.hiddenProjectIds = hiddenProjectIds;
   }
   if (Array.isArray(candidate.draftStarters)) {
     result.draftStarters = sanitizeStarterRefs(candidate.draftStarters);
@@ -630,6 +635,12 @@ export const sanitizeWebSettings = (payload: unknown): DesktopSettings | null =>
       candidate.gitChangesViewMode === 'tree')
   ) {
     result.gitChangesViewMode = candidate.gitChangesViewMode;
+  }
+  if (typeof candidate.gitAutoFetchEnabled === 'boolean') {
+    result.gitAutoFetchEnabled = candidate.gitAutoFetchEnabled;
+  }
+  if (isAutoFetchIntervalMinutes(candidate.gitAutoFetchIntervalMinutes)) {
+    result.gitAutoFetchIntervalMinutes = candidate.gitAutoFetchIntervalMinutes;
   }
   if (typeof candidate.filesViewShowGitignored === 'boolean') {
     result.filesViewShowGitignored = candidate.filesViewShowGitignored;

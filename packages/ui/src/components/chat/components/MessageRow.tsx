@@ -3,6 +3,7 @@ import React from 'react';
 import type { AnimationHandlers, ContentChangeReason } from '@/hooks/useChatAutoFollow';
 import ChatMessage from '../ChatMessage';
 import { ExtensionMessageCard } from '../message/parts/extension/ExtensionMessageCard';
+import { ExtensionMessageFrame } from '../message/parts/extension/ExtensionMessageFrame';
 import {
   areOptionalNeighborMessagesEqual,
   areRelevantTurnGroupingContextsEqual,
@@ -50,17 +51,19 @@ export const MessageRow = React.memo<MessageRowProps>(
     };
 
     // Extension-authored content renders through the extension card instead of
-    // the user/assistant turn pipeline.
+    // the user/assistant turn pipeline, inside the same column as chat messages.
     if (info.role === 'extension') {
       return (
-        <ExtensionMessageCard
-          sessionId={info.sessionID}
-          messageId={message.info.id}
-          customType={info.customType}
-          text={typeof info.text === 'string' ? info.text : undefined}
-          data={info.data}
-          details={info.details}
-        />
+        <ExtensionMessageFrame messageId={message.info.id}>
+          <ExtensionMessageCard
+            sessionId={info.sessionID}
+            messageId={message.info.id}
+            customType={info.customType}
+            text={typeof info.text === 'string' ? info.text : undefined}
+            data={info.data}
+            details={info.details}
+          />
+        </ExtensionMessageFrame>
       );
     }
 

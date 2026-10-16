@@ -139,7 +139,10 @@ async function readPiSessionJsonlHeader(filePath) {
 /**
  * Locate a persisted Pi session by the SDK filename (`<timestamp>_<id>.jsonl`
  * or `<id>.jsonl`) without listing or fully reading every transcript. A miss
- * is `null`, not an empty success.
+ * is `null`, not an empty success. A file that carries the id in its name but
+ * whose header cannot be read is not a miss: when no readable file matches,
+ * the first such failure is thrown so the caller can tell "found but
+ * unreadable" from "not found".
  */
 export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath = resolve }) {
   if (typeof sessionId !== 'string' || sessionId.length === 0 || typeof agentDir !== 'string') {
@@ -152,6 +155,7 @@ export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath 
   } catch {
     return null;
   }
+  let unreadableMatch;
   for (const dirEntry of dirEntries) {
     if (!dirEntry.isDirectory()) continue;
     const dirPath = join(sessionsRoot, dirEntry.name);
@@ -170,19 +174,94 @@ export async function findPiSessionJsonlById({ sessionId, agentDir, resolvePath 
         if (header.id === sessionId) {
           return { id: sessionId, path: fullPath, cwd: header.cwd };
         }
-      } catch {
-        continue;
+      } catch (error) {
+        unreadableMatch ??= error;
       }
     }
   }
+  if (unreadableMatch) throw unreadableMatch;
   return null;
+}
+
+const isMissing = (error) => error?.code === 'ENOENT';
+
+/** First non-empty line, parsed. Raw errors pass through; the file is always closed. */
+async function readFirstJsonlEntry(filePath) {
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (line.trim()) return JSON.parse(line);
+    }
+    return undefined;
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+}
+
+/**
+ * Find a session by the header of every JSONL file in every directory store,
+ * for files Pi did not name `<timestamp>_<sessionId>.jsonl`. Each file whose
+ * header names the session goes through `accept`; the first one it accepts is
+ * the match, and one it rejects only sets `incomplete` so a later same-id
+ * file is still found. Only a missing sessions root, store or file counts as
+ * absent; any other failure sets `incomplete`, because the session may sit
+ * behind it. A store that vanished during the scan is skipped and the scan
+ * goes on with the others.
+ *
+ * @template T
+ * @param {{ sessionId: string, agentDir: string, accept?: (match: { path: string, cwd: string }) => Promise<T>, readDirectory?: typeof readdir }} options
+ * @returns {Promise<{ match: T | null, incomplete: boolean }>}
+ */
+export async function scanPiSessionJsonlHeaders({ sessionId, agentDir, accept = async (match) => match, readDirectory = readdir }) {
+  let incomplete = false;
+  const sessionsRoot = join(agentDir, 'sessions');
+  let dirEntries;
+  try {
+    dirEntries = await readDirectory(sessionsRoot, { withFileTypes: true });
+  } catch (error) {
+    return { match: null, incomplete: !isMissing(error) };
+  }
+  for (const dirEntry of dirEntries) {
+    if (!dirEntry.isDirectory()) continue;
+    const dirPath = join(sessionsRoot, dirEntry.name);
+    let files;
+    try {
+      files = await readDirectory(dirPath, { withFileTypes: true });
+    } catch (error) {
+      if (!isMissing(error)) incomplete = true;
+      continue;
+    }
+    for (const file of files) {
+      if (!file.name.endsWith('.jsonl')) continue;
+      const fullPath = join(dirPath, file.name);
+      let header;
+      try {
+        header = await readFirstJsonlEntry(fullPath);
+      } catch (error) {
+        // A header that is not JSON is no session file.
+        if (!(error instanceof SyntaxError) && !isMissing(error)) incomplete = true;
+        continue;
+      }
+      if (header?.type !== 'session' || header.id !== sessionId || !header.cwd) continue;
+      try {
+        return { match: await accept({ path: fullPath, cwd: header.cwd }), incomplete };
+      } catch {
+        // The header names this session; a file that does not validate now
+        // is no proof that the session is gone.
+        incomplete = true;
+      }
+    }
+  }
+  return { match: null, incomplete };
 }
 
 export async function validatePiSessionJsonlFile(filePath) {
   let sawHeader = false;
+  const input = createReadStream(filePath, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
   try {
-    const input = createReadStream(filePath, { encoding: 'utf8' });
-    const lines = createInterface({ input, crlfDelay: Infinity });
     for await (const line of lines) {
       if (!line.trim()) continue;
       let entry;
@@ -200,6 +279,9 @@ export async function validatePiSessionJsonlFile(filePath) {
   } catch (error) {
     if (error instanceof SessionJsonlError) throw error;
     throw unreadable();
+  } finally {
+    lines.close();
+    input.destroy();
   }
   if (!sawHeader) throw malformed();
 }
@@ -355,6 +437,22 @@ async function readListMemo(filePath, fileStat, cached) {
   return readColdListMemo(filePath, fileStat);
 }
 
+/** A malformed file, remembered so an unchanged one is not read and logged on every listing. */
+const toFailedMemo = (fileStat) => ({
+  failed: true,
+  size: fileStat.size,
+  mtimeMs: fileStat.mtimeMs,
+  ino: fileStat.ino,
+  dev: fileStat.dev,
+});
+
+const isSameFile = (memo, fileStat) => memo.ino === fileStat.ino
+  && memo.dev === fileStat.dev
+  && memo.size === fileStat.size
+  && memo.mtimeMs === fileStat.mtimeMs;
+
+const isGone = (filePath) => stat(filePath).then(() => false, isMissing);
+
 /**
  * Opaque per-daemon memo for `listPiSessionJsonlDirectory`: session
  * directory → file name → list fields and scanned offset. Each successful
@@ -369,8 +467,12 @@ export const createPiSessionListCache = () => new Map();
  * does not load whole transcripts when a rename is found near the end. With a
  * `cache`, an unchanged file is not read again and an appended one only from
  * where the last listing stopped. Files in the directory are read with bounded
- * concurrency; one unreadable or header-malformed file still fails the whole
- * directory list.
+ * concurrency. A file that cannot be listed does not fail the others: one
+ * removed since the directory was read is absent; any other failure skips it,
+ * logs its error code without path or content, and sets `incomplete: true` on
+ * the returned array, so a lookup cannot take a miss for absence. An unchanged
+ * malformed file is remembered and not read or logged again. Only a failure to
+ * read the directory itself rejects.
  */
 export async function listPiSessionJsonlDirectory({
   cwd,
@@ -392,15 +494,33 @@ export async function listPiSessionJsonlDirectory({
   const files = entries.filter((entry) => entry.name.endsWith('.jsonl') && !entry.isDirectory());
   const previous = cache?.get(sessionDirectory);
   const memos = new Map();
-  const sessions = await mapWithConcurrency(files, LIST_FILE_CONCURRENCY, async (entry) => {
+  let incomplete = false;
+  const skip = (code) => {
+    incomplete = true;
+    console.warn(`[pi-session-daemon] Skipped a session file in the session list: ${code}`);
+    return undefined;
+  };
+  const listed = await mapWithConcurrency(files, LIST_FILE_CONCURRENCY, async (entry) => {
     const filePath = join(sessionDirectory, entry.name);
+    const cached = previous?.get(entry.name);
     let fileStat;
+    let memo;
     try {
       fileStat = await stat(filePath);
-    } catch {
-      throw unreadable();
+      if (cached?.failed && isSameFile(cached, fileStat)) {
+        memos.set(entry.name, cached);
+        incomplete = true;
+        return undefined;
+      }
+      memo = await readListMemo(filePath, fileStat, cached?.failed ? undefined : cached);
+    } catch (error) {
+      // Removed since the directory was read: absent, not broken.
+      if (isMissing(error) || await isGone(filePath)) return undefined;
+      const code = error instanceof SessionJsonlError ? error.code : 'SESSION_JSONL_UNREADABLE';
+      // Content is broken until the file changes; a read failure may pass.
+      if (fileStat && code === 'MALFORMED_SESSION_JSONL') memos.set(entry.name, toFailedMemo(fileStat));
+      return skip(code);
     }
-    const memo = await readListMemo(filePath, fileStat, previous?.get(entry.name));
     memos.set(entry.name, memo);
     const headerTime = typeof memo.header.timestamp === 'string'
       ? Date.parse(memo.header.timestamp)
@@ -418,8 +538,9 @@ export async function listPiSessionJsonlDirectory({
     };
   });
   cache?.set(sessionDirectory, memos);
+  const sessions = listed.filter(Boolean);
   sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
-  return sessions;
+  return incomplete ? Object.assign(sessions, { incomplete: true }) : sessions;
 }
 
 export const getPiSessionDirectory = ({

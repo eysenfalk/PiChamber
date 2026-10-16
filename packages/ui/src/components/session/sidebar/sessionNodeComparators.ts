@@ -19,7 +19,7 @@ export const isSecondaryMetaEqual = (prev?: SecondaryMeta | null, next?: Seconda
 export const getMenuSessionIdFromKey = (props: SessionNodeItemProps): string | null => {
   if (!props.openSidebarMenuKey) return null;
   const bucketTag = props.archivedBucket ? 'archived' : 'active';
-  const prefix = `${props.renderContext ?? 'project'}:${bucketTag}:`;
+  const prefix = `${props.renderContext ?? 'tree'}:${bucketTag}:`;
   return props.openSidebarMenuKey.startsWith(prefix) ? props.openSidebarMenuKey.slice(prefix.length) : null;
 };
 
@@ -37,47 +37,6 @@ export const subtreeContainsSession = (
   return nodeContainsSessionId(props.node, sessionId);
 };
 
-export const hasSetMembershipChangeInNode = (
-  prevNode: SessionNode,
-  nextNode: SessionNode,
-  prevSet: Set<string>,
-  nextSet: Set<string>,
-  getKey: (node: SessionNode) => string,
-): boolean => {
-  if (prevNode.session.id !== nextNode.session.id) return true;
-  const key = getKey(prevNode);
-  if (prevSet.has(key) !== nextSet.has(key)) return true;
-  if (prevNode.children.length !== nextNode.children.length) return true;
-  for (let i = 0; i < prevNode.children.length; i += 1) {
-    if (hasSetMembershipChangeInNode(prevNode.children[i], nextNode.children[i], prevSet, nextSet, getKey)) {
-      return true;
-    }
-  }
-  return false;
-};
-
-export const hasExpansionMembershipChange = (prev: SessionNodeItemProps, next: SessionNodeItemProps): boolean => {
-  if (prev.hasSessionSearchQuery || next.hasSessionSearchQuery) return false;
-  const prevBucketTag = prev.archivedBucket ? 'archived' : 'active';
-  const nextBucketTag = next.archivedBucket ? 'archived' : 'active';
-  return (
-    hasSetMembershipChangeInNode(
-      prev.node,
-      next.node,
-      prev.expandedParents,
-      next.expandedParents,
-      (node) => `${prev.renderContext ?? 'project'}:${prevBucketTag}:${node.session.id}`,
-    ) ||
-    hasSetMembershipChangeInNode(
-      prev.node,
-      next.node,
-      prev.expandedParents,
-      next.expandedParents,
-      (node) => `${next.renderContext ?? 'project'}:${nextBucketTag}:${node.session.id}`,
-    )
-  );
-};
-
 export const areSessionNodeItemPropsEqual = (prev: SessionNodeItemProps, next: SessionNodeItemProps): boolean => {
   if (prev.node.session.id !== next.node.session.id) return false;
   if (prev.node.session !== next.node.session) return false;
@@ -85,7 +44,7 @@ export const areSessionNodeItemPropsEqual = (prev: SessionNodeItemProps, next: S
   if (prev.groupDirectory !== next.groupDirectory) return false;
   if (prev.projectId !== next.projectId) return false;
   if (prev.archivedBucket !== next.archivedBucket) return false;
-  if ((prev.renderContext ?? 'project') !== (next.renderContext ?? 'project')) return false;
+  if ((prev.renderContext ?? 'tree') !== (next.renderContext ?? 'tree')) return false;
   if (prev.mobileVariant !== next.mobileVariant) return false;
   if (prev.alwaysShowActions !== next.alwaysShowActions) return false;
   if (prev.allowQuickArchiveAction !== next.allowQuickArchiveAction) return false;
@@ -106,10 +65,6 @@ export const areSessionNodeItemPropsEqual = (prev: SessionNodeItemProps, next: S
       next.groupDirectory,
     )
   ) {
-    return false;
-  }
-
-  if (prev.expandedParents !== next.expandedParents && hasExpansionMembershipChange(prev, next)) {
     return false;
   }
 
@@ -158,7 +113,6 @@ export const areSessionNodeItemPropsEqual = (prev: SessionNodeItemProps, next: S
     prev.setEditTitle === next.setEditTitle &&
     prev.handleSaveEdit === next.handleSaveEdit &&
     prev.handleCancelEdit === next.handleCancelEdit &&
-    prev.toggleParent === next.toggleParent &&
     prev.handleSessionSelect === next.handleSessionSelect &&
     prev.handleSessionDoubleClick === next.handleSessionDoubleClick &&
     prev.togglePinnedSession === next.togglePinnedSession &&

@@ -78,6 +78,7 @@ import {
   asError,
   isInvalidSessionError,
   isSessionInUseError,
+  isSessionUnreadableError,
   isSessionRuntimeConflictError,
   delayBeforeRetry,
   initialSessionStoreState,
@@ -113,6 +114,28 @@ const LIFECYCLE_EVENT_NAMES = new Set(['session.snapshot', 'session.interrupted'
 const affectsCatalogLifecycle = (event: PiSessionEvent): boolean => (
   lifecycleFromEvent(event) !== undefined || LIFECYCLE_EVENT_NAMES.has(event.name)
 );
+
+/**
+ * A stub row carries only identity, directory and lifecycle; its listing is
+ * expected to replace it. When the directory was already listed nothing
+ * schedules that listing, so the row would keep `parentId: null` (a spawned
+ * worker would render flat instead of under its parent) until an unrelated
+ * refresh. Returns those already listed directories so they are re-listed
+ * once. Scans only this batch's events, never the whole catalog.
+ */
+const listedDirectoriesOfNewStubs = (
+  events: readonly PiSessionEvent[],
+  previous: PiSessionCatalogState,
+  next: PiSessionCatalogState,
+): string[] => {
+  const directories = new Set<string>();
+  for (const event of events) {
+    if (previous.byId.has(event.sessionId)) continue;
+    const directory = next.byId.get(event.sessionId)?.directory;
+    if (directory && next.listStatusByDirectory.get(directory) === 'ready') directories.add(directory);
+  }
+  return [...directories];
+};
 
 export const getPiSessionStore = (): PiSessionStore => {
   sharedStore ??= new PiSessionStore();
@@ -1070,7 +1093,7 @@ export class PiSessionStore {
       }
       const listedSessions = this.filterDeletedListItems(result.sessions);
       const liveGate = this.createListLiveGate(result);
-      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, normalized, listedSessions, Date.now(), this.deletedSessionIds, liveGate.options);
+      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, normalized, listedSessions, Date.now(), this.deletedSessionIds, { ...liveGate.options, incomplete: result.incomplete === true });
       if (nextCatalog !== this.state.catalog) {
         this.state = { ...this.state, catalog: nextCatalog };
         liveGate.commit(listedSessions);
@@ -1236,6 +1259,11 @@ export class PiSessionStore {
     this.pendingPreferredSessionId = null;
     // No session is in flight here, so no prefetch may survive either.
     this.clearTranscriptPrefetch();
+    // A rebuild after an error report must not keep the stream that was
+    // attached before it (cluster or background recovery): its callbacks
+    // belong to the superseded generation and would drop every event while
+    // the socket stays healthy, and `attachClusterStream` would reuse it.
+    this.stream?.dispose(); this.stream = null;
     this.state = {
       ...this.state,
       directory: null,
@@ -1467,7 +1495,7 @@ export class PiSessionStore {
         ));
       this.pendingPreferredSessionId = null;
       const liveGate = this.createListLiveGate(result.payload);
-      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, resolvedDirectory, listPayload.sessions, Date.now(), this.deletedSessionIds, liveGate.options);
+      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, resolvedDirectory, listPayload.sessions, Date.now(), this.deletedSessionIds, { ...liveGate.options, incomplete: result.payload.incomplete === true });
       const catalogChanged = nextCatalog !== this.state.catalog;
       this.state = {
         ...this.state,
@@ -1556,7 +1584,7 @@ export class PiSessionStore {
   ): Promise<
     | { kind: 'stale' }
     | { kind: 'failed'; error: PiRequestError }
-    | { kind: 'ok'; payload: { sessions: PiSessionListItem[]; streamEpoch?: string } }
+    | { kind: 'ok'; payload: { sessions: PiSessionListItem[]; streamEpoch?: string; incomplete?: true } }
   > {
     try {
       const result = await piClient.listSessions({ directory: resolvedDirectory, runtimeKey });
@@ -1822,7 +1850,7 @@ export class PiSessionStore {
       // `connection` untouched; we flip to `'ready'` here so the cluster
       // is considered attached before SSE is plugged.
       const liveGate = this.createListLiveGate(result, { streamAttaching: true });
-      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, selected.directory, listedSessions, Date.now(), this.deletedSessionIds, liveGate.options);
+      const nextCatalog = applyDirectoryListWithReconciliation(baseline, this.state.catalog, selected.directory, listedSessions, Date.now(), this.deletedSessionIds, { ...liveGate.options, incomplete: result.incomplete === true });
       const catalogChanged = nextCatalog !== this.state.catalog;
       this.state = {
         ...this.state,
@@ -2853,9 +2881,10 @@ export class PiSessionStore {
             this.handleInvalidSession(sessionId, directory, expected, buffered);
             return;
           }
-          if (expected === this.runtimeGeneration && isSessionInUseError(error)) {
-            // Another owner holds this session: keep the id selected so the
-            // chat surfaces its load error instead of navigating away.
+          if (expected === this.runtimeGeneration && (isSessionInUseError(error) || isSessionUnreadableError(error))) {
+            // Another owner holds this session, or its file is unreadable:
+            // keep the id selected so the chat surfaces its load error
+            // instead of navigating away or tombstoning it.
             // Buffered live events for unrelated sessions still apply.
             if (buffered.length > 0) this.commitEvents(buffered);
             this.failSessionLoad(sessionId, asError(error));
@@ -2890,9 +2919,10 @@ export class PiSessionStore {
         this.handleInvalidSession(sessionId, directory, expected);
         return;
       }
-      if (isSessionInUseError(error)) {
-        // Another owner holds this session: keep the id selected so the chat
-        // surfaces its load error instead of navigating away.
+      if (isSessionInUseError(error) || isSessionUnreadableError(error)) {
+        // Another owner holds this session, or its file is unreadable: keep
+        // the id selected so the chat surfaces its load error instead of
+        // navigating away or tombstoning it.
         this.failSessionLoad(sessionId, asError(error));
         return;
       }
@@ -3474,6 +3504,7 @@ export class PiSessionStore {
     // stale-epoch event, must not resurrect a catalog row here.
     const nextCatalog = this.applyCatalogFromEvents(acceptedEvents, working);
     const catalogChanged = nextCatalog !== this.state.catalog;
+    const stubbedDirectories = catalogChanged ? listedDirectoriesOfNewStubs(acceptedEvents, this.state.catalog, nextCatalog) : [];
     if (catalogChanged) {
       this.state = { ...this.state, catalog: nextCatalog };
     }
@@ -3487,6 +3518,7 @@ export class PiSessionStore {
     if (topics.length > 0) this.emit(topics);
     if (touched) this.scheduleIdleEviction();
     for (const sessionId of restoreIds) this.restoreTranscript(sessionId);
+    if (stubbedDirectories.length > 0) void this.refreshAllDirectoryCatalogs(stubbedDirectories);
     if (epochChangedResidents) {
       // Verified epoch change: reconcile every known directory catalog and
       // re-fetch the residents that were hydrated before the reset. Selected

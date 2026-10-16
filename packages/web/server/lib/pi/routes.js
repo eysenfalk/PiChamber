@@ -14,7 +14,7 @@ import {
 } from '../package-manager.js';
 import { listPiCustomThemes } from './custom-themes.js';
 import { readUpdateJob } from '../update-job-store.js';
-import { createPiSettingsStore } from './settings-store.js';
+import { createPiSettingsStore, resolveOrchestrationSettings } from './settings-store.js';
 import { isPiThinkingLevel } from './thinking-levels.js';
 import { createPiSessionFoldersStore } from './session-folders-store.js';
 import {
@@ -25,6 +25,10 @@ import {
 } from './extension-protocol.js';
 import { createPiUiSettingsStore } from './ui-settings-store.js';
 import { createPiSnippetsStore } from './snippets-store.js';
+import { createOrchestrationCredentialStore } from '../client-auth/orchestration-credentials.js';
+import { registerOrchestrationMcpRoute } from './mcp-route.js';
+import { createHtmlRenderStore, isHtmlRenderId } from './html-render/store.js';
+import { createHtmlRenderUrlSigner } from './html-render/signed-url.js';
 import { isValidSendOperationId, isValidStreamEpoch } from './session-daemon/send-operation-registry.js';
 import {
   DEFAULT_EVENT_STREAM_MAX_BUFFERED_BYTES,
@@ -852,6 +856,9 @@ export const registerPiRuntimeRoutes = (app, {
   sessionFoldersStore = createPiSessionFoldersStore(),
   uiSettingsStore = createPiUiSettingsStore(),
   snippetsStore = createPiSnippetsStore(),
+  orchestrationCredentialStore = createOrchestrationCredentialStore(),
+  htmlRenderStore = createHtmlRenderStore(),
+  htmlRenderUrlSigner = createHtmlRenderUrlSigner(),
   listCustomThemes = listPiCustomThemes,
   updateChecker = checkForUpdates,
   updateLauncher = launchUpdateCommand,
@@ -868,6 +875,10 @@ export const registerPiRuntimeRoutes = (app, {
 }) => {
   const eventStreamRegistry = createPiEventStreamRegistry();
   let restartInFlight = false;
+  registerOrchestrationMcpRoute(app, {
+    getDaemonRuntime: () => getDaemonRuntime(getPiSessionDaemonRuntime),
+    credentialStore: orchestrationCredentialStore,
+  });
   app.get('/api/pi/ui-settings', async (_req, res) => {
     try {
       res.json(await uiSettingsStore.read());
@@ -1304,7 +1315,7 @@ export const registerPiRuntimeRoutes = (app, {
     try {
       const pi = projectPiSettings(await getDaemonRuntime(getPiSessionDaemonRuntime).request('settings.get'));
       const pichamber = await settingsStore.read();
-      res.json({ ...pi, pichamber });
+      res.json({ ...pi, pichamber, orchestration: resolveOrchestrationSettings(pichamber) });
     } catch (error) {
       writeDaemonError(res, error);
     }
@@ -1323,7 +1334,7 @@ export const registerPiRuntimeRoutes = (app, {
   app.put('/api/pi/settings/defaults', async (req, res) => {
     try {
       const pichamber = await settingsStore.update(req.body ?? {});
-      res.json({ pichamber });
+      res.json({ pichamber, orchestration: resolveOrchestrationSettings(pichamber) });
     } catch (error) {
       writeDaemonError(res, error);
     }
@@ -1693,6 +1704,9 @@ export const registerPiRuntimeRoutes = (app, {
       const archived = await archiveStore.read();
       res.json({
         ...(typeof result?.streamEpoch === 'string' && result.streamEpoch ? { streamEpoch: result.streamEpoch } : {}),
+        // A partial list (a session file was unreadable) must not read as
+        // authoritative membership in the client.
+        ...(result?.incomplete === true ? { incomplete: true } : {}),
         sessions: projectSessionList(result?.sessions).map((item) => archived[item.session.id]
           ? { ...item, session: { ...item.session, archived: true, timeArchived: archived[item.session.id] } }
           : item),
@@ -1765,7 +1779,165 @@ export const registerPiRuntimeRoutes = (app, {
 
   app.delete('/api/pi/sessions/:sessionId', async (req, res) => {
     const result = await requestSessionOperation(req, res, getPiSessionDaemonRuntime, 'sessions.delete');
-    if (result !== undefined) res.status(204).end();
+    if (result !== undefined) {
+      orchestrationCredentialStore.revokeSession(req.params.sessionId);
+      res.status(204).end();
+    }
+  });
+
+  // html_render pages (#155). An authenticated client mints a short-lived URL
+  // signed for one stored page; the sandboxed frame loads it without app
+  // credentials, and the response itself carries the sandbox CSP.
+  app.post('/api/pi/sessions/:sessionId/html-renders/:renderId/url', async (req, res) => {
+    const { sessionId, renderId } = req.params;
+    res.setHeader('Cache-Control', 'no-store');
+    if (!isHtmlRenderId(sessionId) || !isHtmlRenderId(renderId)) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      if (!await htmlRenderStore.read(sessionId, renderId)) {
+        res.status(404).json({ error: { code: 'HTML_RENDER_NOT_FOUND' } });
+        return;
+      }
+    } catch {
+      res.status(500).json({ error: { code: 'HTML_RENDER_UNREADABLE' } });
+      return;
+    }
+    res.json(htmlRenderUrlSigner.mint(sessionId, renderId));
+  });
+
+  app.get('/api/pi/html-renders/:sessionId/:renderId', async (req, res) => {
+    const { sessionId, renderId } = req.params;
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    if (!isHtmlRenderId(sessionId) || !isHtmlRenderId(renderId)
+      || !htmlRenderUrlSigner.verify(sessionId, renderId, req.query.expires, req.query.sig)) {
+      res.status(403).type('text/plain').send('This page link is invalid or has expired.');
+      return;
+    }
+    let page;
+    try {
+      page = await htmlRenderStore.read(sessionId, renderId);
+    } catch {
+      res.status(500).type('text/plain').send('The page could not be read.');
+      return;
+    }
+    if (!page) {
+      res.status(404).type('text/plain').send('The page no longer exists.');
+      return;
+    }
+    res.setHeader('Content-Security-Policy', 'sandbox allow-scripts allow-forms allow-popups allow-downloads');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(page);
+  });
+
+  // Mints an MCP credential that acts as this one session (Adapter B). Only an
+  // authenticated client reaches here: the /api gate lets orchestration
+  // credentials through to `/api/pi/mcp` alone. The raw token is returned once.
+  app.post('/api/pi/sessions/:sessionId/orchestration-credential', async (req, res) => {
+    const sessionId = sessionIdFrom(req);
+    if (!sessionId) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    // A credential acts as one existing session; never mint for an unknown id.
+    try {
+      const verified = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.caller', { sessionId });
+      if (verified?.error) {
+        res.status(verified.error.code === 'ORCHESTRATION_CALLER_GONE' ? 404 : 503).json({ error: { code: verified.error.code } });
+        return;
+      }
+    } catch (error) {
+      writeDaemonError(res, error);
+      return;
+    }
+    const { token, expiresAt, idleTimeoutMs } = orchestrationCredentialStore.mint(sessionId);
+    res.status(201).json({ token, sessionId, expiresAt, idleTimeoutMs, url: '/api/pi/mcp', server: 'pichamber' });
+  });
+
+  // The owner's control center (#20): all orchestrators with their workers,
+  // slots, host and pending dialogs. A failed daemon read is an error, never
+  // an empty overview.
+  app.get('/api/pi/orchestration/overview', async (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.overview', {});
+      if (result?.error) {
+        res.status(503).json({ error: { code: typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED' } });
+        return;
+      }
+      const value = result?.value;
+      if (!value || typeof value !== 'object' || !Array.isArray(value.orchestrators) || !Array.isArray(value.dialogs)) {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
+  // The owner answers a worker's open question from the control center (#20).
+  // The daemon prompts the worker as the owner and closes the question only
+  // after Pi accepted the prompt; a question that is not open changes nothing.
+  const ANSWER_ERROR_STATUS = {
+    INVALID_ARGUMENT: 400,
+    INVALID_PROMPT: 400,
+    ORCHESTRATION_QUESTION_UNKNOWN: 409,
+    SESSION_BUSY: 409,
+    OPERATION_PAYLOAD_MISMATCH: 409,
+    SESSION_NOT_FOUND: 404,
+  };
+  app.post('/api/pi/orchestration/questions/:sessionId/:questionId/answer', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { sessionId, questionId } = req.params;
+    const { text, clientRequestId } = req.body || {};
+    if (typeof text !== 'string' || !text.trim() || (clientRequestId !== undefined && typeof clientRequestId !== 'string')) {
+      res.status(400).json({ error: { code: 'INVALID_ARGUMENT' } });
+      return;
+    }
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.answer', {
+        sessionId, questionId, text, ...(clientRequestId !== undefined ? { clientRequestId } : {}),
+      });
+      if (result?.error) {
+        const code = typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED';
+        res.status(ANSWER_ERROR_STATUS[code] ?? 503).json({ error: { code } });
+        return;
+      }
+      const value = result?.value;
+      if (!value || value.accepted !== true || typeof value.resolved !== 'boolean') {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
+  });
+
+  // Marks a question answered without a prompt, for an answer given in the chat.
+  app.post('/api/pi/orchestration/questions/:sessionId/:questionId/resolve', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const { sessionId, questionId } = req.params;
+    try {
+      const result = await getDaemonRuntime(getPiSessionDaemonRuntime).request('orchestration.resolve', { sessionId, questionId });
+      if (result?.error) {
+        const code = typeof result.error.code === 'string' ? result.error.code : 'ORCHESTRATION_FAILED';
+        res.status(ANSWER_ERROR_STATUS[code] ?? 503).json({ error: { code } });
+        return;
+      }
+      if (result?.value?.resolved !== true) {
+        res.status(502).json({ error: { code: 'MALFORMED_DAEMON_RESPONSE' } });
+        return;
+      }
+      res.json(result.value);
+    } catch (error) {
+      writeDaemonError(res, error);
+    }
   });
 
   app.post('/api/pi/sessions/:sessionId/archive', async (req, res) => {
@@ -1785,8 +1957,11 @@ export const registerPiRuntimeRoutes = (app, {
       );
       const items = projectSessionList(result?.sessions);
       if (!items.some((item) => item.session.id === sessionId)) {
-        const error = new Error('The Pi session does not exist.');
-        error.code = 'INVALID_SESSION';
+        // A partial list skipped a file it could not read, which may be this
+        // session: absence is not proven, so do not call it deleted.
+        const partial = result?.incomplete === true;
+        const error = new Error(partial ? 'The Pi session file cannot be read.' : 'The Pi session does not exist.');
+        error.code = partial ? 'SESSION_JSONL_UNREADABLE' : 'INVALID_SESSION';
         throw error;
       }
       await archiveStore.set(sessionId, archived);

@@ -13,6 +13,8 @@ export type SecondaryMeta = {
   globalSession?: boolean;
 };
 
+export type SessionRenderContext = 'tree';
+
 export type SessionNodeItemProps = {
   node: SessionNode;
   depth?: number;
@@ -20,16 +22,14 @@ export type SessionNodeItemProps = {
   projectId?: string | null;
   archivedBucket?: boolean;
   pinnedSessionIds: Set<string>;
-  expandedParents: Set<string>;
   hasSessionSearchQuery: boolean;
   normalizedSessionSearchQuery: string;
   editingId: string | null;
   setEditingId: (id: string | null) => void;
   editTitle: string;
   setEditTitle: (value: string) => void;
-  handleSaveEdit: (titleOverride?: string) => void;
+  handleSaveEdit: (titleOverride?: string) => void | Promise<void>;
   handleCancelEdit: () => void;
-  toggleParent: (expansionKey: string) => void;
   handleSessionSelect: (sessionId: string, sessionDirectory: string | null) => void;
   handleSessionDoubleClick: (sessionId: string, sessionTitle: string) => void;
   togglePinnedSession: (target: SessionPinnedTarget) => void;
@@ -58,11 +58,12 @@ export type SessionNodeItemProps = {
     projectId?: string | null,
     archivedBucket?: boolean,
     secondaryMeta?: SecondaryMeta | null,
-    renderContext?: 'project' | 'recent',
+    renderContext?: SessionRenderContext,
     renderExtras?: SessionNodeRenderExtras,
   ) => React.ReactNode;
   secondaryMeta?: SecondaryMeta | null;
-  renderContext?: 'project' | 'recent';
+  /** `tree`: one 24 px row in the workspace tree, which renders guides, chevron and forks itself. The only context. */
+  renderContext?: SessionRenderContext;
   subtreeContainsEditing: Set<string>;
   menuOpenSessionId: string | null;
   nodeStructureKey: string;

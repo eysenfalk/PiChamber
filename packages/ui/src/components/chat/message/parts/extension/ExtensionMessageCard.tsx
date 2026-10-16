@@ -3,6 +3,7 @@ import * as React from 'react';
 import { getPiSessionStore } from '@/apps/pi-session-store';
 import { buildCommandPromptText } from '@/lib/pi/command-triggers';
 import { parseExtensionChatItem } from '@/lib/pi/extension-ui';
+import { parseOrchestrationResult } from '@/lib/pi/orchestration-ui';
 import { parseSupervisorReply, parseSupervisorRequest } from '@/lib/pi/supervisor-ui';
 import type { ExtensionUiAction } from '@/lib/pi/extension-ui';
 import { cn } from '@/lib/utils';
@@ -12,6 +13,8 @@ import { iconSpriteData } from '@/components/icon/sprite';
 import type { IconName } from '@/components/icon/icons';
 import { MarkdownRenderer } from '../../../MarkdownRenderer';
 import { ExtensionDisclosureRow } from './ExtensionDisclosureRow';
+import { extensionKindLabel, extensionMessageSummary } from './extensionMessageLabel';
+import { OrchestrationResultRow } from './OrchestrationResultRow';
 import { SupervisorReplyRow, SupervisorRequestRow } from './SupervisorMessageRow';
 
 interface ExtensionMessageCardProps {
@@ -200,7 +203,21 @@ export const ExtensionMessageCard: React.FC<ExtensionMessageCardProps> = ({
         () => parseSupervisorReply({ customType, data }),
         [customType, data],
     );
+    const orchestrationResult = React.useMemo(
+        () => parseOrchestrationResult({ customType, text, details }),
+        [customType, text, details],
+    );
 
+    if (orchestrationResult) {
+        return (
+            <OrchestrationResultRow
+                messageId={messageId}
+                result={orchestrationResult}
+                defaultExpanded={defaultExpanded}
+                className={className}
+            />
+        );
+    }
     if (supervisorRequest) {
         return (
             <SupervisorRequestRow
@@ -224,25 +241,34 @@ export const ExtensionMessageCard: React.FC<ExtensionMessageCardProps> = ({
 
     if (parsed.kind === 'fallback') {
         // Extension content without a PiChamber GUI descriptor starts as one
-        // collapsed row; expanding shows the preformatted payload so nothing is lost.
-        const firstTextLine = text?.split('\n').map((line) => line.trim()).find((line) => line.length > 0);
+        // collapsed row with a readable kind and summary. Expanded, its text
+        // renders as Markdown; a message without text shows its preformatted
+        // payload so nothing is lost.
+        const kind = extensionKindLabel(customType);
+        const summary = extensionMessageSummary(text);
+        const markdown = text?.trim();
         return (
             <ExtensionDisclosureRow
                 messageId={messageId}
                 icon="plug-2"
-                label={`Extension message ${parsed.title}`}
+                label={summary ? `${kind} message: ${summary}` : `${kind} message`}
                 defaultExpanded={defaultExpanded}
                 className={className}
+                dataAttributes={customType ? { 'data-extension-type': customType } : undefined}
                 summary={(
                     <>
-                        <span className="font-medium text-foreground">{parsed.title}</span>
-                        {firstTextLine !== undefined && <span>: {firstTextLine}</span>}
+                        <span className="font-medium text-foreground">{kind}</span>
+                        {summary !== undefined && <span> · {summary}</span>}
                     </>
                 )}
             >
-                <pre className="max-h-64 overflow-auto rounded-md border border-border/40 bg-muted/40 p-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
-                    {parsed.body}
-                </pre>
+                {markdown ? (
+                    <MarkdownRenderer messageId={messageId} content={markdown} className="text-sm" />
+                ) : (
+                    <pre className="max-h-64 overflow-auto rounded-md border border-border/40 bg-muted/40 p-2 font-mono text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground">
+                        {parsed.body}
+                    </pre>
+                )}
             </ExtensionDisclosureRow>
         );
     }

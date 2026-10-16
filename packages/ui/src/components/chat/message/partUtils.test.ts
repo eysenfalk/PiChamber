@@ -37,6 +37,24 @@ describe('filterAssistantFinalParts', () => {
 
     expect(filterAssistantFinalParts(parts, new Set(['progress', 'tool-1', 'reasoning-1']), 'm1').map((part) => part.id)).toEqual(['answer', 'file-1']);
   });
+
+  test('keeps a completed html_render call, whose page belongs to the response', () => {
+    const htmlRender = (id: string, status: string, metadata?: unknown) => ({
+      id,
+      type: 'tool',
+      tool: 'html_render',
+      callID: id,
+      state: { status, input: {}, metadata, time: { start: 1 } },
+    }) as unknown as Part;
+    const parts = [
+      htmlRender('running', 'running'),
+      htmlRender('failed', 'error'),
+      htmlRender('no-reference', 'completed', {}),
+      htmlRender('shown', 'completed', { htmlRender: { renderId: 'r1', title: 'Chart' } }),
+    ];
+
+    expect(filterAssistantFinalParts(parts, new Set(), 'm1').map((part) => part.id)).toEqual(['shown']);
+  });
 });
 
 describe('hasRenderableAssistantContent', () => {
