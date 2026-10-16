@@ -1,4 +1,4 @@
-# 0018. Worker skill selection: a worker's prompt lists the skills its start chose, part of its recorded tool profile
+# 0019. Worker skill selection: a worker's prompt lists the skills its start chose, part of its recorded tool profile
 
 - Status: Proposed
 - Date: 2026-10-16
