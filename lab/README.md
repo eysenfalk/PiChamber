@@ -18,6 +18,7 @@ lab/run record html-render  # The faux model calls html_render; page inline, max
 lab/run record tool-profiles # REVIEW starts a read-only review worker; edit and write blocked, README unchanged (#151), in .proof/tool-profiles/
 lab/run record control-center # Two workers ask the owner; a dialog is answered in the chat, a dialog and a question in the control center, the follow-up marked answered (#20, #87), in .proof/control-center/
 lab/run record recreated-worktree # A session leaves with its closed worktree and returns with it, no reload (#160), in .proof/recreated-worktree/
+lab/run record start-last-session # A start lists no unprompted session and a reload reopens the last one (#104, #89, #16), in .proof/start-last-session/
 lab/run down                # removes pod, internal network and lab state volume
 ```
 

@@ -310,6 +310,13 @@ export function createSessionDaemon({
   let runtimeStartPromise;
   let idleDisposeTimer;
   let dormantSession;
+  // Fresh Pi sessions the default runtime started for itself, for calls
+  // without a session id (providers, resources, extensions, settings). Nobody
+  // asked for them, so the listing hides them until they hold a conversation
+  // (#104, #89). Keyed by session, not runtime: a fork or clone replaces the
+  // runtime's session with one the user asked for.
+  const implicitSessions = new WeakSet();
+  const isHiddenSession = (session) => implicitSessions.has(session) && !(session.messages?.length > 0);
   let sequence = 0;
   // Opaque, random, public stream-lifetime identifier. It regenerates on every
   // daemon process start (restart, crash, or replacement), so clients can
@@ -704,16 +711,19 @@ export function createSessionDaemon({
   };
 
   const publishSnapshot = (socket, requestedSessionId, { resync = false } = {}) => {
-    const targetRuntime = requestedSessionId ? runtimeRegistry?.findBySessionId(requestedSessionId) : runtime;
+    // Clients restore the session an unscoped snapshot names, so a hidden
+    // default runtime session leaves the snapshot without a session.
+    const defaultRuntime = isHiddenSession(runtime?.session) ? undefined : runtime;
+    const targetRuntime = requestedSessionId ? runtimeRegistry?.findBySessionId(requestedSessionId) : defaultRuntime;
     const session = targetRuntime?.session
       ? { sessionId: targetRuntime.session.sessionId, isStreaming: targetRuntime.session.isStreaming }
-      : getSessionState();
+      : (defaultRuntime === runtime ? getSessionState() : { isStreaming: false });
     if (requestedSessionId && requestedSessionId !== session.sessionId) return;
-    const activeSession = targetRuntime?.session || runtime?.session;
+    const activeSession = targetRuntime?.session || defaultRuntime?.session;
     const retry = session.sessionId ? retryStateBySession.get(session.sessionId) : undefined;
     const compaction = compactionStateFor(activeSession);
     const targetDirectory = targetRuntime?.cwd || activeDirectory || cwd;
-    const lastAssistant = activeSession ? projectLatestAssistantMessage(targetRuntime || runtime) : undefined;
+    const lastAssistant = activeSession ? projectLatestAssistantMessage(targetRuntime || defaultRuntime) : undefined;
     const model = activeSession?.model;
     const snapshotSequence = ++sequence;
     // Snapshot must carry enough extension live state for a reconnect that
@@ -924,6 +934,7 @@ export function createSessionDaemon({
       if (reopen && disposed) await releaseUnownedLease({ cwd: runtimeCwd, sessionId: reopen.sessionId });
       throw error;
     }
+    if (!reopen && newRuntime.session) implicitSessions.add(newRuntime.session);
     return setDefaultRuntime(newRuntime, runtimeCwd);
   };
 
@@ -1352,6 +1363,7 @@ export function createSessionDaemon({
     }
     const extra = [];
     for (const entry of activeEntries) {
+      if (isHiddenSession(entry?.session)) continue;
       if (entry?.session?.sessionId && !knownIds.has(entry.session.sessionId)) {
         extra.push({
           id: entry.session.sessionId,

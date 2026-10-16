@@ -39,12 +39,18 @@ const directoryStore = createMutableStore({
   setDirectory: (directory: string) => directoryStore.setState({ currentDirectory: directory }),
 });
 
+// The persisted last-session pointer. Like the real store, every user choice
+// rewrites it: a selected session persists itself, a user-opened draft clears it.
+let lastActive: { sessionId: string; directory: string | null } | null = null;
+
 type SessionUIState = {
   currentSessionId: string | null;
   currentSessionDirectory: string | null;
-  newSessionDraft: { open: boolean } | null;
+  newSessionDraft: { open: boolean; automatic?: boolean } | null;
   error: null;
   clearError: () => void;
+  setCurrentSession: (id: string | null, directory?: string | null) => void;
+  openNewSessionDraft: () => void;
 };
 const initialSessionUI = (): SessionUIState => ({
   currentSessionId: null,
@@ -52,6 +58,20 @@ const initialSessionUI = (): SessionUIState => ({
   newSessionDraft: null,
   error: null,
   clearError: () => undefined,
+  setCurrentSession: (id, directory = null) => {
+    sessionUIStore.setState({
+      currentSessionId: id,
+      currentSessionDirectory: id ? directory : null,
+      ...(id ? { newSessionDraft: null } : {}),
+    });
+    if (!id) return;
+    lastActive = { sessionId: id, directory };
+    void getPiSessionStore().select(id, directory ?? undefined);
+  },
+  openNewSessionDraft: () => {
+    lastActive = null;
+    sessionUIStore.setState({ currentSessionId: null, currentSessionDirectory: null, newSessionDraft: { open: true } });
+  },
 });
 const sessionUIStore = createMutableStore<SessionUIState>(initialSessionUI());
 
@@ -107,9 +127,13 @@ mock.module('@/lib/mobile-error-log', () => ({
   recordMobileDiagnosticError: () => undefined,
 }));
 mock.module('@/sync/last-session-cache', () => ({
-  readLastActiveSession: () => null,
-  clearLastActiveSession: () => undefined,
+  readLastActiveSession: () => lastActive,
+  clearLastActiveSession: () => { lastActive = null; },
   persistLastActiveSession: () => undefined,
+}));
+let catalogHandler: (directories: string[]) => Promise<unknown> = () => new Promise(() => undefined);
+mock.module('@/sync/session-catalog-access', () => ({
+  loadSessionCatalog: (directories: string[]) => catalogHandler(directories),
 }));
 mock.module('@/stores/useConfigStore', () => ({
   useConfigStore: Object.assign((selector: (s: typeof configSnapshot) => unknown) => selector(configSnapshot), {
@@ -329,6 +353,8 @@ afterEach(async () => {
   piClient.getSession = originals.getSession;
   listHandler = async () => ({ sessions: [] });
   listCalls.length = 0;
+  lastActive = null;
+  catalogHandler = () => new Promise(() => undefined);
   getPiSessionStore().dispose();
   directoryStore.reset({
     currentDirectory: '/other',
@@ -565,5 +591,85 @@ describe('MobileApp directory focus keeps the user-owned selection (mounted)', (
 
     expect(store.getState().directory).toBe('/repo');
     expect(sessionUIStore.getState().currentSessionId).toBeNull();
+  });
+});
+
+/** An authoritative, ready restore catalog for `directory` holding `ids`. */
+const readyCatalog = (directory: string, ids: string[]) => ({
+  runtimeKey: 'mobile-conn-1',
+  catalog: { byId: new Map(ids.map((id) => [id, { id, directory, archived: false }])) },
+  readyDirectories: new Set([directory]),
+  failedDirectories: new Set<string>(),
+  complete: true,
+  stale: false,
+});
+
+describe('MobileApp cold-launch restore against the automatic bootstrap pick (mounted)', () => {
+  /**
+   * Native cold start in /repo with the automatic boot draft open and the
+   * older session `remembered` persisted. The restore catalog is held back
+   * until the bootstrap focus has picked and hydrated the newest row.
+   */
+  const coldStartWithHeldRestore = async () => {
+    installPiStubs();
+    const store = attachStoreAt(null);
+    lastActive = { sessionId: 'remembered', directory: '/repo' };
+    const catalog = deferred<ReturnType<typeof readyCatalog>>();
+    const catalogCalls: string[][] = [];
+    catalogHandler = (directories) => {
+      catalogCalls.push(directories);
+      return catalog.promise;
+    };
+    listHandler = async (directory) => listed(directory, ['newest', 'x', 'remembered']);
+    directoryStore.reset({ ...directoryStore.getState(), currentDirectory: '/repo' });
+    sessionUIStore.setState({ newSessionDraft: { open: true, automatic: true } });
+
+    await mountMobileApp();
+    expect(catalogCalls).toEqual([['/repo']]);
+    expect(store.getState().selectedSessionId).toBe('newest');
+    expect(sessionUIStore.getState().currentSessionId).toBe('newest');
+    return { store, catalog };
+  };
+
+  test('the remembered session replaces the bootstrap pick of the newest one when the catalog lands last (#104)', async () => {
+    const { store, catalog } = await coldStartWithHeldRestore();
+
+    await act(async () => {
+      catalog.resolve(readyCatalog('/repo', ['newest', 'x', 'remembered']));
+    });
+    await flush();
+
+    expect(sessionUIStore.getState().currentSessionId).toBe('remembered');
+    expect(store.getState().selectedSessionId).toBe('remembered');
+  });
+
+  test('a session the user opens while the catalog is in flight stays open', async () => {
+    const { store, catalog } = await coldStartWithHeldRestore();
+
+    await act(async () => {
+      sessionUIStore.getState().setCurrentSession('x', '/repo');
+    });
+    await act(async () => {
+      catalog.resolve(readyCatalog('/repo', ['newest', 'x', 'remembered']));
+    });
+    await flush();
+
+    expect(sessionUIStore.getState().currentSessionId).toBe('x');
+    expect(store.getState().selectedSessionId).toBe('x');
+  });
+
+  test('a blank draft the user opens while the catalog is in flight stays open', async () => {
+    const { catalog } = await coldStartWithHeldRestore();
+
+    await act(async () => {
+      sessionUIStore.getState().openNewSessionDraft();
+    });
+    await act(async () => {
+      catalog.resolve(readyCatalog('/repo', ['newest', 'x', 'remembered']));
+    });
+    await flush();
+
+    expect(sessionUIStore.getState().currentSessionId).toBeNull();
+    expect(sessionUIStore.getState().newSessionDraft?.open).toBe(true);
   });
 });

@@ -1706,6 +1706,89 @@ describe('PiSessionStore hydrate/overlay reconciliation', () => {
       stubs.restore();
     }
   });
+
+  describe('start selection (#16, #89)', () => {
+    const startStubs = (sessions: SessionListEntry[]) => {
+      const created: unknown[] = [];
+      const originalCreate = piClient.createSession.bind(piClient);
+      piClient.createSession = (async (input: unknown) => {
+        created.push(input);
+        throw new Error('start must not create a session');
+      }) as typeof piClient.createSession;
+      const stubs = stubDaemons({
+        health: async () => ({
+          state: 'ready',
+          protocolVersion: 1,
+          capabilities: ['events.streamEpoch'],
+          streamEpoch: 'epoch-test-1',
+        }),
+        listSessions: async () => ({ sessions, streamEpoch: 'epoch-test-1' }),
+        getSession: async (id) => ({
+          session: sessions.find((entry) => entry.session.id === id)?.session ?? { id, directory: '/repo' },
+          lastSequence: 0,
+          messages: [],
+          isStreaming: false,
+          lifecycle: 'idle',
+          streamEpoch: 'epoch-test-1',
+        }),
+      });
+      return {
+        created,
+        restore: () => {
+          stubs.restore();
+          piClient.createSession = originalCreate;
+        },
+      };
+    };
+    const listed = (id: string, updatedAt: number): SessionListEntry => ({
+      session: { id, directory: '/repo', title: id, createdAt: 1, updatedAt },
+      updatedAt,
+    });
+
+    test('a folder without sessions starts with no selection and creates none', async () => {
+      const stubs = startStubs([]);
+      const store = new PiSessionStore();
+      try {
+        await store.start({ directory: '/repo' });
+        const state = store.getState();
+        expect(state.connection).toBe('ready');
+        expect(state.directory).toBe('/repo');
+        expect(state.sessions).toEqual([]);
+        expect(state.selectedSessionId).toBeNull();
+        expect(stubs.created).toEqual([]);
+      } finally {
+        stubs.restore();
+        store.dispose();
+      }
+    });
+
+    test('a reload reopens the remembered session, not the newest one', async () => {
+      const stubs = startStubs([listed('newest', 5), listed('remembered', 1)]);
+      const store = new PiSessionStore();
+      try {
+        // pi-session-context passes the persisted last session this way.
+        await store.start({ directory: '/repo', sessionId: 'remembered', sessionDirectoryKnown: false });
+        expect(store.getState().selectedSessionId).toBe('remembered');
+        expect(stubs.created).toEqual([]);
+      } finally {
+        stubs.restore();
+        store.dispose();
+      }
+    });
+
+    test('without a remembered session the newest listed session opens', async () => {
+      const stubs = startStubs([listed('newest', 5), listed('older', 1)]);
+      const store = new PiSessionStore();
+      try {
+        await store.start({ directory: '/repo' });
+        expect(store.getState().selectedSessionId).toBe('newest');
+        expect(stubs.created).toEqual([]);
+      } finally {
+        stubs.restore();
+        store.dispose();
+      }
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -509,25 +509,22 @@ export function MobileApp({ apis }: MobileAppProps) {
   // Cold-launch continuity: after the launch instance connects, reopen the
   // session that was open on this instance last time — but only after an
   // authoritative sessions snapshot confirms it still exists, and only if the
-  // user hasn't opened a session in the meantime. An open new-session draft
-  // does NOT block the restore: ChatContainer auto-opens the draft whenever no
-  // session is active, so at this point it reflects the boot default, not a
-  // user choice. Runs once per successful launch connect; in-app instance
-  // switches keep using the in-memory per-runtime session memory instead.
+  // user hasn't chosen anything else in the meantime. The persisted pointer is
+  // that record: opening a session rewrites it and opening a draft clears it,
+  // while the automatic boot draft and the bootstrap's pick of the folder's
+  // newest session leave it alone. So a visible session that is not the
+  // pointer's was picked automatically and yields to the restore. Runs once
+  // per successful launch connect; in-app instance switches keep using the
+  // in-memory per-runtime session memory instead.
   const lastSessionRestoreDoneRef = React.useRef(false);
   // While true, a logo overlay covers the shell so the user never sees the
-  // intermediate auto-opened draft before the restore decision lands.
+  // intermediate automatic draft or bootstrap pick before the restore decision lands.
   const [lastSessionRestorePending, setLastSessionRestorePending] = React.useState(isNativeMobileApp);
   React.useEffect(() => {
     if (!isNativeMobileApp || !isConnected || lastSessionRestoreDoneRef.current) return;
-    if (useSessionUIStore.getState().currentSessionId) {
-      lastSessionRestoreDoneRef.current = true;
-      setLastSessionRestorePending(false);
-      return;
-    }
     const runtimeKey = getRuntimeKey();
     const persisted = readLastActiveSession(runtimeKey);
-    if (!persisted) {
+    if (!persisted || useSessionUIStore.getState().currentSessionId === persisted.sessionId) {
       lastSessionRestoreDoneRef.current = true;
       setLastSessionRestorePending(false);
       return;
@@ -604,7 +601,8 @@ export function MobileApp({ apis }: MobileAppProps) {
         setLastSessionRestorePending(false);
         return;
       }
-      if (!latest.currentSessionId) {
+      const userChoseMeanwhile = readLastActiveSession(runtimeKey)?.sessionId !== persisted.sessionId;
+      if (!userChoseMeanwhile && latest.currentSessionId !== decision.sessionId) {
         void latest.setCurrentSession(decision.sessionId, decision.directory);
       }
       setLastSessionRestorePending(false);
