@@ -24,6 +24,7 @@ One record per architecture or process decision: why it was made, what was decid
 | [0016](0016-owner-reads-and-answers-orchestration-through-private-daemon-commands.md) | The owner reads and answers orchestration through private daemon commands | Proposed |
 | [0017](0017-owner-questions-carry-a-complete-brief.md) | Owner questions and blockers carry a complete brief, enforced by the daemon | Proposed |
 | [0018](0018-every-pull-request-carries-a-short-retro.md) | Every pull request carries a short retro | Accepted |
+| [0019](0019-worker-skill-selection.md) | Worker skill selection: a worker's prompt lists the skills its start chose, part of its recorded tool profile | Proposed |
 
 ## Rules
 

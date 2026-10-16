@@ -1069,6 +1069,23 @@ describe('orchestration service', () => {
     expect(deps.createWorkerSession).toHaveBeenCalledTimes(3);
   });
 
+  it('chooses worker skills from the spawn, else the role settings, and lists the caller\'s skills (#226)', async () => {
+    const harness = createHarness({
+      workerLimit: 10,
+      overrides: { readSettings: async () => ({ workerLimit: 10, gate: { enabled: false }, roles: { ...ROLES, review: { ...ROLES.review, skills: ['review'] } }, wakes: { coalesceMs: 0 }, orchestrators: ['orch'] }) },
+    });
+    const { service, deps } = harness;
+    await service.call('orch', 'session_spawn', { cwd: '/work/a', task: 'role default', role: 'review' });
+    await service.call('orch', 'session_spawn', { cwd: '/work/b', task: 'explicit', role: 'review', skills: ['debug', 'debug'] });
+    await service.call('orch', 'session_spawn', { cwd: '/work/c', task: 'unset', role: 'research' });
+    const skills = deps.createWorkerSession.mock.calls.map(([options]) => options.lineage.profile.skills);
+    expect(skills).toEqual([['review'], ['debug'], undefined]);
+
+    expect(await service.call('orch', 'orchestration_capabilities')).not.toHaveProperty('skills');
+    harness.orchestrator.session.resourceLoader = { getSkills: () => ({ skills: [{ name: 'debug' }, { name: 'theme-system' }], diagnostics: [] }) };
+    expect((await service.call('orch', 'orchestration_capabilities')).skills).toEqual(['debug', 'theme-system']);
+  });
+
   it('rejects unknown models, retired roles and relative directories', async () => {
     const { service } = createHarness();
     for (const role of ['implementation', 'implement', 'task']) {
@@ -2645,6 +2662,12 @@ describe('worker_start', () => {
     expect(harness.deps.createWorkerSession).toHaveBeenCalledTimes(1);
     expect(harness.deps.createWorkerSession.mock.calls[0][0].lineage.profile).toMatchObject({ name: 'read-only', excludeTools: expect.arrayContaining(['edit', 'write']) });
     expect((await harness.workers())['worker-1'].profile.name).toBe('read-only');
+  });
+
+  it('passes the requested skills into the worker profile (#226)', async () => {
+    const harness = setup();
+    await harness.service.call('orch', 'worker_start', { ...args, skills: ['debug', 'write-*'] });
+    expect(harness.deps.createWorkerSession.mock.calls[0][0].lineage.profile.skills).toEqual(['debug', 'write-*']);
   });
 
   it('continues after a failed worktree step: one branch, one worktree, one worker', async () => {

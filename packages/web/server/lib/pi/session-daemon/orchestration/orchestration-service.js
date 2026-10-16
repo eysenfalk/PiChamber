@@ -84,6 +84,14 @@ const lineageOf = (runtime) => customEntries(runtime, LINEAGE_ENTRY).at(-1)?.dat
 // null is a record that cannot be read (the worker runs fail closed).
 const profileView = (profile) => (profile === undefined ? resolveProfile({ profile: 'full' }) : profile);
 
+// The skills the caller's own session loaded, to choose a worker's `skills`
+// from; a worker in the same project finds the same ones. Omitted when the
+// caller's loader cannot be read, which is not an empty list.
+const skillNames = (runtime) => {
+  const skills = runtime?.session?.resourceLoader?.getSkills?.()?.skills;
+  return Array.isArray(skills) ? { skills: skills.map((skill) => skill.name) } : {};
+};
+
 /** Worker records of a parent, in spawn order, with their stopped flag. */
 const childRecordsOf = (runtime) => {
   const stopped = new Set(customEntries(runtime, STOPPED_ENTRY).map((entry) => entry.data?.sessionId));
@@ -400,6 +408,7 @@ export function createOrchestrationService(deps) {
       roles: settings.roles,
       profiles: TOOL_PROFILES,
       roleProfiles: ROLE_PROFILES,
+      ...skillNames(context.runtime),
       models: await listModels(),
       workers,
       ...(operations.length ? { operations } : {}),
@@ -544,7 +553,7 @@ export function createOrchestrationService(deps) {
     // The registry holds the directory with the slot; spellings fold here.
     const cwd = await canonicalDirectory(args.cwd);
     const { model, thinking } = await resolveModel(args, settings);
-    const profile = resolveProfile(args);
+    const profile = resolveProfile({ ...args, roleSkills: args.role ? settings.roles?.[args.role]?.skills : undefined });
     const title = args.title?.trim() || args.task.trim().split(/\r?\n/)[0].slice(0, 80);
     const intent = {
       cwd,
@@ -621,6 +630,7 @@ export function createOrchestrationService(deps) {
       ...(args.thinking ? { thinking: args.thinking } : {}),
       ...(args.profile ? { profile: args.profile } : {}),
       ...(args.excludeExtensions ? { excludeExtensions: args.excludeExtensions } : {}),
+      ...(args.skills ? { skills: args.skills } : {}),
       issue: { repo: args.issue.repo, number: args.issue.number },
       branch,
     }, options, context);

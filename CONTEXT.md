@@ -4,6 +4,14 @@ Live context: what we know but have not settled yet. Every entry names its sourc
 
 ## Integrations
 
+### pi-fabric calls MCP servers from mcporter without Pi's `tool_call` event
+
+- Source: pi-fabric 0.114.0 (`~/.pi/agent/npm/node_modules/pi-fabric`, read only): `dist/fabric-runtime-state.js` (`#emitToolCallPreflight`, the `pi-tools` and extension providers), `dist/chunks/chunk-V2SKDVQX.js` (mcporter calls); a probe through a real daemon with a stdio MCP server on 2026-10-16 (PR #230)
+- Date: 2026-10-16
+- Settled by: the owner's decision on PR #230 how a worker's tool profile treats Fabric's `mcp.*`, or pi-fabric emitting `tool_call` for its MCP calls
+
+In Fabric full code mode a `fabric_exec` program calls Pi tools as `pi.*` and extension tools as `extensions.*`; both reach Pi's tool execution, so a worker's tool profile blocks them (`tool-profiles-fabric.e2e.test.js`). Its `mcp.*` calls to servers from mcporter (`~/.mcporter/mcporter.json`) go to `runtime.callTool` directly and emit no `tool_call`, so no Pi extension can block them: in the probe a read-only worker ran an MCP tool named `subagent_echo` that `*subagent*` would exclude. Servers through Pi's own MCP (`mcp.nativeServers`) do go through `executeTool`. pi-fabric has no per session policy hook: approvals come from `fabric.json`, `PI_FABRIC_TOOL_ALLOWLIST` is read from the process environment, which the daemon shares across sessions.
+
 ### pi-subagents shows its async run status to RPC hosts as one versioned widget line
 
 - Source: pi-subagents (`/home/feysen/projects/private/gh/pi-subagents`, read only): `src/runs/shared/async-status-projection.ts`, `src/runs/background/async-status-snapshot.ts`, `docs/observability.md`; observed in a real PiChamber session with a test extension on 2026-10-03

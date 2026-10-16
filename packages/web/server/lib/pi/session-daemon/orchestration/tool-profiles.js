@@ -11,6 +11,11 @@ import { OrchestrationError } from './errors.js';
 // Names cover Pi's built-in tools and the writing tools of the owner's
 // installed packages (AFT, pi-subagents), with and without the `mcp__<server>__`
 // prefix their MCP proxies carry.
+//
+// A profile may also carry `skills` (#226): name patterns of the skills the
+// worker's prompt lists. Without it the worker lists every skill, as before.
+// The skills of the worker's own project always stay, because its AGENTS.md
+// may make them mandatory.
 
 export const TOOL_PROFILES = Object.freeze({
   full: Object.freeze({ excludeTools: Object.freeze([]), excludeExtensions: Object.freeze([]) }),
@@ -50,8 +55,10 @@ const patternMatcher = (patterns) => {
 /**
  * The profile a start runs with: the requested one, else the role default,
  * else `full`. `excludeExtensions` adds patterns to the profile's own.
+ * `skills` (the spawn's choice) wins over `roleSkills` (the role default);
+ * with neither the profile has no `skills` and the worker keeps them all.
  */
-export const resolveProfile = ({ profile, role, excludeExtensions = [] }) => {
+export const resolveProfile = ({ profile, role, excludeExtensions = [], skills, roleSkills }) => {
   const name = profile ?? ROLE_PROFILES[role] ?? 'full';
   const definition = Object.hasOwn(TOOL_PROFILES, name) ? TOOL_PROFILES[name] : undefined;
   if (!definition) throw new OrchestrationError('INVALID_ARGUMENT', `Unknown profile: ${name}`);
@@ -59,6 +66,7 @@ export const resolveProfile = ({ profile, role, excludeExtensions = [] }) => {
     name,
     excludeTools: [...definition.excludeTools],
     excludeExtensions: [...new Set([...definition.excludeExtensions, ...excludeExtensions])],
+    ...((skills ?? roleSkills) ? { skills: [...new Set(skills ?? roleSkills)] } : {}),
   };
 };
 
@@ -72,7 +80,8 @@ const isPatternList = (value) => Array.isArray(value) && value.every((item) => t
 export const recordedProfile = (lineage) => {
   if (!lineage || lineage.profile === undefined) return undefined;
   const { profile } = lineage;
-  if (!profile || typeof profile.name !== 'string' || !isPatternList(profile.excludeTools) || !isPatternList(profile.excludeExtensions)) {
+  if (!profile || typeof profile.name !== 'string' || !isPatternList(profile.excludeTools) || !isPatternList(profile.excludeExtensions)
+    || (profile.skills !== undefined && !isPatternList(profile.skills))) {
     return null;
   }
   return profile;
@@ -98,4 +107,18 @@ export const keptExtensionPaths = (resources, profile) => {
   return resources
     .filter((resource) => resource.enabled && !excluded(resource.path) && !(resource.metadata?.source && excluded(resource.metadata.source)))
     .map((resource) => resource.path);
+};
+
+/** Whether a session with this recorded profile lists only some skills. */
+export const selectsSkills = (profile) => profile === null || (profile !== undefined && profile.skills !== undefined);
+
+/**
+ * The skills a session with this recorded profile lists, from the skills Pi
+ * loaded: its project skills (paths Pi resolved with project scope) and those
+ * whose name a pattern matches. An unreadable profile keeps project skills only.
+ */
+export const keptSkills = (skills, profile, projectSkillPaths) => {
+  if (!selectsSkills(profile)) return skills;
+  const chosen = patternMatcher(profile?.skills ?? []);
+  return skills.filter((skill) => projectSkillPaths.has(skill.filePath) || chosen(skill.name));
 };
