@@ -7,7 +7,7 @@ import { createSessionDaemon } from '../session-daemon.js';
 import { connectClient, credential, disableHostGate, markOrchestrator, piAiFauxUrl } from './e2e-support.js';
 import { createOrchestrationRegistryStore } from './registry-store.js';
 
-// A worker's slot through Pi SDK 1.1.0's own awaits in prompt(): input
+// A worker's slot through Pi SDK 1.3.0's own awaits in prompt(): input
 // handlers run before Pi decides between a new run and a queued follow-up
 // (W1), and a prompt made while `agent_settled` handlers run is deferred and
 // resolves before its run starts (W2). The faux model and the extension's

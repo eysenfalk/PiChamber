@@ -3482,7 +3482,7 @@ export function createSessionDaemon({
     // A settlement without a preflight signal resolves the gate so a missing
     // callback cannot hang acceptance. Resolve implies acceptance; reject
     // implies preflight failure whose real error is propagated below. Pi
-    // 1.1.0 resolves a prompt made while `agent_settled` is being emitted
+    // 1.3.0 resolves a prompt made while `agent_settled` is being emitted
     // without a signal and runs it afterwards (CONTEXT.md): the admission is
     // then unresolved, keeps its slot and takes the late signal.
     Promise.resolve(promptPromise).finally(() => {
@@ -3923,7 +3923,7 @@ export function createSessionDaemon({
         retryStateBySession.delete(sessionId);
         break;
       case 'agent_settled':
-        // A settle while a run is still live (Pi 1.1.0 can emit one for an
+        // A settle while a run is still live (Pi 1.3.0 can emit one for an
         // earlier prompt) is no completion: no idle, no result, no release.
         if (!isSettleFinal(owningRuntime.session)) break;
         retryStateBySession.delete(sessionId);
