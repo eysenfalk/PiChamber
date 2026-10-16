@@ -10,7 +10,8 @@ import { connectClient, credential, disableHostGate, markOrchestrator, piAiFauxU
 // faux model starts a `review` worker (default `read-only`) that tries to
 // write a file directly, through a nested `ctx.executeTool` call, and after an
 // extension activated `write` again; the run is repeated after a daemon
-// restart. The script logs the tool list of every request and each result.
+// restart. The script logs the tool list and the listed skills of every
+// request and each result. The worker chooses its skills (#226).
 
 const fauxExtension = (fauxUrl, { workerDir, target }) => `
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from ${JSON.stringify(fauxUrl)};
@@ -35,7 +36,11 @@ const respond = async (context) => {
   const task = textOf(messages[userIndex]);
   const results = messages.slice(userIndex + 1).filter((message) => message.role === 'toolResult');
   const last = results.at(-1);
-  log.push({ task, tools, result: last ? { toolName: last.toolName, isError: last.isError, text: textOf(last) } : undefined });
+  // The skills the system prompt lists (#226).
+  // Pi sends the system prompt as system messages, as text or in sections.
+  const prompt = messages.filter((entry) => entry.role === 'system').map((entry) => JSON.stringify(entry)).join(' ');
+  const skills = [...prompt.matchAll(new RegExp('<name>([^<]+)</name>', 'g'))].map((match) => match[1]);
+  log.push({ task, tools, skills, result: last ? { toolName: last.toolName, isError: last.isError, text: textOf(last) } : undefined });
   if (task.startsWith('A worker event')) return fauxAssistantMessage('PARENT WOKEN');
   if (task.includes('ORCHESTRATE')) {
     if (last) return fauxAssistantMessage('PARENT SPAWNED');
@@ -46,6 +51,7 @@ const respond = async (context) => {
       role: 'review',
       model: { providerId: 'faux', modelId: 'faux-1' },
       excludeExtensions: ['*/notes-tool.ts'],
+      skills: ['chosen-*'],
       clientRequestId: 'spawn-review',
     });
   }
@@ -130,6 +136,13 @@ describe('worker tool profiles through the real daemon', () => {
     await writeFile(target, 'ORIGINAL');
     await writeFile(join(agentDir, 'extensions', 'faux-profiles.ts'), fauxExtension(piAiFauxUrl(), { workerDir, target }));
     await writeFile(join(agentDir, 'extensions', 'notes-tool.ts'), notesExtension);
+    const skill = async (dir, name) => {
+      await mkdir(join(dir, name), { recursive: true });
+      await writeFile(join(dir, name, 'SKILL.md'), `---\nname: ${name}\ndescription: The ${name} skill.\n---\n\n# ${name}\n`);
+    };
+    await skill(join(agentDir, 'skills'), 'chosen-one');
+    await skill(join(agentDir, 'skills'), 'other-one');
+    await skill(join(workerDir, '.agents', 'skills'), 'project-one');
     process.env.PICHAMBER_DATA_DIR = join(root, 'data');
     // Wakes without delay, so the orchestrator's wake turn runs and ends
     // before the restart instead of racing the daemon stop.
@@ -171,6 +184,9 @@ describe('worker tool profiles through the real daemon', () => {
     expect(workerTools).not.toContain('write');
     expect(workerTools).not.toContain('edit');
     expect(workerTools).not.toContain('note_tool');
+    // The worker lists the chosen skill and its project's, the orchestrator all of its own.
+    expect(log.find((entry) => entry.task.includes('ORCHESTRATE')).skills).toEqual(expect.arrayContaining(['chosen-one', 'other-one']));
+    expect(worker[0].skills.toSorted()).toEqual(['chosen-one', 'project-one']);
 
     const [direct, activated, afterActivation, nested, read] = worker.slice(1).map((entry) => entry.result);
     expect(direct).toMatchObject({ toolName: 'write', isError: true });
@@ -190,7 +206,7 @@ describe('worker tool profiles through the real daemon', () => {
     const listed = await client.request('orchestration.call', { sessionId: parentId, tool: 'session_list', args: {} });
     expect(listed.result.value.sessions[0]).toMatchObject({
       sessionId: workerId,
-      profile: { name: 'read-only', excludeExtensions: ['*/notes-tool.ts'] },
+      profile: { name: 'read-only', excludeExtensions: ['*/notes-tool.ts'], skills: ['chosen-*'] },
     });
 
     // After a restart the reopened worker gets its exclusions from its lineage.
@@ -208,6 +224,7 @@ describe('worker tool profiles through the real daemon', () => {
     expect(before.tools).toContain('read');
     expect(before.tools).not.toContain('write');
     expect(before.tools).not.toContain('note_tool');
+    expect(before.skills.toSorted()).toEqual(['chosen-one', 'project-one']);
     expect(after.result).toMatchObject({ toolName: 'write', isError: true });
     expect(await readFile(target, 'utf8')).toBe('ORIGINAL');
     await client.close();

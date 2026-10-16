@@ -66,7 +66,7 @@ import { createMergeLookup } from '../../github/merge-lookup.js';
 import { abortBoundRun, bindStartedRun, isSettleFinal, provenRunEnd } from './orchestration/run-binding.js';
 import { findPersistedSessionByOperation } from './orchestration/session-lookup.js';
 import { createOrchestrationExtension } from './orchestration/pi-extension.js';
-import { keptExtensionPaths } from './orchestration/tool-profiles.js';
+import { keptExtensionPaths, keptSkills, selectsSkills } from './orchestration/tool-profiles.js';
 import { createHtmlRenderExtension } from '../html-render/pi-extension.js';
 
 const textFromContent = (content) => (
@@ -141,10 +141,23 @@ export function isLocalSessionDaemonEndpoint(endpoint, platform = process.platfo
 // resources first and hands Pi only the kept paths, so an excluded extension
 // is never imported and registers no tool or listener. Pi's own filter hook
 // (`extensionsOverride`) runs after every factory already ran.
-async function profileExtensionOptions(profile, { cwd, agentDir, settingsManager }) {
-  if (profile === undefined || (profile !== null && profile.excludeExtensions.length === 0)) return {};
-  const { extensions } = await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve();
-  return { noExtensions: true, additionalExtensionPaths: keptExtensionPaths(extensions, profile) };
+// A profile that chooses skills (#226) filters Pi's loaded skills through
+// `skillsOverride`, so the prompt lists only them. The project skills are
+// taken from the same resolution, once per runtime creation: a project skill
+// added later appears after the next new runtime, not on `/reload`.
+async function profileResourceOptions(profile, { cwd, agentDir, settingsManager }) {
+  const filtersExtensions = profile === null || (profile !== undefined && profile.excludeExtensions.length > 0);
+  if (!filtersExtensions && !selectsSkills(profile)) return {};
+  const resources = await new DefaultPackageManager({ cwd, agentDir, settingsManager }).resolve();
+  const projectSkillPaths = new Set(resources.skills
+    .filter((resource) => resource.enabled && resource.metadata?.scope === 'project')
+    .map((resource) => resource.path));
+  return {
+    ...(filtersExtensions ? { noExtensions: true, additionalExtensionPaths: keptExtensionPaths(resources.extensions, profile) } : {}),
+    ...(selectsSkills(profile)
+      ? { skillsOverride: (loaded) => ({ ...loaded, skills: keptSkills(loaded.skills, profile, projectSkillPaths) }) }
+      : {}),
+  };
 }
 
 export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), sessionFile }, hooks) {
@@ -157,7 +170,7 @@ export async function createPiSessionRuntime({ cwd, agentDir = getAgentDir(), se
       settingsManager,
       resourceLoaderOptions: {
         ...(hooks?.extensionFactories?.length ? { extensionFactories: hooks.extensionFactories } : {}),
-        ...(await profileExtensionOptions(profile, { cwd: runtimeCwd, agentDir: runtimeAgentDir, settingsManager })),
+        ...(await profileResourceOptions(profile, { cwd: runtimeCwd, agentDir: runtimeAgentDir, settingsManager })),
       },
     });
 

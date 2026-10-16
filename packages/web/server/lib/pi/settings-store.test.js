@@ -184,6 +184,13 @@ describe('Pi settings sidecar', () => {
     await store.update({ orchestration: { gate: null } });
     expect((await store.read()).orchestration).not.toHaveProperty('gate');
 
+    // Role skills (#226) are stored trimmed and survive a model picker write without them.
+    await store.update({ orchestration: { roles: { review: { modelId: 'gpt-6.1-sol', skills: [' review ', 'write-*'] } } } });
+    await store.update({ orchestration: { roles: { review: { providerId: 'openai', modelId: 'gpt-6.1-sol', thinking: 'high' } } } });
+    expect((await store.read()).orchestration.roles.review).toEqual({ providerId: 'openai', modelId: 'gpt-6.1-sol', thinking: 'high', skills: ['review', 'write-*'] });
+    await store.update({ orchestration: { roles: { review: { modelId: 'gpt-6.1-sol', skills: null } } } });
+    expect((await store.read()).orchestration.roles.review).toEqual({ modelId: 'gpt-6.1-sol' });
+
     // A role set to null returns to its default; null clears every override.
     await store.update({ orchestration: { roles: { small: null } } });
     expect((await store.read()).orchestration.roles).not.toHaveProperty('small');
@@ -293,6 +300,8 @@ describe('Pi settings sidecar', () => {
       { roles: { task: { modelId: 'x' } } },
       { roles: { small: { modelId: '' } } },
       { roles: { small: { modelId: 'x', thinking: 'loud' } } },
+      { roles: { small: { modelId: 'x', skills: 'debug' } } },
+      { roles: { small: { modelId: 'x', skills: [' '] } } },
       { roles: [] },
       { wakes: { coalesceMs: -1 } },
       { wakes: { coalesceMs: 60_001 } },

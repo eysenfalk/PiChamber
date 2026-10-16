@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { keptExtensionPaths, recordedProfile, resolveProfile, toolAllowed } from './tool-profiles.js';
+import { keptExtensionPaths, keptSkills, recordedProfile, resolveProfile, selectsSkills, toolAllowed } from './tool-profiles.js';
 
 describe('worker tool profiles', () => {
   it('blocks the writing tools of read-only, with and without an MCP proxy prefix, and keeps bash and reading', () => {
@@ -43,5 +43,33 @@ describe('worker tool profiles', () => {
     expect(keptExtensionPaths(resources, profile)).toEqual(['/home/u/.pi/agent/extensions/kept.ts']);
     expect(keptExtensionPaths(resources, resolveProfile({}))).toHaveLength(3);
     expect(keptExtensionPaths(resources, null)).toEqual([]);
+  });
+
+  it('records chosen skill patterns: an explicit choice wins over the role default, none keeps every skill', () => {
+    expect(resolveProfile({ role: 'review' })).not.toHaveProperty('skills');
+    expect(resolveProfile({ role: 'review', roleSkills: ['review', 'write-*'] }).skills).toEqual(['review', 'write-*']);
+    expect(resolveProfile({ role: 'review', roleSkills: ['review'], skills: ['debug'] }).skills).toEqual(['debug']);
+    expect(resolveProfile({ skills: [] }).skills).toEqual([]);
+    expect(recordedProfile({ profile: { ...resolveProfile({}), skills: ['debug'] } }).skills).toEqual(['debug']);
+    expect(recordedProfile({ profile: { ...resolveProfile({}), skills: 'debug' } })).toBeNull();
+  });
+
+  it('keeps the project skills and the skills whose name matches, and only project skills for an unreadable profile', () => {
+    const skill = (name, filePath) => ({ name, description: name, filePath });
+    const skills = [
+      skill('review', '/home/u/.pi/agent/skills/review/SKILL.md'),
+      skill('write-tests', '/home/u/.pi/agent/skills/write-tests/SKILL.md'),
+      skill('tempo-worklog', '/home/u/.pi/agent/skills/tempo-worklog/SKILL.md'),
+      skill('theme-system', '/work/repo/.agents/skills/theme-system/SKILL.md'),
+    ];
+    const projectSkillPaths = new Set(['/work/repo/.agents/skills/theme-system/SKILL.md']);
+    const names = (profile) => keptSkills(skills, profile, projectSkillPaths).map((entry) => entry.name);
+    expect(names(resolveProfile({ skills: ['review', 'write-*'] }))).toEqual(['review', 'write-tests', 'theme-system']);
+    expect(names(resolveProfile({ skills: [] }))).toEqual(['theme-system']);
+    expect(names(null)).toEqual(['theme-system']);
+    expect(selectsSkills(resolveProfile({}))).toBe(false);
+    expect(selectsSkills(undefined)).toBe(false);
+    expect(selectsSkills(null)).toBe(true);
+    expect(selectsSkills(resolveProfile({ skills: [] }))).toBe(true);
   });
 });

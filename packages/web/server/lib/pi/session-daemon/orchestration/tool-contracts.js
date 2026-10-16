@@ -40,6 +40,12 @@ const excludeExtensions = {
   items: { type: 'string', minLength: 1, maxLength: 512 },
   description: 'Extensions the worker does not load, as patterns (* wildcard) on the extension path or package source such as npm:pi-intercom. PiChamber\'s own extensions always load.',
 };
+const skills = {
+  type: 'array',
+  maxItems: 64,
+  items: { type: 'string', minLength: 1, maxLength: 128 },
+  description: 'Skills the worker\'s prompt lists, as name patterns (* wildcard); see orchestration_capabilities for the names. Default from the role settings, else all. The skills of the worker\'s project always stay. [] lists only those.',
+};
 const model = {
   type: 'object',
   additionalProperties: false,
@@ -71,7 +77,7 @@ export const ORCHESTRATION_TOOLS = [
   {
     name: 'orchestration_capabilities',
     label: 'Orchestration capabilities',
-    description: 'List available models, role defaults, the worker limit, live workers (directory, branch, state) and host load and free memory. Call before delegating.',
+    description: 'List available models, role defaults, the skills a worker can choose from, the worker limit, live workers (directory, branch, state) and host load and free memory. Call before delegating.',
     parameters: { type: 'object', additionalProperties: false, properties: {} },
   },
   {
@@ -96,6 +102,7 @@ export const ORCHESTRATION_TOOLS = [
         thinking,
         profile,
         excludeExtensions,
+        skills,
         servesPr: pullRequestRef('For a helper without its own branch (review, research, oracle): the pull request it serves. worker_cleanup deletes the helper once that pull request is merged.'),
         mode: { type: 'string', enum: ['async', 'wait'] },
         timeoutMs: { type: 'integer', minimum: 0, maximum: 3600000 },
@@ -135,6 +142,7 @@ export const ORCHESTRATION_TOOLS = [
         thinking,
         profile,
         excludeExtensions,
+        skills,
       },
     },
   },

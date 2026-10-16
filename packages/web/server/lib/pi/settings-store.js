@@ -83,6 +83,7 @@ const ORCHESTRATION_BOUNDS = Object.freeze({
   stallAfterMs: [60_000, 7_200_000],
 });
 const ORCHESTRATION_MAX_GATE_BYTES = 1024 ** 4;
+const ORCHESTRATION_MAX_SKILLS = 64;
 
 // Role defaults name only the model id: the provider that serves it is resolved
 // against the live catalog when a worker starts, so a default never pins a
@@ -119,10 +120,17 @@ const normalizeRole = (value) => {
     throw invalidSettings();
   }
   if (value.thinking !== undefined && value.thinking !== null && !isPiThinkingLevel(value.thinking)) throw invalidSettings();
+  // Skill name patterns a worker of this role lists (#226); unset lists all.
+  if (value.skills !== undefined && value.skills !== null && !(Array.isArray(value.skills)
+    && value.skills.length <= ORCHESTRATION_MAX_SKILLS
+    && value.skills.every((skill) => typeof skill === 'string' && skill.trim().length > 0 && skill.length <= 128))) {
+    throw invalidSettings();
+  }
   return {
     ...(typeof value.providerId === 'string' ? { providerId: value.providerId.trim() } : {}),
     modelId: value.modelId.trim(),
     ...(typeof value.thinking === 'string' ? { thinking: value.thinking } : {}),
+    ...(Array.isArray(value.skills) ? { skills: value.skills.map((skill) => skill.trim()) } : {}),
   };
 };
 
@@ -250,6 +258,12 @@ const mergeOrchestration = (current, incoming) => {
     } else {
       if (!incoming.roles || typeof incoming.roles !== 'object' || Array.isArray(incoming.roles)) throw invalidSettings();
       next.roles = { ...(current?.roles ?? {}), ...incoming.roles };
+      // A role entry without `skills` keeps the stored ones: the model picker
+      // writes model and thinking only.
+      for (const [role, entry] of Object.entries(incoming.roles)) {
+        const stored = current?.roles?.[role]?.skills;
+        if (stored && entry && typeof entry === 'object' && !Object.hasOwn(entry, 'skills')) next.roles[role] = { ...entry, skills: stored };
+      }
     }
   }
   return next;
