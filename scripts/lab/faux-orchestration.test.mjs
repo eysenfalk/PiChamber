@@ -3,8 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { schemaViolation } from '../../packages/web/server/lib/pi/session-daemon/orchestration/contract-validator.js';
+import { reportViolation } from '../../packages/web/server/lib/pi/session-daemon/orchestration/report-rules.js';
+import { ORCHESTRATION_TOOLS } from '../../packages/web/server/lib/pi/session-daemon/orchestration/tool-contracts.js';
 import { createWakes } from '../../packages/web/server/lib/pi/session-daemon/orchestration/wakes.js';
-import { LAB_ASKER_FOLLOW_UP, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
+import { LAB_ASKER_BLOCKER, LAB_ASKER_OPTIONS, LAB_ASKER_QUESTION, LAB_ASKER_TITLE, LAB_CHOOSER_DIALOGS, LAB_CHOOSER_TITLE, fauxOrchestrationExtension, resolveFauxUrl } from './faux-orchestration.mjs';
 
 // The message the daemon sends to a waking orchestrator, built by the real wakes module.
 async function wakeText(...events) {
@@ -77,15 +80,26 @@ test('the lab orchestrator answers the wake text the daemon sends', async () => 
   }
 });
 
-test('ASK starts the asker, which asks the owner with a brief and asks again after the answer', async () => {
+test('ASK starts the asker, which asks the owner with a brief and reports a blocker after an option answer', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'pichamber-faux-'));
   try {
     expect(await toolCallOf(directory, 'ASK')).toMatchObject({ name: 'mcp__pichamber__session_spawn', arguments: { title: LAB_ASKER_TITLE } });
-    const brief = { recommendation: expect.any(String), counterargument: expect.any(String), revisit: expect.any(String) };
-    expect(await toolCallOf(directory, 'QUESTION TASK: tighten the README check of this project.')).toMatchObject({
-      name: 'mcp__pichamber__worker_report', arguments: { kind: 'question', audience: 'owner', summary: LAB_ASKER_QUESTION, brief },
-    });
-    expect(await toolCallOf(directory, 'ANSWER: fail it')).toMatchObject({ arguments: { kind: 'question', summary: LAB_ASKER_FOLLOW_UP } });
+    // Both questions pass the daemon's contract and owner rules, so the lab shows them.
+    const workerReport = ORCHESTRATION_TOOLS.find((tool) => tool.name === 'worker_report');
+    const accepted = (call) => [schemaViolation(workerReport.parameters, call.arguments), reportViolation(call.arguments)];
+    const question = await toolCallOf(directory, 'QUESTION TASK: tighten the README check of this project.');
+    expect(question).toMatchObject({ name: 'mcp__pichamber__worker_report', arguments: { kind: 'question', audience: 'owner', summary: LAB_ASKER_QUESTION } });
+    expect(accepted(question)).toEqual([null, null]);
+    expect(question.arguments.brief.options).toHaveLength(3);
+    // An option button answers with the label, with or without a note.
+    for (const answer of [LAB_ASKER_OPTIONS[0].label, `${LAB_ASKER_OPTIONS[1].label}\n\nonly for this release`]) {
+      const blocker = await toolCallOf(directory, answer);
+      expect(blocker).toMatchObject({ name: 'mcp__pichamber__worker_report', arguments: { kind: 'blocked', audience: 'owner', summary: LAB_ASKER_BLOCKER } });
+      expect(accepted(blocker)).toEqual([null, null]);
+    }
+    // A free text answer to the blocker only lets the worker go on.
+    expect(await labReply(directory, 'ANSWER: keep the copy')).toBe('Got your answer (ANSWER: keep the copy). I go on with the license check.');
+    expect(await toolCallOf(directory, 'Fail the check later')).toBeUndefined();
     // The orchestrator leaves an owner question to the owner.
     expect(await labReply(directory, (await wakeText(['question', LAB_ASKER_QUESTION])).replace('Lab: worker', LAB_ASKER_TITLE)))
       .toContain('I leave that question to you.');

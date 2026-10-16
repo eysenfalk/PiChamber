@@ -44,7 +44,7 @@ mock.module('@/components/chat/extensionDialogResponse', () => ({
 }));
 
 const inbox = await import('./decisionInboxModel');
-const { EMPTY_ANSWER_DRAFT, answerDraftReducer } = inbox;
+const { EMPTY_ANSWER_DRAFT, answerAttempt, answerDraftReducer } = inbox;
 
 const NOW = Date.UTC(2026, 9, 15, 12, 0, 0);
 const MIN = 60_000;
@@ -124,6 +124,36 @@ describe('decision inbox model', () => {
     expect(inbox.projectLabel(null)).toBeNull();
   });
 
+  test('reads options in the #210 shape and the plain strings stored before it', () => {
+    expect(inbox.briefOptions({ recommendation: 'x', options: [{ label: 'Fail', consequence: 'Blocks the release', recommended: true }, { label: 'Warn' }] })).toEqual([
+      { label: 'Fail', consequence: 'Blocks the release', recommended: true },
+      { label: 'Warn', consequence: null, recommended: false },
+    ]);
+    expect(inbox.briefOptions({ recommendation: 'x', options: ['Keep it', 'Drop it'] })).toEqual([
+      { label: 'Keep it', consequence: null, recommended: false },
+      { label: 'Drop it', consequence: null, recommended: false },
+    ]);
+    expect(inbox.briefOptions(undefined)).toEqual([]);
+  });
+
+  test('an option answer is the label, with the typed note as its own paragraph', () => {
+    expect(inbox.optionAnswerText('Fail', '')).toBe('Fail');
+    expect(inbox.optionAnswerText('Fail', '  \n ')).toBe('Fail');
+    expect(inbox.optionAnswerText('Fail', ' but only on main ')).toBe('Fail\n\nbut only on main');
+  });
+
+  test('links the worker issue and pull request, preferring the URL the pull request watch read', () => {
+    const base = { issue: null, pullRequest: null, pullRequestStatus: null };
+    expect(inbox.workLinks(base)).toEqual([]);
+    expect(inbox.workLinks({ ...base, issue: { repo: 'acme/app', number: 7 }, pullRequest: { number: 12, repository: 'acme/app' } })).toEqual([
+      { label: 'Issue #7', url: 'https://github.com/acme/app/issues/7' },
+      { label: 'PR #12', url: 'https://github.com/acme/app/pull/12' },
+    ]);
+    const status = { status: 'open' as const, url: 'https://git.example/pr/12', head: null, checks: null };
+    expect(inbox.workLinks({ ...base, pullRequest: { number: 12, repository: null }, pullRequestStatus: status })).toEqual([{ label: 'PR #12', url: 'https://git.example/pr/12' }]);
+    expect(inbox.workLinks({ ...base, pullRequest: { number: 12, repository: null } })).toEqual([{ label: 'PR #12', url: null }]);
+  });
+
   test('counts owner questions and dialogs, not questions to the orchestrator', () => {
     expect(inbox.countOpenDecisions(overview())).toBe(4);
     expect(inbox.countOpenDecisions({ ...overview(), orchestrators: [], dialogs: [] })).toBe(0);
@@ -145,26 +175,31 @@ describe('decision inbox model', () => {
     expect(resolves).toEqual([{ sessionId: 'w', questionId: 'q', scope: { runtimeKey: 'local' } }]);
   });
 
-  test('a failed answer keeps the text and the request id, so the retry cannot prompt twice', () => {
+  test('a failed answer keeps the text and the attempt, so retrying the same text cannot prompt twice', () => {
     let draft = answerDraftReducer(EMPTY_ANSWER_DRAFT, { type: 'edit', text: 'use v2' });
-    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', requestId: 'req-1' });
+    const first = { id: 'req-1', text: 'use v2' };
+    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', attempt: first });
     expect(draft.pending).toBe('answer');
-    expect(answerDraftReducer(draft, { type: 'start', action: 'resolve', requestId: null })).toBe(draft);
+    expect(answerDraftReducer(draft, { type: 'start', action: 'resolve' })).toBe(draft);
     draft = answerDraftReducer(draft, { type: 'settled', action: 'answer', outcome: { status: 'failed', message: 'daemon down' } });
-    expect(draft).toEqual({ text: 'use v2', requestId: 'req-1', pending: null, notice: { tone: 'error', text: 'Could not send the answer. daemon down' } });
-    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', requestId: 'req-2' });
-    expect(draft.requestId).toBe('req-1');
+    expect(draft).toEqual({ text: 'use v2', attempt: first, pending: null, notice: { tone: 'error', text: 'Could not send the answer. daemon down' } });
+    let ids = 0;
+    const newId = () => `req-new-${++ids}`;
+    expect(answerAttempt(draft.attempt, 'use v2', newId)).toBe(first);
+    // The daemon refuses a request id reused with other text, so another option or an edited answer gets a new one.
+    expect(answerAttempt(draft.attempt, 'Warn only', newId)).toEqual({ id: 'req-new-1', text: 'Warn only' });
+    draft = answerDraftReducer(draft, { type: 'start', action: 'answer', attempt: first });
     expect(draft.notice).toBeNull();
   });
 
-  test('a sent answer clears the draft; a closed question drops the request id and says so', () => {
-    const sending = answerDraftReducer({ ...EMPTY_ANSWER_DRAFT, text: 'use v2' }, { type: 'start', action: 'answer', requestId: 'req-1' });
+  test('a sent answer clears the draft; a closed question drops the attempt and says so', () => {
+    const sending = answerDraftReducer({ ...EMPTY_ANSWER_DRAFT, text: 'use v2' }, { type: 'start', action: 'answer', attempt: { id: 'req-1', text: 'use v2' } });
     expect(answerDraftReducer(sending, { type: 'settled', action: 'answer', outcome: { status: 'sent', resolved: true } }))
-      .toEqual({ text: '', requestId: null, pending: null, notice: { tone: 'info', text: 'Answer sent.' } });
+      .toEqual({ text: '', attempt: null, pending: null, notice: { tone: 'info', text: 'Answer sent.' } });
     expect(answerDraftReducer(sending, { type: 'settled', action: 'answer', outcome: { status: 'sent', resolved: false } }).notice?.text)
       .toBe('Answer sent. The worker replaced the question in the meantime.');
     expect(answerDraftReducer(sending, { type: 'settled', action: 'answer', outcome: { status: 'closed' } }))
-      .toEqual({ text: 'use v2', requestId: null, pending: null, notice: { tone: 'info', text: 'This question is no longer open.' } });
+      .toEqual({ text: 'use v2', attempt: null, pending: null, notice: { tone: 'info', text: 'This question is no longer open.' } });
   });
 
   test('a dialog is answered through the shared dialog path, then the overview is reread', async () => {

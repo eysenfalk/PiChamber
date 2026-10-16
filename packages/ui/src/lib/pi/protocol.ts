@@ -581,12 +581,28 @@ export type PiOrchestrationWorkerLifecycle = 'starting' | 'active' | 'done' | 's
 /** Live state from the live channels; `dormant` when no runtime is resident. */
 export type PiOrchestrationLiveState = 'dormant' | 'idle' | 'busy' | 'retry' | 'waiting_input';
 
-/** The decision a worker lays out with its question (#20). */
+/** One possible answer to a worker's question and what it leads to (#210). */
+export interface PiOrchestrationQuestionOption {
+  label: string;
+  consequence?: string;
+  recommended?: boolean;
+}
+
+/**
+ * The decision a worker lays out with its question (#20). For the owner the
+ * daemon requires the full brief (#210, ADR 0017): context, options with
+ * consequences, recommendation and meanwhile, and tried and needed for a blocker.
+ */
 export interface PiOrchestrationQuestionBrief {
-  options?: string[];
+  context?: string;
+  /** Plain strings in questions stored before #210. */
+  options?: Array<PiOrchestrationQuestionOption | string>;
   recommendation: string;
   counterargument?: string;
   revisit?: string;
+  meanwhile?: string;
+  tried?: string;
+  needed?: string;
 }
 
 export interface PiOrchestrationQuestion {

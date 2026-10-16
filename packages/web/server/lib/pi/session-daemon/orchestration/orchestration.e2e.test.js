@@ -90,6 +90,17 @@ export default function (pi) {
 }
 `;
 
+// A complete owner question (#210); the rules are in report-rules.test.js.
+const ownerBrief = {
+  context: 'The worker cuts a release and must know which branch the changelog comes from.',
+  options: [
+    { label: 'main', consequence: 'What users run; misses the work on dev.' },
+    { label: 'dev', consequence: 'Has every merged change; still being tested.', recommended: true },
+  ],
+  recommendation: 'dev, the integration branch',
+  meanwhile: 'The changelog waits; nothing else is blocked.',
+};
+
 describe('orchestration end-to-end through the real SDK', () => {
   let daemon;
   const previousDataDir = process.env.PICHAMBER_DATA_DIR;
@@ -417,7 +428,7 @@ describe('orchestration end-to-end through the real SDK', () => {
     // for the owner wake nobody; a question for the orchestrator wakes the new owner.
     await client.request('sessions.prompt', { sessionId: workerId, text: 'RUN AGAIN' });
     await reached(() => replies(workerId, 'WORKER RAN AGAIN') === 2);
-    const forOwner = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'OWNER ONLY', audience: 'owner', resolves: blocked.result.value.openQuestion } });
+    const forOwner = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'OWNER ONLY', audience: 'owner', resolves: blocked.result.value.openQuestion, brief: ownerBrief } });
     expect(forOwner.result.error).toBeUndefined();
     const forOrchestrator = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'ORCHESTRATOR ONLY', audience: 'orchestrator', resolves: forOwner.result.value.openQuestion } });
     expect(forOrchestrator.result.error).toBeUndefined();
@@ -442,7 +453,11 @@ describe('orchestration end-to-end through the real SDK', () => {
     await client.request('sessions.prompt', { sessionId: parentId, text: 'ORCHESTRATE one worker' });
     await reached(() => replies(parentId, 'PARENT GOT RESULT') === 1);
     const workerId = (await client.request('orchestration.overview', {})).result.value.orchestrators[0].workers[0].sessionId;
-    const brief = { options: ['main', 'dev'], recommendation: 'dev, the integration branch', counterargument: 'main is what users run' };
+    const brief = { ...ownerBrief, counterargument: 'main is what users run' };
+    // An owner question without its brief is refused before anything is stored.
+    const incomplete = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH BRANCH', audience: 'owner', brief: { recommendation: brief.recommendation } } });
+    expect(incomplete.result.error).toMatchObject({ code: 'INVALID_ARGUMENT', message: expect.stringContaining('brief.context') });
+    expect(await questionOf(workerId)).toBeNull();
     const asked = await client.request('orchestration.call', { sessionId: workerId, tool: 'worker_report', args: { kind: 'question', summary: 'WHICH BRANCH', audience: 'owner', brief } });
     const questionId = asked.result.value.openQuestion;
     expect(await questionOf(workerId)).toMatchObject({ id: questionId, audience: 'owner', brief });
